@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use keyring::Entry;
 use usage_core::account::{Account, Credentials, Provider};
 

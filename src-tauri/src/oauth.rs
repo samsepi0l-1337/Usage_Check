@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 //! PKCE OAuth manager: pure helpers (PKCE generation, authorize-URL assembly,
 //! per-provider config) plus a live `begin_login` flow that opens the system
 //! browser, runs a localhost callback server, and exchanges the code for

@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 //! Per-account usage poller: builds an `AccountUsage` snapshot for every
 //! account in the `AccountStore`.
 //!
