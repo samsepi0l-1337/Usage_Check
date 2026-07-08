@@ -1,4 +1,4 @@
-use std::time::{SystemTime, UNIX_EPOCH};
+#![allow(dead_code)]
 
 use keyring::Entry;
 use usage_core::account::{Account, Credentials, Provider};
@@ -19,16 +19,6 @@ pub fn parse_index(s: &str) -> Vec<Account> {
 
 fn cred_key(id: &str) -> String {
     format!("cred/{id}")
-}
-
-/// Generates a reasonably unique id without pulling in a new dependency:
-/// nanosecond timestamp since UNIX_EPOCH, formatted as hex.
-fn generate_id() -> String {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    format!("{nanos:x}")
 }
 
 /// Keychain-backed account store. Wraps `keyring::Entry` for the OS
@@ -63,7 +53,7 @@ impl AccountStore {
     /// `cred/<id>`, and appends it to the persisted index.
     pub fn add(&self, provider: Provider, label: String, creds: Credentials) -> Account {
         let account = Account {
-            id: generate_id(),
+            id: uuid::Uuid::new_v4().to_string(),
             provider,
             label,
         };

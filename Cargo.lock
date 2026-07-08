@@ -3955,6 +3955,7 @@ dependencies = [
  "tiny_http",
  "tokio",
  "usage-core",
+ "uuid",
 ]
 
 [[package]]
