@@ -1,0 +1,37 @@
+use chrono::{DateTime, TimeZone, Utc};
+use serde_json::Value;
+use crate::models::ModelTokenEvent;
+
+fn parse_ts(v: &Value) -> Option<DateTime<Utc>> {
+    match v.get("timestamp")? {
+        Value::String(s) => DateTime::parse_from_rfc3339(s).ok().map(|d| d.with_timezone(&Utc)),
+        Value::Number(n) => {
+            let ms = n.as_f64()?;
+            let secs = if ms > 10_000_000_000.0 { ms / 1000.0 } else { ms };
+            Utc.timestamp_opt(secs as i64, 0).single()
+        }
+        _ => None,
+    }
+}
+
+pub fn parse_gemini_line(line: &str) -> Option<ModelTokenEvent> {
+    let v: Value = serde_json::from_str(line).ok()?;
+    let ts = parse_ts(&v)?;
+    let tokens = v.pointer("/usageMetadata/totalTokenCount")?.as_i64()?;
+    if tokens <= 0 { return None; }
+    let model = v.get("model").and_then(|m| m.as_str()).unwrap_or("gemini").to_string();
+    Some(ModelTokenEvent { timestamp: ts, model, tokens, dedupe_key: None })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_total_token_count() {
+        let line = r#"{"timestamp":"2026-07-08T10:00:00Z","model":"gemini-3.5-flash","usageMetadata":{"totalTokenCount":900}}"#;
+        let e = parse_gemini_line(line).unwrap();
+        assert_eq!(e.tokens, 900);
+        assert_eq!(e.model, "gemini-3.5-flash");
+    }
+}
