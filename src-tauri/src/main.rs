@@ -7,6 +7,7 @@ fn main() {
     tauri::Builder::default()
         .setup(|app| {
             TrayIconBuilder::new()
+                .icon_as_template(true)
                 .on_tray_icon_event(|tray, event| match event {
                     TrayIconEvent::Click {
                         button: MouseButton::Left,
@@ -16,10 +17,16 @@ fn main() {
                         let app = tray.app_handle();
                         if let Some(window) = app.get_webview_window("main") {
                             if window.is_visible().unwrap_or(false) {
-                                let _ = window.hide();
+                                if let Err(e) = window.hide() {
+                                    eprintln!("tray: hide failed: {e}");
+                                }
                             } else {
-                                let _ = window.show();
-                                let _ = window.set_focus();
+                                if let Err(e) = window.show() {
+                                    eprintln!("tray: show failed: {e}");
+                                }
+                                if let Err(e) = window.set_focus() {
+                                    eprintln!("tray: set_focus failed: {e}");
+                                }
                             }
                         }
                     }
