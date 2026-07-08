@@ -1,4 +1,3 @@
 [workspace]
-# TODO(task-10): add "src-tauri" to members once the Tauri app crate is scaffolded
-members = ["crates/usage-core"]
+members = ["crates/usage-core", "src-tauri"]
 resolver = "2"
