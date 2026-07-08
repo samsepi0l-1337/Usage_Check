@@ -4,6 +4,7 @@ use tauri::{
 };
 
 mod oauth;
+mod poller;
 mod store;
 
 fn main() {
