@@ -17,14 +17,17 @@
         "width": 360,
         "height": 480,
         "visible": false,
-        "resizable": true
+        "resizable": false,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true
       }
     ],
     "trayIcon": {
-      "iconPath": "icons/icon.png"
+      "iconPath": "icons/tray.png"
     },
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'"
     }
   },
   "bundle": {
