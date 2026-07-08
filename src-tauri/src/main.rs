@@ -3,6 +3,7 @@ use tauri::{
     Manager,
 };
 
+mod oauth;
 mod store;
 
 fn main() {
