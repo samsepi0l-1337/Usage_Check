@@ -4,3 +4,8 @@
 DerivedData/
 xcuserdata/
 *.xcuserstate
+/target/
+/ui/dist/
+/ui/node_modules/
+/src-tauri/target/
+/src-tauri/gen/
