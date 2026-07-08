@@ -11,6 +11,8 @@
 //!
 //! SECURITY: never log/print an access token or other credential value.
 
+use std::time::Duration;
+
 use chrono::Utc;
 use serde::Serialize;
 
@@ -21,7 +23,31 @@ use usage_core::fetch::codex::{parse_codex_usage, CodexQuota};
 use usage_core::models::{ModelTokenEvent, QuotaUsage, WindowTotals};
 use usage_core::scanners::{claude as claude_scanner, codex as codex_scanner, gemini as gemini_scanner};
 
+use crate::oauth;
 use crate::store::AccountStore;
+
+/// Refresh proactively when the access token expires within this window.
+const REFRESH_THRESHOLD: Duration = Duration::from_secs(60);
+
+/// If `creds.expires_at` is within `REFRESH_THRESHOLD` of now (or already
+/// past), attempts a proactive refresh via `oauth::refresh_access_token` and
+/// persists the result via `store.update_credentials`. On any failure
+/// (no refresh_token, network error, non-200), the original `creds` are
+/// returned unchanged — the existing 401/403 fallback in `poll_all` still
+/// applies to a stale token that couldn't be refreshed.
+async fn maybe_refresh(store: &AccountStore, id: &str, provider: Provider, creds: Credentials) -> Credentials {
+    if !oauth::should_refresh(creds.expires_at, Utc::now(), REFRESH_THRESHOLD) {
+        return creds;
+    }
+
+    match oauth::refresh_access_token(provider, &creds).await {
+        Ok(refreshed) => {
+            store.update_credentials(id, &refreshed);
+            refreshed
+        }
+        Err(_) => creds,
+    }
+}
 
 /// A single account's usage snapshot: live quota (when available) plus
 /// local-log token totals, ready to render as a card.
@@ -199,16 +225,19 @@ pub async fn poll_all(store: &AccountStore) -> Vec<AccountUsage> {
             }
             Provider::Codex => {
                 match store.credentials(&account.id) {
-                    Some(creds) => match fetch_codex_quota(&client, &creds).await {
-                        Ok(quota) => {
-                            let totals = aggregate_local_logs(Provider::Codex).unwrap_or_default();
-                            account_usage_from_codex(&account, &quota, totals)
+                    Some(creds) => {
+                        let creds = maybe_refresh(store, &account.id, Provider::Codex, creds).await;
+                        match fetch_codex_quota(&client, &creds).await {
+                            Ok(quota) => {
+                                let totals = aggregate_local_logs(Provider::Codex).unwrap_or_default();
+                                account_usage_from_codex(&account, &quota, totals)
+                            }
+                            Err(status) => {
+                                let totals = aggregate_local_logs(Provider::Codex).unwrap_or_default();
+                                account_usage_from_logs(&account, totals, status_for_failure(status))
+                            }
                         }
-                        Err(status) => {
-                            let totals = aggregate_local_logs(Provider::Codex).unwrap_or_default();
-                            account_usage_from_logs(&account, totals, status_for_failure(status))
-                        }
-                    },
+                    }
                     None => {
                         let totals = aggregate_local_logs(Provider::Codex).unwrap_or_default();
                         account_usage_from_logs(&account, totals, "needs_login")
@@ -217,16 +246,19 @@ pub async fn poll_all(store: &AccountStore) -> Vec<AccountUsage> {
             }
             Provider::Claude => {
                 match store.credentials(&account.id) {
-                    Some(creds) => match fetch_claude_quota(&client, &creds).await {
-                        Ok(quota) => {
-                            let totals = aggregate_local_logs(Provider::Claude).unwrap_or_default();
-                            account_usage_from_claude(&account, &quota, totals)
+                    Some(creds) => {
+                        let creds = maybe_refresh(store, &account.id, Provider::Claude, creds).await;
+                        match fetch_claude_quota(&client, &creds).await {
+                            Ok(quota) => {
+                                let totals = aggregate_local_logs(Provider::Claude).unwrap_or_default();
+                                account_usage_from_claude(&account, &quota, totals)
+                            }
+                            Err(status) => {
+                                let totals = aggregate_local_logs(Provider::Claude).unwrap_or_default();
+                                account_usage_from_logs(&account, totals, status_for_failure(status))
+                            }
                         }
-                        Err(status) => {
-                            let totals = aggregate_local_logs(Provider::Claude).unwrap_or_default();
-                            account_usage_from_logs(&account, totals, status_for_failure(status))
-                        }
-                    },
+                    }
                     None => {
                         let totals = aggregate_local_logs(Provider::Claude).unwrap_or_default();
                         account_usage_from_logs(&account, totals, "needs_login")

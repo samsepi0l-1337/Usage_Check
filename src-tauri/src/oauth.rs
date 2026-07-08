@@ -228,6 +228,70 @@ pub async fn begin_login(provider: Provider) -> Result<Credentials, String> {
     })
 }
 
+/// Decides whether an access token should be proactively refreshed: true
+/// when `expires_at` is within `threshold` of `now` (including already
+/// expired), false when there is no known expiry (nothing to refresh
+/// against) or expiry is comfortably in the future. Pure function — no I/O.
+pub fn should_refresh(expires_at: Option<chrono::DateTime<Utc>>, now: chrono::DateTime<Utc>, threshold: Duration) -> bool {
+    match expires_at {
+        Some(exp) => exp - now <= chrono::Duration::from_std(threshold).unwrap_or(chrono::Duration::zero()),
+        None => false,
+    }
+}
+
+/// Proactively refreshes `creds` for `provider` using its stored
+/// `refresh_token`. Requires the provider to have a reproducible OAuth
+/// config (agy's `config` lookup fails, propagating here) and a present
+/// `refresh_token`.
+///
+/// SECURITY: no verifier/code/token value is ever logged; error strings
+/// carry only status codes / non-secret text.
+pub async fn refresh_access_token(provider: Provider, creds: &Credentials) -> Result<Credentials, String> {
+    let cfg = config(provider)?;
+
+    let refresh_token = creds
+        .refresh_token
+        .as_ref()
+        .ok_or_else(|| "no refresh_token".to_string())?;
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(20))
+        .build()
+        .map_err(|e| format!("failed to build http client: {e}"))?;
+
+    let response = client
+        .post(&cfg.token_url)
+        .form(&[
+            ("grant_type", "refresh_token"),
+            ("refresh_token", refresh_token.as_str()),
+            ("client_id", cfg.client_id.as_str()),
+        ])
+        .send()
+        .await
+        .map_err(|e| format!("token refresh request failed: {e}"))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        return Err(format!("token refresh failed with status {status}"));
+    }
+
+    let body: TokenResponse = response
+        .json()
+        .await
+        .map_err(|e| format!("failed to parse token refresh response: {e}"))?;
+
+    let expires_at = body
+        .expires_in
+        .map(|secs| Utc::now() + chrono::Duration::seconds(secs));
+
+    Ok(Credentials {
+        access_token: body.access_token,
+        refresh_token: body.refresh_token.or_else(|| creds.refresh_token.clone()),
+        account_id: creds.account_id.clone(),
+        expires_at,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -275,5 +339,39 @@ mod tests {
     #[test]
     fn parse_callback_query_none_without_query() {
         assert!(parse_callback_query("/callback").is_none());
+    }
+
+    #[test]
+    fn should_refresh_true_when_already_expired() {
+        let now = Utc::now();
+        let expires_at = Some(now - chrono::Duration::seconds(5));
+        assert!(should_refresh(expires_at, now, Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn should_refresh_true_when_within_threshold() {
+        let now = Utc::now();
+        let expires_at = Some(now + chrono::Duration::seconds(30));
+        assert!(should_refresh(expires_at, now, Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn should_refresh_false_when_comfortably_in_future() {
+        let now = Utc::now();
+        let expires_at = Some(now + chrono::Duration::seconds(300));
+        assert!(!should_refresh(expires_at, now, Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn should_refresh_false_when_no_expiry_known() {
+        let now = Utc::now();
+        assert!(!should_refresh(None, now, Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn should_refresh_true_at_exact_threshold_boundary() {
+        let now = Utc::now();
+        let expires_at = Some(now + chrono::Duration::seconds(60));
+        assert!(should_refresh(expires_at, now, Duration::from_secs(60)));
     }
 }

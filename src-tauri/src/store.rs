@@ -89,6 +89,17 @@ impl AccountStore {
         let json = entry.get_password().ok()?;
         serde_json::from_str(&json).ok()
     }
+
+    /// Overwrites the stored credentials for an existing account id (e.g.
+    /// after a successful token refresh). Best-effort: a missing/unwritable
+    /// keychain entry is silently ignored rather than panicking.
+    pub fn update_credentials(&self, id: &str, creds: &Credentials) {
+        if let Some(entry) = Self::entry(&cred_key(id)) {
+            if let Ok(json) = serde_json::to_string(creds) {
+                let _ = entry.set_password(&json);
+            }
+        }
+    }
 }
 
 impl Default for AccountStore {
