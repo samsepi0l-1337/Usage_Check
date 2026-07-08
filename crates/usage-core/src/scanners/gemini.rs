@@ -26,6 +26,7 @@ pub fn parse_gemini_line(line: &str) -> Option<ModelTokenEvent> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone;
 
     #[test]
     fn parses_total_token_count() {
@@ -33,5 +34,32 @@ mod tests {
         let e = parse_gemini_line(line).unwrap();
         assert_eq!(e.tokens, 900);
         assert_eq!(e.model, "gemini-3.5-flash");
+    }
+
+    #[test]
+    fn parses_timestamp_unix_seconds() {
+        let line = r#"{"timestamp":1751970000,"model":"gemini-3.5-flash","usageMetadata":{"totalTokenCount":500}}"#;
+        let e = parse_gemini_line(line).unwrap();
+        let expected_ts = Utc.timestamp_opt(1751970000, 0).single().unwrap();
+        assert_eq!(e.timestamp, expected_ts);
+        assert_eq!(e.tokens, 500);
+    }
+
+    #[test]
+    fn parses_timestamp_unix_milliseconds() {
+        let line = r#"{"timestamp":1751970000000,"model":"gemini-3.5-flash","usageMetadata":{"totalTokenCount":750}}"#;
+        let e = parse_gemini_line(line).unwrap();
+        // 1751970000000 ms / 1000 = 1751970000 s
+        let expected_ts = Utc.timestamp_opt(1751970000, 0).single().unwrap();
+        assert_eq!(e.timestamp, expected_ts);
+        assert_eq!(e.tokens, 750);
+    }
+
+    #[test]
+    fn defaults_model_to_gemini_when_absent() {
+        let line = r#"{"timestamp":"2026-07-08T10:00:00Z","usageMetadata":{"totalTokenCount":300}}"#;
+        let e = parse_gemini_line(line).unwrap();
+        assert_eq!(e.model, "gemini");
+        assert_eq!(e.tokens, 300);
     }
 }
