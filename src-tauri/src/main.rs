@@ -3,6 +3,8 @@ use tauri::{
     Manager,
 };
 
+mod store;
+
 fn main() {
     tauri::Builder::default()
         .setup(|app| {
