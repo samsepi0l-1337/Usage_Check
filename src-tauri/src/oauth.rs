@@ -55,6 +55,9 @@ https://www.googleapis.com/auth/experimentsandconfigs";
 const AGY_PREFERRED_CLIENT_PREFIX: &str = "1071006060591-";
 const GOOGLE_CLIENT_SUFFIX: &[u8] = b".apps.googleusercontent.com";
 const GOCSPX_PREFIX: &[u8] = b"GOCSPX-";
+/// Google Cloud Console registration used by Antigravity-Manager / agy tools.
+const AGY_CALLBACK_PORT: u16 = 8080;
+const AGY_CALLBACK_PATH: &str = "/callback";
 
 /// Resolves Antigravity Google OAuth client_id + client_secret without
 /// embedding them in source (GitHub push protection blocks that).
@@ -211,13 +214,22 @@ fn find_google_client_ids(data: &[u8]) -> Vec<(usize, String)> {
     out
 }
 
+#[derive(Clone, Debug)]
+struct FoundSecret {
+    pos: usize,
+    value: String,
+    /// True when this secret is immediately followed by another `GOCSPX-`
+    /// (Antigravity packs two secrets back-to-back; the first is the
+    /// enterprise client secret used with the `1071006060591-` client).
+    followed_by_gocspx: bool,
+}
+
 /// Finds `GOCSPX-…` secrets. Antigravity binaries concatenate two secrets
-/// back-to-back (`GOCSPX-…GOCSPX-…`); stop at the next `GOCSPX-` boundary.
-/// Body length is capped to the observed Google client-secret range so
-/// trailing glued ASCII is not consumed.
-fn find_gocspx_secrets(data: &[u8]) -> Vec<(usize, String)> {
-    // Live Antigravity/agy binaries use ~28–33 char bodies after `GOCSPX-`.
-    const MAX_BODY: usize = 35;
+/// then a URL (`GOCSPX-…GOCSPX-…https://…`); stop at the next `GOCSPX-`,
+/// before `http`, and at the observed 28-char body length.
+fn find_gocspx_secrets(data: &[u8]) -> Vec<FoundSecret> {
+    // Live Antigravity/agy client secrets use a 28-char body after `GOCSPX-`.
+    const MAX_BODY: usize = 28;
     let mut out = Vec::new();
     for start in find_bytes(data, GOCSPX_PREFIX) {
         let body_start = start + GOCSPX_PREFIX.len();
@@ -226,6 +238,7 @@ fn find_gocspx_secrets(data: &[u8]) -> Vec<(usize, String)> {
             && end - body_start < MAX_BODY
             && is_secret_byte(data[end])
             && !data[end..].starts_with(GOCSPX_PREFIX)
+            && !data[end..].starts_with(b"http")
         {
             end += 1;
         }
@@ -235,9 +248,14 @@ fn find_gocspx_secrets(data: &[u8]) -> Vec<(usize, String)> {
         let Ok(text) = std::str::from_utf8(&data[start..end]) else {
             continue;
         };
-        if !out.iter().any(|(_, s)| s == text) {
-            out.push((start, text.to_string()));
+        if out.iter().any(|s: &FoundSecret| s.value == text) {
+            continue;
         }
+        out.push(FoundSecret {
+            pos: start,
+            value: text.to_string(),
+            followed_by_gocspx: data[end..].starts_with(GOCSPX_PREFIX),
+        });
     }
     out
 }
@@ -257,11 +275,20 @@ pub fn extract_google_oauth_pair(data: &[u8]) -> Option<(String, String)> {
         .cloned()
         .unwrap_or_else(|| clients[0].clone());
 
+    // Enterprise client (`1071006…`) is paired with the first secret of the
+    // concatenated GOCSPX pair in Antigravity binaries — not merely the
+    // nearest-by-offset secret (which can be the secondary one).
+    if client.starts_with(AGY_PREFERRED_CLIENT_PREFIX) {
+        if let Some(s) = secrets.iter().find(|s| s.followed_by_gocspx) {
+            return Some((client, s.value.clone()));
+        }
+    }
+
     let mut best: Option<(usize, String)> = None;
-    for (pos, secret) in &secrets {
-        let dist = client_pos.abs_diff(*pos);
+    for secret in &secrets {
+        let dist = client_pos.abs_diff(secret.pos);
         if best.as_ref().map(|(d, _)| dist < *d).unwrap_or(true) {
-            best = Some((dist, secret.clone()));
+            best = Some((dist, secret.value.clone()));
         }
     }
     let secret = best?.1;
@@ -301,6 +328,8 @@ pub fn config(provider: Provider) -> Result<ProviderOAuth, String> {
             use_pkce: true,
         }),
         // Google OAuth for Antigravity — credentials from env or local install.
+        // Redirect must be the registered loopback URI
+        // `http://localhost:8080/callback` (same as Antigravity-Manager).
         Provider::Agy => {
             let (client_id, client_secret) = resolve_agy_oauth_client()?;
             Ok(ProviderOAuth {
@@ -309,7 +338,7 @@ pub fn config(provider: Provider) -> Result<ProviderOAuth, String> {
                 auth_url: "https://accounts.google.com/o/oauth2/v2/auth".to_string(),
                 token_url: "https://oauth2.googleapis.com/token".to_string(),
                 scopes: AGY_SCOPES.to_string(),
-                fixed_redirect: None,
+                fixed_redirect: Some((AGY_CALLBACK_PORT, AGY_CALLBACK_PATH)),
                 extra_authorize_params: vec![
                     ("access_type".into(), "offline".into()),
                     ("prompt".into(), "consent".into()),
@@ -699,37 +728,50 @@ mod tests {
 
     #[test]
     fn extract_google_oauth_pair_prefers_enterprise_prefix() {
-        // Mimic Go binary packing with NUL separators between string table entries,
-        // plus one concatenated GOCSPX pair (as seen in agy).
+        // Mimic Antigravity packing: two GOCSPX secrets concatenated, then a URL.
         let blob = concat!(
             "\0",
             "884354919052-otherclientid000000000000000.apps.googleusercontent.com",
             "\0",
             "GOCSPX-AAAA1111BBBB2222CCCC3333",
+            "GOCSPX-EEEE5555FFFF6666GGGG7777",
+            "https://cloudcode-pa.googleapis.com",
             "\0",
             "1071006060591-exampleclientid000000000000000.apps.googleusercontent.com",
-            "\0",
-            "GOCSPX-EEEE5555FFFF6666GGGG7777",
-            "GOCSPX-HHHH8888IIII9999JJJJ0000",
             "\0",
         )
         .as_bytes();
         let (id, secret) = extract_google_oauth_pair(blob).unwrap();
         assert!(id.starts_with("1071006060591-"), "{id}");
         assert!(id.ends_with(".apps.googleusercontent.com"), "{id}");
-        assert!(secret.starts_with("GOCSPX-"), "{secret}");
-        assert!(!secret[7..].contains("GOCSPX-"), "must split concatenated secrets: {secret}");
-        // Nearest-by-offset picks AAAA (immediately before the preferred client).
+        // First of the concatenated pair (enterprise secret), not the second,
+        // and never with a trailing `https` glue.
         assert_eq!(secret, "GOCSPX-AAAA1111BBBB2222CCCC3333");
+        assert!(!secret.contains("http"));
     }
 
     #[test]
     fn extract_splits_concatenated_gocspx_secrets() {
         let blob = b"1071006060591-exampleclientid000000000000000.apps.googleusercontent.com\0\
-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PX-SECONDSECRETVALUEHERE00";
+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PX-SECONDSECRETVALUEHERE00https://x";
         let (_id, secret) = extract_google_oauth_pair(blob).unwrap();
         assert_eq!(secret, "GOCSPX-FIRSTSECRETVALUEHERE0000");
         assert!(!secret[7..].contains("GOCSPX-"));
+        assert!(!secret.contains("http"));
+    }
+
+    #[test]
+    fn agy_config_uses_registered_localhost_callback() {
+        std::env::set_var(
+            "ANTIGRAVITY_OAUTH_CLIENT_ID",
+            "1071006060591-test.apps.googleusercontent.com",
+        );
+        std::env::set_var("ANTIGRAVITY_OAUTH_CLIENT_SECRET", "GOCSPX-test-secret-value000");
+        let cfg = config(Provider::Agy).unwrap();
+        assert_eq!(cfg.fixed_redirect, Some((8080, "/callback")));
+        assert!(!cfg.use_pkce);
+        std::env::remove_var("ANTIGRAVITY_OAUTH_CLIENT_ID");
+        std::env::remove_var("ANTIGRAVITY_OAUTH_CLIENT_SECRET");
     }
 
     #[test]
