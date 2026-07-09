@@ -47,14 +47,39 @@ cargo build -p usage-app --release
 # target\release\usage-app.exe      # Windows
 ```
 
-Or use the Tauri CLI for a packaged app (`.app` / `.msi` / `.exe` installer):
+### Packaged installers (DMG / EXE)
+
+Install the Tauri CLI once:
 
 ```sh
-cargo tauri build
+cargo install tauri-cli --version "^2"
 ```
 
-**Windows:** build on a Windows host. The tray shell is not cross-compiled
-from macOS.
+**macOS DMG** (on a Mac):
+
+```sh
+mkdir -p ui/dist && printf '%s\n' '<!doctype html><html><body></body></html>' > ui/dist/index.html
+cd src-tauri
+cargo tauri build --bundles dmg,app
+# → target/release/bundle/dmg/UsageCheck_*.dmg
+# → target/release/bundle/macos/UsageCheck.app
+```
+
+**Windows EXE / MSI** must be built on Windows (or via CI). From this repo:
+
+```sh
+# GitHub Actions: Actions → Release → Run workflow
+# Artifacts: UsageCheck-windows (NSIS .exe + .msi)
+```
+
+Local Windows build:
+
+```sh
+cd src-tauri
+cargo tauri build --bundles nsis,msi
+# → target/release/bundle/nsis/UsageCheck_*-setup.exe
+# → target/release/bundle/msi/UsageCheck_*.msi
+```
 
 Accounts are stored under:
 

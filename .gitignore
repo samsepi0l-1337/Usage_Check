@@ -9,3 +9,8 @@ xcuserdata/
 /ui/node_modules/
 /src-tauri/target/
 /src-tauri/gen/
+/dist/
+/src-tauri/icons/android/
+/src-tauri/icons/ios/
+/src-tauri/icons/app-icon-1024.png
+/src-tauri/icons/icon-source.png
