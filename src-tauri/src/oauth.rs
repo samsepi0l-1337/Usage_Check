@@ -15,6 +15,13 @@ use sha2::{Digest, Sha256};
 use tiny_http::{Response, Server};
 use usage_core::account::{Credentials, Provider};
 
+/// Codex CLI registers this exact loopback redirect with OpenAI Hydra.
+/// Using an ephemeral port or `/callback` (instead of `/auth/callback`)
+/// yields `authorize_hydra_invalid_request`.
+const CODEX_CALLBACK_PORT: u16 = 1455;
+const CODEX_CALLBACK_PATH: &str = "/auth/callback";
+const CODEX_ORIGINATOR: &str = "usagecheck";
+
 /// Per-provider OAuth (PKCE, public client) configuration.
 #[derive(Clone, Debug)]
 pub struct ProviderOAuth {
@@ -22,6 +29,11 @@ pub struct ProviderOAuth {
     pub auth_url: String,
     pub token_url: String,
     pub scopes: String,
+    /// When set, bind this exact port and use `http://localhost:{port}{path}`
+    /// as `redirect_uri` (required for Codex's registered client).
+    pub fixed_redirect: Option<(u16, &'static str)>,
+    /// Extra authorize-query params required by the provider (Codex CLI flags).
+    pub extra_authorize_params: Vec<(String, String)>,
 }
 
 /// Returns the PKCE OAuth configuration for a provider, or an `Err` when the
@@ -29,26 +41,30 @@ pub struct ProviderOAuth {
 /// fallback/manual-import path instead).
 pub fn config(provider: Provider) -> Result<ProviderOAuth, String> {
     match provider {
-        // Codex CLI (ChatGPT) login uses a public PKCE client against the
-        // ChatGPT auth endpoints. client_id is the well-known public id used
-        // by the open-source `codex` CLI's login flow.
-        // TODO: verify against Codex CLI login flow (client_id/scopes may
-        // drift with future CLI releases).
+        // Verified against Codex CLI 0.143.0 (`codex-rs/login/src/server.rs`)
+        // and local `~/.codex/log/codex-login.log` redirect_uri traces.
         Provider::Codex => Ok(ProviderOAuth {
             client_id: "app_EMoamEEZ73f0CkXaXp7hrann".to_string(),
             auth_url: "https://auth.openai.com/oauth/authorize".to_string(),
             token_url: "https://auth.openai.com/oauth/token".to_string(),
-            scopes: "openid profile email offline_access".to_string(),
+            scopes: "openid profile email offline_access api.connectors.read api.connectors.invoke"
+                .to_string(),
+            fixed_redirect: Some((CODEX_CALLBACK_PORT, CODEX_CALLBACK_PATH)),
+            extra_authorize_params: vec![
+                ("id_token_add_organizations".into(), "true".into()),
+                ("codex_cli_simplified_flow".into(), "true".into()),
+                ("originator".into(), CODEX_ORIGINATOR.into()),
+            ],
         }),
         // Claude Code CLI login uses a public PKCE client against Anthropic's
-        // console OAuth endpoints.
-        // TODO: verify against Claude Code CLI login flow (client_id/scopes
-        // may drift with future CLI releases).
+        // console OAuth endpoints. Ephemeral localhost ports are accepted.
         Provider::Claude => Ok(ProviderOAuth {
             client_id: "9d1c250a-e61b-44d9-88ed-5944d1962f5e".to_string(),
             auth_url: "https://console.anthropic.com/oauth/authorize".to_string(),
             token_url: "https://console.anthropic.com/v1/oauth/token".to_string(),
             scopes: "org:create_api_key user:profile user:inference".to_string(),
+            fixed_redirect: None,
+            extra_authorize_params: Vec::new(),
         }),
         // Per Task 9's investigation: agy/Gemini auth lives behind an
         // Electron-style Keychain-encrypted blob with no discoverable public
@@ -82,9 +98,9 @@ pub fn make_state() -> String {
 }
 
 /// Assembles the provider authorize URL with all required PKCE + OAuth query
-/// parameters. Pure function — no I/O.
+/// parameters (plus any provider-specific extras). Pure function — no I/O.
 pub fn build_authorize_url(cfg: &ProviderOAuth, challenge: &str, redirect: &str, state: &str) -> String {
-    let mut url = String::with_capacity(256);
+    let mut url = String::with_capacity(512);
     url.push_str(&cfg.auth_url);
     url.push('?');
     url.push_str("response_type=code");
@@ -99,6 +115,12 @@ pub fn build_authorize_url(cfg: &ProviderOAuth, challenge: &str, redirect: &str,
     url.push_str("&code_challenge_method=S256");
     url.push_str("&state=");
     url.push_str(&urlencoding::encode(state));
+    for (key, value) in &cfg.extra_authorize_params {
+        url.push('&');
+        url.push_str(&urlencoding::encode(key));
+        url.push('=');
+        url.push_str(&urlencoding::encode(value));
+    }
     url
 }
 
@@ -139,13 +161,52 @@ struct TokenResponse {
     access_token: String,
     refresh_token: Option<String>,
     #[serde(default)]
+    id_token: Option<String>,
+    #[serde(default)]
     expires_in: Option<i64>,
     #[serde(default)]
     account_id: Option<String>,
 }
 
+/// Extracts `chatgpt_account_id` from a ChatGPT id_token JWT payload
+/// (`https://api.openai.com/auth` claim). Pure — no I/O, never logs the token.
+pub fn chatgpt_account_id_from_id_token(id_token: &str) -> Option<String> {
+    let payload_b64 = id_token.split('.').nth(1)?;
+    let bytes = URL_SAFE_NO_PAD.decode(payload_b64).ok()?;
+    let root: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    root.get("https://api.openai.com/auth")?
+        .get("chatgpt_account_id")?
+        .as_str()
+        .map(str::to_string)
+}
+
+fn bind_callback_server(cfg: &ProviderOAuth) -> Result<(Server, String), String> {
+    match cfg.fixed_redirect {
+        Some((port, path)) => {
+            let server = Server::http(format!("127.0.0.1:{port}")).map_err(|e| {
+                format!(
+                    "failed to bind OAuth callback on 127.0.0.1:{port}{path}: {e} \
+                     (is another Codex login already using this port?)"
+                )
+            })?;
+            // OpenAI registers `localhost`, not `127.0.0.1` — must match exactly.
+            Ok((server, format!("http://localhost:{port}{path}")))
+        }
+        None => {
+            let server = Server::http("127.0.0.1:0")
+                .map_err(|e| format!("failed to bind localhost callback server: {e}"))?;
+            let port = server
+                .server_addr()
+                .to_ip()
+                .map(|a| a.port())
+                .ok_or_else(|| "failed to determine callback server port".to_string())?;
+            Ok((server, format!("http://127.0.0.1:{port}/callback")))
+        }
+    }
+}
+
 /// Runs the full interactive login flow for `provider`:
-/// 1. binds a localhost callback server on an ephemeral port,
+/// 1. binds a localhost callback server (fixed port for Codex),
 /// 2. opens the system browser at the provider's authorize URL,
 /// 3. waits for the `?code=...&state=...` redirect (validating `state`),
 /// 4. exchanges the code for tokens at the provider's token endpoint.
@@ -154,14 +215,7 @@ struct TokenResponse {
 pub async fn begin_login(provider: Provider) -> Result<Credentials, String> {
     let cfg = config(provider)?;
 
-    let server = Server::http("127.0.0.1:0")
-        .map_err(|e| format!("failed to bind localhost callback server: {e}"))?;
-    let port = server
-        .server_addr()
-        .to_ip()
-        .map(|a| a.port())
-        .ok_or_else(|| "failed to determine callback server port".to_string())?;
-    let redirect_uri = format!("http://127.0.0.1:{port}/callback");
+    let (server, redirect_uri) = bind_callback_server(&cfg)?;
 
     let (verifier, challenge) = make_pkce();
     let state = make_state();
@@ -218,10 +272,16 @@ pub async fn begin_login(provider: Provider) -> Result<Credentials, String> {
         .expires_in
         .map(|secs| Utc::now() + chrono::Duration::seconds(secs));
 
+    let account_id = body.account_id.or_else(|| {
+        body.id_token
+            .as_deref()
+            .and_then(chatgpt_account_id_from_id_token)
+    });
+
     Ok(Credentials {
         access_token: body.access_token,
         refresh_token: body.refresh_token,
-        account_id: body.account_id,
+        account_id,
         expires_at,
     })
 }
@@ -282,10 +342,19 @@ pub async fn refresh_access_token(provider: Provider, creds: &Credentials) -> Re
         .expires_in
         .map(|secs| Utc::now() + chrono::Duration::seconds(secs));
 
+    let account_id = body
+        .account_id
+        .or_else(|| {
+            body.id_token
+                .as_deref()
+                .and_then(chatgpt_account_id_from_id_token)
+        })
+        .or_else(|| creds.account_id.clone());
+
     Ok(Credentials {
         access_token: body.access_token,
         refresh_token: body.refresh_token.or_else(|| creds.refresh_token.clone()),
-        account_id: creds.account_id.clone(),
+        account_id,
         expires_at,
     })
 }
@@ -308,12 +377,28 @@ mod tests {
             auth_url: "https://auth.example/authorize".into(),
             token_url: "https://auth.example/token".into(),
             scopes: "openid".into(),
+            fixed_redirect: None,
+            extra_authorize_params: vec![("id_token_add_organizations".into(), "true".into())],
         };
-        let url = build_authorize_url(&cfg, "chal", "http://127.0.0.1:1455/cb", "st8");
+        let url = build_authorize_url(&cfg, "chal", "http://localhost:1455/auth/callback", "st8");
         assert!(url.contains("client_id=cid"));
         assert!(url.contains("code_challenge=chal"));
         assert!(url.contains("code_challenge_method=S256"));
         assert!(url.contains("state=st8"));
+        assert!(url.contains("id_token_add_organizations=true"));
+        assert!(url.contains("redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback"));
+    }
+
+    #[test]
+    fn codex_config_matches_cli_contract() {
+        let cfg = config(Provider::Codex).unwrap();
+        assert_eq!(cfg.client_id, "app_EMoamEEZ73f0CkXaXp7hrann");
+        assert_eq!(cfg.fixed_redirect, Some((1455, "/auth/callback")));
+        assert!(cfg.scopes.contains("api.connectors.read"));
+        assert!(cfg
+            .extra_authorize_params
+            .iter()
+            .any(|(k, v)| k == "codex_cli_simplified_flow" && v == "true"));
     }
 
     #[test]
@@ -329,14 +414,27 @@ mod tests {
 
     #[test]
     fn parse_callback_query_extracts_code_and_state() {
-        let params = parse_callback_query("/callback?code=abc123&state=xyz").unwrap();
+        let params = parse_callback_query("/auth/callback?code=abc123&state=xyz").unwrap();
         assert_eq!(params.code, "abc123");
         assert_eq!(params.state, "xyz");
     }
 
     #[test]
     fn parse_callback_query_none_without_query() {
-        assert!(parse_callback_query("/callback").is_none());
+        assert!(parse_callback_query("/auth/callback").is_none());
+    }
+
+    #[test]
+    fn chatgpt_account_id_from_synthetic_jwt() {
+        // header.payload.sig — only payload matters; unsigned test fixture.
+        let payload = URL_SAFE_NO_PAD.encode(
+            br#"{"https://api.openai.com/auth":{"chatgpt_account_id":"acct-test-9"}}"#,
+        );
+        let jwt = format!("e30.{payload}.sig");
+        assert_eq!(
+            chatgpt_account_id_from_id_token(&jwt).as_deref(),
+            Some("acct-test-9")
+        );
     }
 
     #[test]

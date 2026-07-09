@@ -24,18 +24,24 @@ and `ui/dist` is built (`cd ui && npm install && npm run build`).
       ("계정을 추가해 사용량을 확인하세요.").
 - [ ] Click "계정 추가" → the provider picker opens showing Codex / Claude /
       Antigravity (agy) options.
-- [ ] Pick **Codex** → system browser opens to the ChatGPT/OpenAI OAuth
-      authorize page → complete login → browser tab shows "Login complete. You
-      may close this tab and return to the app." → back in the popup, a new
-      Codex card appears showing 5h and 7d % gauges populated with real data.
-- [ ] Pick **Claude** → system browser opens to the Anthropic/Claude OAuth
-      authorize page → complete login → a new Claude card appears with 5h/7d
-      gauges populated.
-- [ ] Pick **agy (Antigravity)** in the picker → NO browser window opens;
-      instead the fallback message is shown ("agy OAuth unavailable — use
-      fallback import") and no account is added to the list.
+- [ ] Pick **Codex → 브라우저 로그인** → system browser opens to the
+      ChatGPT/OpenAI OAuth authorize page → complete login → browser tab shows
+      "Login complete. You may close this tab and return to the app." → back in
+      the popup, a new Codex card appears showing 5h and 7d % gauges populated
+      with real data.
+- [ ] Pick **Codex → CLI에서 가져오기** (with `~/.codex/auth.json` present from
+      a prior `codex login`) → a Codex card appears without opening a browser.
+- [ ] Pick **Claude → 브라우저 로그인** → system browser opens to the
+      Anthropic/Claude OAuth authorize page → complete login → a new Claude
+      card appears with 5h/7d gauges populated.
+- [ ] Pick **Claude → CLI에서 가져오기** (with Claude `.credentials.json`
+      present) → a Claude card appears without opening a browser.
+- [ ] Pick **agy → 로컬 로그로 추가** → NO browser window opens; an agy card
+      appears showing 5h/7d local token totals (may be zero if no
+      `~/.gemini` transcripts exist yet).
 - [ ] Remove an account (✕ button on a card) → the card disappears immediately
       and does not reappear after the next poll tick (wait >60s).
+- [ ] Tray menu → **Quit UsageCheck** exits the app cleanly.
 
 ## Persistence
 

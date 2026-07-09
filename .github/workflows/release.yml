@@ -1,0 +1,118 @@
+name: Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            args: --bundles dmg,app
+            artifact: macos
+          - platform: windows-latest
+            args: --bundles nsis,msi
+            artifact: windows
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install Linux deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Ensure frontend dist exists
+        run: |
+          mkdir -p ui/dist
+          printf '%s\n' '<!doctype html><html><body></body></html>' > ui/dist/index.html
+
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version "^2" --locked
+
+      - name: Build bundles
+        working-directory: src-tauri
+        run: cargo tauri build ${{ matrix.args }}
+
+      - name: Collect bundle paths
+        id: bundles
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Cargo workspace puts release output at repo-root target/, not src-tauri/target/.
+          ROOT_BUNDLE="target/release/bundle"
+          NESTED_BUNDLE="src-tauri/target/release/bundle"
+          if [ -d "$ROOT_BUNDLE" ]; then
+            echo "dir=$ROOT_BUNDLE" >> "$GITHUB_OUTPUT"
+          elif [ -d "$NESTED_BUNDLE" ]; then
+            echo "dir=$NESTED_BUNDLE" >> "$GITHUB_OUTPUT"
+          else
+            echo "No bundle directory found" >&2
+            find . -path '*/release/bundle/*' -print 2>/dev/null | head -50 >&2 || true
+            exit 1
+          fi
+          ls -lah "$(grep '^dir=' "$GITHUB_OUTPUT" | cut -d= -f2)" || true
+
+      - name: Upload macOS artifacts
+        if: matrix.artifact == 'macos'
+        uses: actions/upload-artifact@v4
+        with:
+          name: UsageCheck-macos
+          path: |
+            ${{ steps.bundles.outputs.dir }}/dmg/*.dmg
+            ${{ steps.bundles.outputs.dir }}/macos/*.app
+          if-no-files-found: error
+
+      - name: Upload Windows artifacts
+        if: matrix.artifact == 'windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: UsageCheck-windows
+          path: |
+            ${{ steps.bundles.outputs.dir }}/nsis/*.exe
+            ${{ steps.bundles.outputs.dir }}/msi/*.msi
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/UsageCheck-macos/*.dmg
+            dist/UsageCheck-windows/*.exe
+            dist/UsageCheck-windows/*.msi
+          generate_release_notes: true

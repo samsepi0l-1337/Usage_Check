@@ -8,7 +8,10 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 usage-core = { path = "../crates/usage-core" }
-tauri = { version = "2", features = ["tray-icon"] }
+# custom-protocol: required so `cargo build --release` embeds ui/dist and does
+# NOT treat the binary as `cfg(dev)` (which would load http://localhost:5173 and
+# show a blank window when the Vite dev server is not running).
+tauri = { version = "2", features = ["tray-icon", "custom-protocol"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
@@ -22,3 +25,9 @@ sha2 = "0.10"
 base64 = "0.22"
 urlencoding = "2"
 rand = "0.8"
+
+[features]
+# Keep custom-protocol on by default for plain `cargo build --release`.
+# `cargo tauri dev` disables this feature so the app loads the Vite dev server.
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]

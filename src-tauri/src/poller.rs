@@ -22,6 +22,7 @@ use usage_core::models::{ModelTokenEvent, QuotaUsage, WindowTotals};
 use usage_core::scanners::{claude as claude_scanner, codex as codex_scanner, gemini as gemini_scanner};
 
 use crate::oauth;
+use crate::paths;
 use crate::store::AccountStore;
 
 /// Refresh proactively when the access token expires within this window.
@@ -48,21 +49,68 @@ async fn maybe_refresh(store: &AccountStore, id: &str, provider: Provider, creds
 }
 
 /// A single account's usage snapshot: live quota (when available) plus
-/// local-log token totals, ready to render as a card.
+/// local-log token totals, ready to render in the tray menu.
 #[derive(Clone, Debug, Serialize)]
 pub struct AccountUsage {
     pub account: Account,
+    /// Prefer email / plan-aware name over the stored label when available.
+    pub display_name: String,
+    pub plan: Option<String>,
     pub five_hour: Option<QuotaUsage>,
     pub week: Option<QuotaUsage>,
     pub totals: WindowTotals,
     pub status: String,
 }
 
+fn display_name_for(account: &Account, email: Option<&str>, plan: Option<&str>) -> String {
+    if let Some(email) = email.filter(|s| !s.is_empty()) {
+        return email.to_string();
+    }
+    let label = account.label.trim();
+    if !label.is_empty()
+        && !label.ends_with(" (CLI import)")
+        && !label.ends_with(" account")
+        && label != "agy (local logs)"
+        && label != "Gemini (local logs)"
+    {
+        return label.to_string();
+    }
+    if let Some(plan) = plan.filter(|s| !s.is_empty()) {
+        return format!("{} · {}", provider_short(account.provider), plan);
+    }
+    if !label.is_empty() {
+        return label.to_string();
+    }
+    provider_short(account.provider).to_string()
+}
+
+fn provider_short(p: Provider) -> &'static str {
+    match p {
+        Provider::Codex => "Codex",
+        Provider::Claude => "Claude",
+        Provider::Agy => "Gemini",
+    }
+}
+
 /// Maps a parsed `CodexQuota` + local-log `totals` into an `AccountUsage`
 /// with `status = "ok"`. Pure — no I/O.
-pub fn account_usage_from_codex(account: &Account, quota: &CodexQuota, totals: WindowTotals) -> AccountUsage {
+pub fn account_usage_from_codex(
+    account: &Account,
+    quota: &CodexQuota,
+    totals: WindowTotals,
+) -> AccountUsage {
+    let mut account = account.clone();
+    if let Some(email) = quota.email.as_deref() {
+        account.label = email.to_string();
+    }
     AccountUsage {
-        account: account.clone(),
+        display_name: display_name_for(
+            &account,
+            quota.email.as_deref(),
+            quota.plan.as_deref(),
+        ),
+        plan: quota.plan.clone(),
+        account,
         five_hour: quota.five_hour.clone(),
         week: quota.week.clone(),
         totals,
@@ -72,8 +120,16 @@ pub fn account_usage_from_codex(account: &Account, quota: &CodexQuota, totals: W
 
 /// Maps a parsed `ClaudeQuota` + local-log `totals` into an `AccountUsage`
 /// with `status = "ok"`. Pure — no I/O.
-pub fn account_usage_from_claude(account: &Account, quota: &ClaudeQuota, totals: WindowTotals) -> AccountUsage {
+pub fn account_usage_from_claude(
+    account: &Account,
+    quota: &ClaudeQuota,
+    totals: WindowTotals,
+    email: Option<&str>,
+    plan: Option<&str>,
+) -> AccountUsage {
     AccountUsage {
+        display_name: display_name_for(account, email, plan),
+        plan: plan.map(str::to_string),
         account: account.clone(),
         five_hour: quota.five_hour.clone(),
         week: quota.week.clone(),
@@ -87,6 +143,8 @@ pub fn account_usage_from_claude(account: &Account, quota: &ClaudeQuota, totals:
 /// path when the HTTP fetch fails.
 fn account_usage_from_logs(account: &Account, totals: WindowTotals, status: &str) -> AccountUsage {
     AccountUsage {
+        display_name: display_name_for(account, None, None),
+        plan: None,
         account: account.clone(),
         five_hour: None,
         week: None,
@@ -96,33 +154,32 @@ fn account_usage_from_logs(account: &Account, totals: WindowTotals, status: &str
 }
 
 /// Reads and aggregates local JSONL logs for a provider into `WindowTotals`.
-/// Returns `Err` if the log directory could not be read at all (still
-/// distinguished from "read fine, zero events").
+/// Returns `Err` if the home directory could not be resolved at all.
 fn aggregate_local_logs(provider: Provider) -> Result<WindowTotals, ()> {
-    let home = match dirs_home() {
-        Some(h) => h,
-        None => return Err(()),
-    };
+    let (roots, parse_line): (Vec<std::path::PathBuf>, fn(&str) -> Option<ModelTokenEvent>) =
+        match provider {
+            Provider::Codex => (paths::codex_session_roots(), codex_scanner::parse_codex_line),
+            Provider::Claude => (paths::claude_project_roots(), claude_scanner::parse_claude_line),
+            Provider::Agy => (paths::gemini_log_roots(), gemini_scanner::parse_gemini_line),
+        };
 
-    let (root, parse_line): (std::path::PathBuf, fn(&str) -> Option<ModelTokenEvent>) = match provider {
-        Provider::Codex => (home.join(".codex/sessions"), codex_scanner::parse_codex_line),
-        Provider::Claude => (home.join(".claude/projects"), claude_scanner::parse_claude_line),
-        Provider::Agy => (home.join(".gemini"), gemini_scanner::parse_gemini_line),
-    };
-
-    if !root.exists() {
-        // No logs yet is not an error — just zero totals.
-        return Ok(WindowTotals::default());
+    if roots.is_empty() {
+        return Err(());
     }
 
     let mut events = Vec::new();
-    for path in walk_jsonl(&root) {
-        let Ok(content) = std::fs::read_to_string(&path) else {
+    for root in roots {
+        if !root.exists() {
             continue;
-        };
-        for line in content.lines() {
-            if let Some(ev) = parse_line(line) {
-                events.push(ev);
+        }
+        for path in walk_jsonl(&root) {
+            let Ok(content) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            for line in content.lines() {
+                if let Some(ev) = parse_line(line) {
+                    events.push(ev);
+                }
             }
         }
     }
@@ -130,13 +187,11 @@ fn aggregate_local_logs(provider: Provider) -> Result<WindowTotals, ()> {
     Ok(aggregate(&events, Utc::now()))
 }
 
-fn dirs_home() -> Option<std::path::PathBuf> {
-    std::env::var_os("HOME").map(std::path::PathBuf::from)
-}
-
 /// Recursively collects `.jsonl` file paths under `root`. Best-effort: read
 /// errors on individual directories are skipped rather than propagated.
+/// Caps the number of files so tray refresh stays responsive.
 fn walk_jsonl(root: &std::path::Path) -> Vec<std::path::PathBuf> {
+    const MAX_FILES: usize = 200;
     let mut out = Vec::new();
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
@@ -147,10 +202,21 @@ fn walk_jsonl(root: &std::path::Path) -> Vec<std::path::PathBuf> {
             let path = entry.path();
             if path.is_dir() {
                 stack.push(path);
-            } else if path.extension().and_then(|e| e.to_str()).map(|e| e.starts_with("jsonl")).unwrap_or(false)
-                || path.file_name().and_then(|n| n.to_str()).map(|n| n.contains("transcript") && n.ends_with(".jsonl")).unwrap_or(false)
+            } else if path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.starts_with("jsonl"))
+                .unwrap_or(false)
+                || path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|n| n.contains("transcript") && n.ends_with(".jsonl"))
+                    .unwrap_or(false)
             {
                 out.push(path);
+                if out.len() >= MAX_FILES {
+                    return out;
+                }
             }
         }
     }
@@ -181,12 +247,16 @@ async fn fetch_codex_quota(client: &reqwest::Client, creds: &Credentials) -> Res
 
 /// Fetches live Claude quota via HTTP using `creds.access_token`. Same
 /// success/error shape as `fetch_codex_quota`.
+///
+/// Anthropic rate-limits unknown User-Agents (429). Use a Claude Code UA so
+/// the OAuth usage endpoint accepts the request (verified against live API).
 async fn fetch_claude_quota(client: &reqwest::Client, creds: &Credentials) -> Result<ClaudeQuota, Option<u16>> {
     let req = client
         .get("https://api.anthropic.com/api/oauth/usage")
         .header("Accept", "application/json")
         .header("anthropic-beta", "oauth-2025-04-20")
-        .header("User-Agent", "UsageCheck")
+        .header("anthropic-version", "2023-06-01")
+        .header("User-Agent", "claude-code/2.1.197")
         .bearer_auth(&creds.access_token);
 
     let resp = req.send().await.map_err(|_| None)?;
@@ -199,10 +269,11 @@ async fn fetch_claude_quota(client: &reqwest::Client, creds: &Credentials) -> Re
 }
 
 /// Maps an HTTP failure to a status string: 401/403 (expired/invalid token)
-/// -> "needs_login", anything else (network error, 5xx, etc.) -> "error".
+/// -> "needs_login", 429 -> "rate_limited", anything else -> "error".
 fn status_for_failure(status: Option<u16>) -> &'static str {
     match status {
         Some(401) | Some(403) => "needs_login",
+        Some(429) => "rate_limited",
         _ => "error",
     }
 }
@@ -223,20 +294,33 @@ pub async fn poll_all(store: &AccountStore) -> Vec<AccountUsage> {
             }
             Provider::Codex => {
                 match store.credentials(&account.id) {
-                    Some(creds) => {
+                    Some(creds) if !creds.access_token.is_empty() => {
                         let creds = maybe_refresh(store, &account.id, Provider::Codex, creds).await;
                         match fetch_codex_quota(&client, &creds).await {
                             Ok(quota) => {
-                                let totals = aggregate_local_logs(Provider::Codex).unwrap_or_default();
-                                account_usage_from_codex(&account, &quota, totals)
+                                if let Some(email) = quota.email.as_deref() {
+                                    store.update_label(&account.id, email);
+                                }
+                                // Live quota is authoritative for the tray; skip
+                                // scanning thousands of local JSONL files.
+                                account_usage_from_codex(
+                                    &account,
+                                    &quota,
+                                    WindowTotals::default(),
+                                )
                             }
                             Err(status) => {
-                                let totals = aggregate_local_logs(Provider::Codex).unwrap_or_default();
-                                account_usage_from_logs(&account, totals, status_for_failure(status))
+                                let totals =
+                                    aggregate_local_logs(Provider::Codex).unwrap_or_default();
+                                account_usage_from_logs(
+                                    &account,
+                                    totals,
+                                    status_for_failure(status),
+                                )
                             }
                         }
                     }
-                    None => {
+                    _ => {
                         let totals = aggregate_local_logs(Provider::Codex).unwrap_or_default();
                         account_usage_from_logs(&account, totals, "needs_login")
                     }
@@ -244,20 +328,36 @@ pub async fn poll_all(store: &AccountStore) -> Vec<AccountUsage> {
             }
             Provider::Claude => {
                 match store.credentials(&account.id) {
-                    Some(creds) => {
+                    Some(creds) if !creds.access_token.is_empty() => {
                         let creds = maybe_refresh(store, &account.id, Provider::Claude, creds).await;
                         match fetch_claude_quota(&client, &creds).await {
                             Ok(quota) => {
-                                let totals = aggregate_local_logs(Provider::Claude).unwrap_or_default();
-                                account_usage_from_claude(&account, &quota, totals)
+                                let email = if account.label.contains('@') {
+                                    Some(account.label.as_str())
+                                } else {
+                                    None
+                                };
+                                // Live quota is authoritative; skip local JSONL scan.
+                                account_usage_from_claude(
+                                    &account,
+                                    &quota,
+                                    WindowTotals::default(),
+                                    email,
+                                    None,
+                                )
                             }
                             Err(status) => {
-                                let totals = aggregate_local_logs(Provider::Claude).unwrap_or_default();
-                                account_usage_from_logs(&account, totals, status_for_failure(status))
+                                let totals =
+                                    aggregate_local_logs(Provider::Claude).unwrap_or_default();
+                                account_usage_from_logs(
+                                    &account,
+                                    totals,
+                                    status_for_failure(status),
+                                )
                             }
                         }
                     }
-                    None => {
+                    _ => {
                         let totals = aggregate_local_logs(Provider::Claude).unwrap_or_default();
                         account_usage_from_logs(&account, totals, "needs_login")
                     }
@@ -281,12 +381,14 @@ mod tests {
     fn maps_codex_quota_to_account_usage() {
         let acct = Account { id: "1".into(), provider: Provider::Codex, label: "w".into() };
         let quota = CodexQuota {
-            plan: None,
-            five_hour: Some(QuotaUsage { percent: 12.0, resets_at: None, window_seconds: None }),
+            plan: Some("prolite".into()),
+            email: Some("a@b.com".into()),
+            five_hour: Some(QuotaUsage { percent: 12.0, resets_at: None, window_seconds: Some(18000) }),
             week: None,
         };
         let au = account_usage_from_codex(&acct, &quota, WindowTotals::default());
         assert_eq!(au.status, "ok");
+        assert_eq!(au.display_name, "a@b.com");
         assert_eq!(au.five_hour.as_ref().unwrap().percent, 12.0);
     }
 
@@ -297,8 +399,9 @@ mod tests {
             five_hour: Some(QuotaUsage { percent: 30.0, resets_at: None, window_seconds: None }),
             week: Some(QuotaUsage { percent: 55.5, resets_at: None, window_seconds: None }),
         };
-        let au = account_usage_from_claude(&acct, &quota, WindowTotals::default());
+        let au = account_usage_from_claude(&acct, &quota, WindowTotals::default(), Some("c@d.com"), None);
         assert_eq!(au.status, "ok");
+        assert_eq!(au.display_name, "c@d.com");
         assert_eq!(au.five_hour.as_ref().unwrap().percent, 30.0);
         assert_eq!(au.week.as_ref().unwrap().percent, 55.5);
     }
@@ -307,6 +410,7 @@ mod tests {
     fn status_for_failure_maps_auth_errors() {
         assert_eq!(status_for_failure(Some(401)), "needs_login");
         assert_eq!(status_for_failure(Some(403)), "needs_login");
+        assert_eq!(status_for_failure(Some(429)), "rate_limited");
         assert_eq!(status_for_failure(Some(500)), "error");
         assert_eq!(status_for_failure(None), "error");
     }

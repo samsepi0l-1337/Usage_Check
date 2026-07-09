@@ -263,6 +263,24 @@ body {
   margin: 0 0 2px;
 }
 
+.picker-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 0;
+  border-top: 1px solid #33343a;
+}
+
+.picker-row:first-of-type {
+  border-top: none;
+}
+
+.picker-name {
+  font-size: 11px;
+  color: #9a9ba1;
+  margin-bottom: 2px;
+}
+
 .picker-btn {
   background: #33343a;
   color: #e8e8ea;
@@ -276,6 +294,11 @@ body {
 
 .picker-btn:hover {
   background: #3a3b42;
+}
+
+.picker-btn.secondary {
+  background: transparent;
+  color: #cfd0d4;
 }
 
 .picker-cancel {

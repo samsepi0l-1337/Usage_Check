@@ -1,4 +1,11 @@
-import { listAccounts, addAccount, removeAccount, getUsage, onUsage } from "./api";
+import {
+  listAccounts,
+  addAccount,
+  importAccount,
+  removeAccount,
+  getUsage,
+  onUsage,
+} from "./api";
 import type { Account, AccountUsage, QuotaUsage, Provider } from "./api";
 
 const PROVIDER_LABEL: Record<Provider, string> = {
@@ -186,6 +193,24 @@ function showFallbackMessage(message: string) {
   setTimeout(() => banner.classList.add("hidden"), 8000);
 }
 
+async function addViaOAuth(provider: Provider) {
+  try {
+    await addAccount(provider);
+    await refresh();
+  } catch (err) {
+    showFallbackMessage(typeof err === "string" ? err : String(err));
+  }
+}
+
+async function addViaImport(provider: Provider) {
+  try {
+    await importAccount(provider);
+    await refresh();
+  } catch (err) {
+    showFallbackMessage(typeof err === "string" ? err : String(err));
+  }
+}
+
 function openProviderPicker() {
   const overlay = el("div", "overlay");
   overlay.id = "provider-overlay";
@@ -195,17 +220,33 @@ function openProviderPicker() {
 
   const providers: Provider[] = ["codex", "claude", "agy"];
   for (const provider of providers) {
-    const btn = el("button", "picker-btn", PROVIDER_LABEL[provider]);
-    btn.addEventListener("click", async () => {
-      overlay.remove();
-      try {
-        await addAccount(provider);
-        await refresh();
-      } catch (err) {
-        showFallbackMessage(typeof err === "string" ? err : String(err));
-      }
-    });
-    picker.appendChild(btn);
+    const row = el("div", "picker-row");
+    row.appendChild(el("div", "picker-name", PROVIDER_LABEL[provider]));
+
+    if (provider === "agy") {
+      const importBtn = el("button", "picker-btn", "로컬 로그로 추가");
+      importBtn.addEventListener("click", async () => {
+        overlay.remove();
+        await addViaImport(provider);
+      });
+      row.appendChild(importBtn);
+    } else {
+      const oauthBtn = el("button", "picker-btn", "브라우저 로그인");
+      oauthBtn.addEventListener("click", async () => {
+        overlay.remove();
+        await addViaOAuth(provider);
+      });
+      row.appendChild(oauthBtn);
+
+      const importBtn = el("button", "picker-btn secondary", "CLI에서 가져오기");
+      importBtn.addEventListener("click", async () => {
+        overlay.remove();
+        await addViaImport(provider);
+      });
+      row.appendChild(importBtn);
+    }
+
+    picker.appendChild(row);
   }
 
   const cancel = el("button", "picker-cancel", "취소");

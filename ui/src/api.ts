@@ -36,6 +36,8 @@ export interface AccountUsage {
 
 export const listAccounts = () => invoke<Account[]>("list_accounts");
 export const addAccount = (provider: string) => invoke<Account>("add_account", { provider });
+export const importAccount = (provider: string) =>
+  invoke<Account>("import_account", { provider });
 export const removeAccount = (id: string) => invoke<void>("remove_account", { id });
 export const getUsage = () => invoke<AccountUsage[]>("get_usage");
 export const onUsage = (cb: (u: AccountUsage[]) => void) =>

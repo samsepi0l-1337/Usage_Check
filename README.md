@@ -4,34 +4,29 @@ Cross-platform (macOS menu bar / Windows taskbar) usage monitor for Codex,
 Claude Code, and agy (Antigravity/Gemini-family) usage, built as a Tauri app
 with a shared Rust core.
 
-The app lives in the system tray. Click the tray icon to open a small
-borderless popup listing every account you've added, each with live usage
-gauges.
+The app lives in the system tray / menu bar only (no separate popup window).
+Click the tray icon to open a native menu (Docker-style) with live usage
+rows, Add/Remove account actions, Refresh, and Quit.
 
 ## What It Shows
 
-- **Multi-account**: add any number of Codex, Claude, and agy accounts side
-  by side.
-- **Codex** and **Claude** accounts: per-account 5-hour and 7-day quota
-  gauges, fetched from each provider's usage API using the account's stored
-  OAuth credentials.
-- **agy** accounts: agy has no quota/usage API, so cards show local token
-  totals (best-effort, scanned from local agy/Gemini CLI logs) instead of a
-  percentage gauge.
-- A background poll loop refreshes all accounts every 60 seconds and pushes
-  updates to the popup live.
+- **Multi-account**: add any number of Codex, Claude, and agy accounts.
+- **Codex** and **Claude**: 5-hour and 7-day quota percentages in the tray
+  menu, fetched from each provider's usage API.
+- **agy**: no quota API — menu shows local token totals from Gemini/agy logs.
+- A background poll refreshes the tray menu every 60 seconds.
 
 ## Architecture
 
 - `crates/usage-core` — pure Rust core: provider/account models, usage
   aggregation, provider fetchers (Codex/Claude API clients), local log
   scanners (Codex/Claude/agy), all covered by unit tests.
-- `src-tauri` (`usage-app`) — the Tauri v2 shell: system tray + borderless
-  popup window, PKCE OAuth login flow, an OS-keychain-backed account store,
-  a background poller, and the 4 Tauri commands the UI calls
-  (`list_accounts`, `add_account`, `remove_account`, `get_usage`).
-- `ui/` — the popup's web frontend (TypeScript + Vite), rendering per-account
-  gauges and the account picker/add flow.
+- `src-tauri` (`usage-app`) — Tauri v2 tray shell: native menu bar menu,
+  PKCE OAuth, file-backed account store under Application Support /
+  `%APPDATA%`, background poller, CLI credential import (including Claude
+  Keychain on macOS).
+- `ui/` — legacy Vite frontend (unused by the tray-menu shell; kept for
+  optional future UI work).
 - `Sources/` — the original Swift/macOS-only menu bar app. **Reference only**;
   it is not built or maintained as part of this rewrite.
 
@@ -41,40 +36,68 @@ Prerequisites:
 
 - Rust (stable toolchain) with `cargo`
 - Node.js + npm
-- [`tauri-cli`](https://tauri.app/) (`cargo install tauri-cli --version "^2"`, or use `cargo tauri` if already available)
+- Optional: [`tauri-cli`](https://tauri.app/) for installer bundles
+  (`cargo install tauri-cli --version "^2"`)
 
-Build the frontend once (required before a release build; `cargo tauri dev`
-also expects `ui/dist` to exist or a dev server configured):
-
-```sh
-cd ui
-npm install
-npm run build
-cd ..
-```
-
-Run in development mode (hot-reloads the Tauri shell):
-
-```sh
-cargo tauri dev
-```
-
-Build a release binary:
+The tray-menu shell does not need the Vite UI. Build and run:
 
 ```sh
 cargo build -p usage-app --release
+./target/release/usage-app          # macOS / Linux
+# target\release\usage-app.exe      # Windows
 ```
 
-The release binary is at `target/release/usage-app` (or the platform-specific
-Tauri bundle, if using `cargo tauri build`, under `src-tauri/target/release/bundle/`).
+### Packaged installers (DMG / EXE)
+
+Install the Tauri CLI once:
+
+```sh
+cargo install tauri-cli --version "^2"
+```
+
+**macOS DMG** (on a Mac):
+
+```sh
+mkdir -p ui/dist && printf '%s\n' '<!doctype html><html><body></body></html>' > ui/dist/index.html
+cd src-tauri
+cargo tauri build --bundles dmg,app
+# → target/release/bundle/dmg/UsageCheck_*.dmg
+# → target/release/bundle/macos/UsageCheck.app
+```
+
+**Windows EXE / MSI** must be built on Windows (or via CI). From this repo:
+
+```sh
+# GitHub Actions: Actions → Release → Run workflow
+# Artifacts: UsageCheck-windows (NSIS .exe + .msi)
+```
+
+Local Windows build:
+
+```sh
+cd src-tauri
+cargo tauri build --bundles nsis,msi
+# → target/release/bundle/nsis/UsageCheck_*-setup.exe
+# → target/release/bundle/msi/UsageCheck_*.msi
+```
+
+Accounts are stored under:
+
+- macOS: `~/Library/Application Support/UsageCheck/`
+- Windows: `%APPDATA%/UsageCheck/`
 
 ## Verify
 
 ```sh
-cargo test -p usage-core   # 16 tests — core models/aggregate/fetch/scanners/account
-cargo test -p usage-app    # 17 tests — oauth/poller/store
+cargo test -p usage-core   # core models/aggregate/fetch/scanners/account
+cargo test -p usage-app    # oauth/poller/store/import/paths
 cargo build -p usage-app --release
 ```
+
+On macOS the release binary is `target/release/usage-app`. On Windows, build
+on a Windows host the same way (or use `cargo tauri build` for an installer
+bundle). Cross-compiling the tray/WebView shell from macOS to Windows is not
+supported out of the box.
 
 GUI, tray, OAuth, and keychain persistence behavior can't be verified
 headlessly — see
@@ -86,16 +109,21 @@ for the manual end-to-end checklist to run on a real machine before a release.
 Click the tray icon to open the popup, then click **"계정 추가"** ("Add
 account") to open the provider picker:
 
-- **Codex** and **Claude**: picking either opens your system browser to that
-  provider's OAuth login page (PKCE flow via a local loopback callback
-  server). On success, a new account card appears and starts polling.
-- **agy**: agy/Antigravity has no discoverable public OAuth flow (see
-  `src-tauri/src/oauth.rs`), so picking it shows a fallback message ("agy
-  OAuth unavailable — use fallback import") instead of opening a browser — no
-  account is added via this path today.
+- **Codex** / **Claude** — **브라우저 로그인**: opens the system browser for
+  that provider's OAuth login (PKCE via a local loopback callback). On
+  success, a new account card appears and starts polling.
+- **Codex** / **Claude** — **CLI에서 가져오기**: imports tokens already stored
+  by the CLI (`~/.codex/auth.json`, or `$CODEX_HOME/auth.json`; Claude's
+  `.credentials.json` under `~/.claude` / `$CLAUDE_CONFIG_DIR`). Useful when
+  you are already logged in via `codex login` / `claude` and do not want a
+  second browser flow.
+- **agy** — **로컬 로그로 추가**: agy has no public OAuth or quota API, so this
+  registers a local-log-only account that shows 5h/7d token totals scanned
+  from `~/.gemini` (and `~/.config/gemini`).
 
-Accounts can be removed individually from their card (✕). Removing an account
-deletes its credentials from the OS keychain.
+Right-click (or use the tray menu) → **Quit UsageCheck** to exit. Accounts can
+be removed individually from their card (✕); that also deletes credentials
+from the OS keychain.
 
 ## Data Sources
 
