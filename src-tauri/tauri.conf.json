@@ -4,8 +4,8 @@
   "version": "0.1.0",
   "identifier": "com.usagecheck.app",
   "build": {
-    "beforeDevCommand": "",
-    "beforeBuildCommand": "",
+    "beforeDevCommand": "npm --prefix ../ui run dev",
+    "beforeBuildCommand": "npm --prefix ../ui run build",
     "devUrl": "http://localhost:5173",
     "frontendDist": "../ui/dist"
   },
@@ -27,7 +27,7 @@
       "iconPath": "icons/tray.png"
     },
     "security": {
-      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'"
+      "csp": "default-src 'self' ipc: http://ipc.localhost; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost 'self'"
     }
   },
   "bundle": {

@@ -62,6 +62,16 @@ cargo build -p usage-app --release
 # target\release\usage-app.exe      # Windows
 ```
 
+Important: build with the default features (includes `custom-protocol`) so the
+UI is embedded from `ui/dist`. A release binary built *without*
+`custom-protocol` loads `http://localhost:5173` and shows a blank white popup
+when the Vite dev server is not running. Always run `npm run build` in `ui/`
+before `cargo build --release` (or use `cargo tauri build`, which runs
+`beforeBuildCommand` for you).
+
+Also ensure Vite uses relative asset paths (`base: "./"` in `ui/vite.config.ts`)
+so CSS/JS resolve under Tauri's custom protocol.
+
 Or use the Tauri CLI for a packaged app (`.app` / `.msi` / `.exe` installer):
 
 ```sh
