@@ -1,11 +1,11 @@
 //! Per-account usage poller: builds an `AccountUsage` snapshot for every
 //! account in the `AccountStore`.
 //!
-//! Codex/Claude: primary source is a live HTTP quota call using the stored
-//! access token; on failure (network error, non-200, expired/invalid token)
-//! falls back to local-log aggregation and reports a status describing why.
-//! Agy: no discoverable quota API (Task 9) — always uses local-log
-//! aggregation only; `five_hour`/`week` stay `None`.
+//! Codex/Claude: live HTTP quota using the stored access token; on failure
+//! falls back to local-log aggregation.
+//! Agy: Antigravity Model Quota — prefer the running app's local
+//! `RetrieveUserQuotaSummary`, else Cloud Code OAuth remote fetch. No local
+//! SQLite token totals (those are not the UI quota %).
 //!
 //! SECURITY: never log/print an access token or other credential value.
 
@@ -16,17 +16,29 @@ use serde::Serialize;
 
 use usage_core::account::{Account, Credentials, Provider};
 use usage_core::aggregate::aggregate;
+use usage_core::fetch::agy::{compact_windows, parse_agy_quota_summary, AgyQuota, AgyQuotaPool};
 use usage_core::fetch::claude::{parse_claude_usage, ClaudeQuota};
 use usage_core::fetch::codex::{parse_codex_usage, CodexQuota};
 use usage_core::models::{ModelTokenEvent, QuotaUsage, WindowTotals};
-use usage_core::scanners::{claude as claude_scanner, codex as codex_scanner, gemini as gemini_scanner};
+use usage_core::scanners::{claude as claude_scanner, codex as codex_scanner};
 
+use crate::agy_local;
 use crate::oauth;
 use crate::paths;
 use crate::store::AccountStore;
 
 /// Refresh proactively when the access token expires within this window.
 const REFRESH_THRESHOLD: Duration = Duration::from_secs(60);
+
+const AGY_USER_AGENT: &str = "antigravity/usagecheck macos/arm64";
+const AGY_QUOTA_SUMMARY_URLS: &[&str] = &[
+    "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
+    "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
+];
+const AGY_LOAD_CODE_ASSIST_URLS: &[&str] = &[
+    "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
+    "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
+];
 
 /// If `creds.expires_at` is within `REFRESH_THRESHOLD` of now (or already
 /// past), attempts a proactive refresh via `oauth::refresh_access_token` and
@@ -49,7 +61,7 @@ async fn maybe_refresh(store: &AccountStore, id: &str, provider: Provider, creds
 }
 
 /// A single account's usage snapshot: live quota (when available) plus
-/// local-log token totals, ready to render in the tray menu.
+/// local-log token totals (Codex/Claude fallback only), ready for the tray.
 #[derive(Clone, Debug, Serialize)]
 pub struct AccountUsage {
     pub account: Account,
@@ -59,6 +71,8 @@ pub struct AccountUsage {
     pub five_hour: Option<QuotaUsage>,
     pub week: Option<QuotaUsage>,
     pub totals: WindowTotals,
+    /// Agy: Gemini / Claude+GPT pool rows (remaining %).
+    pub pool_breakdown: Vec<AgyQuotaPool>,
     pub status: String,
 }
 
@@ -72,13 +86,20 @@ fn display_name_for(account: &Account, email: Option<&str>, plan: Option<&str>) 
         && !label.ends_with(" account")
         && label != "agy (local logs)"
         && label != "Gemini (local logs)"
+        && label != "Gemini"
+        && label != "agy"
     {
         return label.to_string();
     }
     if let Some(plan) = plan.filter(|s| !s.is_empty()) {
         return format!("{} · {}", provider_short(account.provider), plan);
     }
-    if !label.is_empty() {
+    if !label.is_empty()
+        && label != "Gemini"
+        && label != "agy"
+        && label != "agy (local logs)"
+        && label != "Gemini (local logs)"
+    {
         return label.to_string();
     }
     provider_short(account.provider).to_string()
@@ -88,7 +109,7 @@ fn provider_short(p: Provider) -> &'static str {
     match p {
         Provider::Codex => "Codex",
         Provider::Claude => "Claude",
-        Provider::Agy => "Gemini",
+        Provider::Agy => "agy",
     }
 }
 
@@ -114,6 +135,7 @@ pub fn account_usage_from_codex(
         five_hour: quota.five_hour.clone(),
         week: quota.week.clone(),
         totals,
+        pool_breakdown: Vec::new(),
         status: "ok".to_string(),
     }
 }
@@ -134,13 +156,28 @@ pub fn account_usage_from_claude(
         five_hour: quota.five_hour.clone(),
         week: quota.week.clone(),
         totals,
+        pool_breakdown: Vec::new(),
         status: "ok".to_string(),
     }
 }
 
+/// Maps Antigravity Model Quota pools into tray `AccountUsage`.
+pub fn account_usage_from_agy(account: &Account, quota: &AgyQuota, status: &str) -> AccountUsage {
+    let (five_hour, week) = compact_windows(&quota.pools);
+    AccountUsage {
+        display_name: display_name_for(account, quota.email.as_deref(), quota.plan.as_deref()),
+        plan: quota.plan.clone(),
+        account: account.clone(),
+        five_hour,
+        week,
+        totals: WindowTotals::default(),
+        pool_breakdown: quota.pools.clone(),
+        status: status.to_string(),
+    }
+}
+
 /// Builds an `AccountUsage` from local-log aggregation only (no live quota).
-/// Used for agy (no quota API — Task 9) and as the Codex/Claude fallback
-/// path when the HTTP fetch fails.
+/// Used as the Codex/Claude fallback when the HTTP fetch fails.
 fn account_usage_from_logs(account: &Account, totals: WindowTotals, status: &str) -> AccountUsage {
     AccountUsage {
         display_name: display_name_for(account, None, None),
@@ -149,19 +186,21 @@ fn account_usage_from_logs(account: &Account, totals: WindowTotals, status: &str
         five_hour: None,
         week: None,
         totals,
+        pool_breakdown: Vec::new(),
         status: status.to_string(),
     }
 }
 
-/// Reads and aggregates local JSONL logs for a provider into `WindowTotals`.
-/// Returns `Err` if the home directory could not be resolved at all.
+/// Reads and aggregates local JSONL logs for Codex/Claude into `WindowTotals`.
 fn aggregate_local_logs(provider: Provider) -> Result<WindowTotals, ()> {
-    let (roots, parse_line): (Vec<std::path::PathBuf>, fn(&str) -> Option<ModelTokenEvent>) =
-        match provider {
-            Provider::Codex => (paths::codex_session_roots(), codex_scanner::parse_codex_line),
-            Provider::Claude => (paths::claude_project_roots(), claude_scanner::parse_claude_line),
-            Provider::Agy => (paths::gemini_log_roots(), gemini_scanner::parse_gemini_line),
-        };
+    let (roots, parse_line): (
+        Vec<std::path::PathBuf>,
+        fn(&str) -> Option<ModelTokenEvent>,
+    ) = match provider {
+        Provider::Codex => (paths::codex_session_roots(), codex_scanner::parse_codex_line),
+        Provider::Claude => (paths::claude_project_roots(), claude_scanner::parse_claude_line),
+        Provider::Agy => return Err(()),
+    };
 
     if roots.is_empty() {
         return Err(());
@@ -247,9 +286,6 @@ async fn fetch_codex_quota(client: &reqwest::Client, creds: &Credentials) -> Res
 
 /// Fetches live Claude quota via HTTP using `creds.access_token`. Same
 /// success/error shape as `fetch_codex_quota`.
-///
-/// Anthropic rate-limits unknown User-Agents (429). Use a Claude Code UA so
-/// the OAuth usage endpoint accepts the request (verified against live API).
 async fn fetch_claude_quota(client: &reqwest::Client, creds: &Credentials) -> Result<ClaudeQuota, Option<u16>> {
     let req = client
         .get("https://api.anthropic.com/api/oauth/usage")
@@ -268,6 +304,83 @@ async fn fetch_claude_quota(client: &reqwest::Client, creds: &Credentials) -> Re
     Ok(parse_claude_usage(&body))
 }
 
+async fn resolve_agy_project_id(client: &reqwest::Client, access_token: &str) -> Option<String> {
+    let body = serde_json::json!({ "metadata": { "ideType": "ANTIGRAVITY" } });
+    for url in AGY_LOAD_CODE_ASSIST_URLS {
+        let Ok(resp) = client
+            .post(*url)
+            .header("Authorization", format!("Bearer {access_token}"))
+            .header("Content-Type", "application/json")
+            .header("User-Agent", AGY_USER_AGENT)
+            .header(
+                "Client-Metadata",
+                r#"{"ideType":"ANTIGRAVITY","platform":"MACOS","pluginType":"GEMINI"}"#,
+            )
+            .json(&body)
+            .send()
+            .await
+        else {
+            continue;
+        };
+        if !resp.status().is_success() {
+            continue;
+        }
+        let Ok(v) = resp.json::<serde_json::Value>().await else {
+            continue;
+        };
+        if let Some(id) = v
+            .get("cloudaicompanionProject")
+            .or_else(|| v.get("cloudAiCompanionProject"))
+            .and_then(|x| x.as_str())
+            .filter(|s| !s.is_empty())
+        {
+            return Some(id.to_string());
+        }
+    }
+    None
+}
+
+/// Remote Cloud Code `retrieveUserQuotaSummary` using a Google OAuth token.
+async fn fetch_agy_quota_remote(
+    client: &reqwest::Client,
+    creds: &Credentials,
+) -> Result<AgyQuota, Option<u16>> {
+    let project = resolve_agy_project_id(client, &creds.access_token).await;
+    let mut last_status: Option<u16> = None;
+    for url in AGY_QUOTA_SUMMARY_URLS {
+        let mut body = serde_json::Map::new();
+        if let Some(p) = &project {
+            body.insert("project".into(), serde_json::Value::String(p.clone()));
+        }
+        let resp = client
+            .post(*url)
+            .header("Authorization", format!("Bearer {}", creds.access_token))
+            .header("Content-Type", "application/json")
+            .header("User-Agent", AGY_USER_AGENT)
+            .header(
+                "Client-Metadata",
+                r#"{"ideType":"ANTIGRAVITY","platform":"MACOS","pluginType":"GEMINI"}"#,
+            )
+            .json(&serde_json::Value::Object(body))
+            .send()
+            .await
+            .map_err(|_| None)?;
+        let status = resp.status();
+        if !status.is_success() {
+            last_status = Some(status.as_u16());
+            continue;
+        }
+        let root: serde_json::Value = resp.json().await.map_err(|_| Some(status.as_u16()))?;
+        let quota = parse_agy_quota_summary(&root);
+        if quota.pools.is_empty() {
+            last_status = Some(status.as_u16());
+            continue;
+        }
+        return Ok(quota);
+    }
+    Err(last_status)
+}
+
 /// Maps an HTTP failure to a status string: 401/403 (expired/invalid token)
 /// -> "needs_login", 429 -> "rate_limited", anything else -> "error".
 fn status_for_failure(status: Option<u16>) -> &'static str {
@@ -278,9 +391,45 @@ fn status_for_failure(status: Option<u16>) -> &'static str {
     }
 }
 
-/// Builds the full per-account usage snapshot: for each account in `store`,
-/// fetches live quota (Codex/Claude) or falls back to local-log aggregation
-/// (always for agy, per Task 9's finding that it has no quota API).
+async fn poll_agy(store: &AccountStore, client: &reqwest::Client, account: &Account) -> AccountUsage {
+    // 1) Prefer live Antigravity.app language_server (same as Model Quota UI).
+    if let Some(quota) = agy_local::fetch_local_quota().await {
+        if let Some(email) = quota.email.as_deref() {
+            store.update_label(&account.id, email);
+        }
+        return account_usage_from_agy(account, &quota, "ok");
+    }
+
+    // 2) OAuth remote Cloud Code fallback.
+    match store.credentials(&account.id) {
+        Some(creds) if !creds.access_token.is_empty() => {
+            let creds = maybe_refresh(store, &account.id, Provider::Agy, creds).await;
+            match fetch_agy_quota_remote(client, &creds).await {
+                Ok(quota) => account_usage_from_agy(account, &quota, "ok"),
+                Err(status) => account_usage_from_agy(
+                    account,
+                    &AgyQuota {
+                        email: None,
+                        plan: None,
+                        pools: Vec::new(),
+                    },
+                    status_for_failure(status),
+                ),
+            }
+        }
+        _ => account_usage_from_agy(
+            account,
+            &AgyQuota {
+                email: None,
+                plan: None,
+                pools: Vec::new(),
+            },
+            "needs_login",
+        ),
+    }
+}
+
+/// Builds the full per-account usage snapshot.
 pub async fn poll_all(store: &AccountStore) -> Vec<AccountUsage> {
     let client = reqwest::Client::new();
     let accounts = store.list();
@@ -288,10 +437,7 @@ pub async fn poll_all(store: &AccountStore) -> Vec<AccountUsage> {
 
     for account in accounts {
         let usage = match account.provider {
-            Provider::Agy => {
-                let totals = aggregate_local_logs(Provider::Agy).unwrap_or_default();
-                account_usage_from_logs(&account, totals, "ok")
-            }
+            Provider::Agy => poll_agy(store, &client, &account).await,
             Provider::Codex => {
                 match store.credentials(&account.id) {
                     Some(creds) if !creds.access_token.is_empty() => {
@@ -301,8 +447,6 @@ pub async fn poll_all(store: &AccountStore) -> Vec<AccountUsage> {
                                 if let Some(email) = quota.email.as_deref() {
                                     store.update_label(&account.id, email);
                                 }
-                                // Live quota is authoritative for the tray; skip
-                                // scanning thousands of local JSONL files.
                                 account_usage_from_codex(
                                     &account,
                                     &quota,
@@ -310,13 +454,8 @@ pub async fn poll_all(store: &AccountStore) -> Vec<AccountUsage> {
                                 )
                             }
                             Err(status) => {
-                                let totals =
-                                    aggregate_local_logs(Provider::Codex).unwrap_or_default();
-                                account_usage_from_logs(
-                                    &account,
-                                    totals,
-                                    status_for_failure(status),
-                                )
+                                let totals = aggregate_local_logs(Provider::Codex).unwrap_or_default();
+                                account_usage_from_logs(&account, totals, status_for_failure(status))
                             }
                         }
                     }
@@ -337,7 +476,6 @@ pub async fn poll_all(store: &AccountStore) -> Vec<AccountUsage> {
                                 } else {
                                     None
                                 };
-                                // Live quota is authoritative; skip local JSONL scan.
                                 account_usage_from_claude(
                                     &account,
                                     &quota,
@@ -349,11 +487,7 @@ pub async fn poll_all(store: &AccountStore) -> Vec<AccountUsage> {
                             Err(status) => {
                                 let totals =
                                     aggregate_local_logs(Provider::Claude).unwrap_or_default();
-                                account_usage_from_logs(
-                                    &account,
-                                    totals,
-                                    status_for_failure(status),
-                                )
+                                account_usage_from_logs(&account, totals, status_for_failure(status))
                             }
                         }
                     }
@@ -379,11 +513,19 @@ mod tests {
 
     #[test]
     fn maps_codex_quota_to_account_usage() {
-        let acct = Account { id: "1".into(), provider: Provider::Codex, label: "w".into() };
+        let acct = Account {
+            id: "1".into(),
+            provider: Provider::Codex,
+            label: "w".into(),
+        };
         let quota = CodexQuota {
             plan: Some("prolite".into()),
             email: Some("a@b.com".into()),
-            five_hour: Some(QuotaUsage { percent: 12.0, resets_at: None, window_seconds: Some(18000) }),
+            five_hour: Some(QuotaUsage {
+                percent: 12.0,
+                resets_at: None,
+                window_seconds: Some(18000),
+            }),
             week: None,
         };
         let au = account_usage_from_codex(&acct, &quota, WindowTotals::default());
@@ -394,16 +536,55 @@ mod tests {
 
     #[test]
     fn maps_claude_quota_to_account_usage() {
-        let acct = Account { id: "2".into(), provider: Provider::Claude, label: "w".into() };
-        let quota = ClaudeQuota {
-            five_hour: Some(QuotaUsage { percent: 30.0, resets_at: None, window_seconds: None }),
-            week: Some(QuotaUsage { percent: 55.5, resets_at: None, window_seconds: None }),
+        let acct = Account {
+            id: "2".into(),
+            provider: Provider::Claude,
+            label: "w".into(),
         };
-        let au = account_usage_from_claude(&acct, &quota, WindowTotals::default(), Some("c@d.com"), None);
+        let quota = ClaudeQuota {
+            five_hour: Some(QuotaUsage {
+                percent: 30.0,
+                resets_at: None,
+                window_seconds: None,
+            }),
+            week: Some(QuotaUsage {
+                percent: 55.5,
+                resets_at: None,
+                window_seconds: None,
+            }),
+        };
+        let au =
+            account_usage_from_claude(&acct, &quota, WindowTotals::default(), Some("c@d.com"), None);
         assert_eq!(au.status, "ok");
         assert_eq!(au.display_name, "c@d.com");
         assert_eq!(au.five_hour.as_ref().unwrap().percent, 30.0);
         assert_eq!(au.week.as_ref().unwrap().percent, 55.5);
+    }
+
+    #[test]
+    fn maps_agy_pools() {
+        let acct = Account {
+            id: "3".into(),
+            provider: Provider::Agy,
+            label: "agy".into(),
+        };
+        let quota = AgyQuota {
+            email: Some("a@b.com".into()),
+            plan: Some("Pro".into()),
+            pools: vec![AgyQuotaPool {
+                name: "Gemini Models".into(),
+                five_hour: None,
+                week: Some(QuotaUsage {
+                    percent: 100.0,
+                    resets_at: None,
+                    window_seconds: Some(604_800),
+                }),
+            }],
+        };
+        let au = account_usage_from_agy(&acct, &quota, "ok");
+        assert_eq!(au.display_name, "a@b.com");
+        assert_eq!(au.pool_breakdown.len(), 1);
+        assert!((au.week.as_ref().unwrap().percent - 100.0).abs() < 0.01);
     }
 
     #[test]

@@ -107,14 +107,6 @@ pub fn claude_project_roots() -> Vec<PathBuf> {
         .collect()
 }
 
-/// Gemini / agy transcript roots.
-pub fn gemini_log_roots() -> Vec<PathBuf> {
-    let Some(home) = home_dir() else {
-        return Vec::new();
-    };
-    vec![home.join(".gemini"), home.join(".config").join("gemini")]
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -17,6 +17,7 @@ use tauri::{
 };
 use usage_core::account::Provider;
 
+mod agy_local;
 mod import;
 mod oauth;
 mod paths;
@@ -102,7 +103,7 @@ fn oauth_provider(app: &AppHandle, provider: Provider) {
                 let label = match provider {
                     Provider::Codex => "Codex".to_string(),
                     Provider::Claude => "Claude".to_string(),
-                    Provider::Agy => "Gemini".to_string(),
+                    Provider::Agy => "agy".to_string(),
                 };
                 if let Err(e) = store.add(provider, label, creds) {
                     eprintln!("oauth: failed to save account: {e}");
@@ -128,9 +129,9 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
         }
         "add-codex-cli" => import_provider(app, Provider::Codex),
         "add-claude-cli" => import_provider(app, Provider::Claude),
-        "add-agy" => import_provider(app, Provider::Agy),
         "add-codex-oauth" => oauth_provider(app, Provider::Codex),
         "add-claude-oauth" => oauth_provider(app, Provider::Claude),
+        "add-agy-oauth" => oauth_provider(app, Provider::Agy),
         other if other.starts_with("remove-") => {
             let account_id = &other["remove-".len()..];
             app.state::<AccountStore>().remove(account_id);

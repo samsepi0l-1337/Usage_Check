@@ -4,14 +4,15 @@
 //!   Codex
 //!     ● user@example.com
 //!        5h 38% · 7d 6%
-//!     ● other@example.com
-//!        5h 12% · 7d 40%
 //!   ────────
 //!   Claude
 //!     ● …
 //!   ────────
-//!   Gemini
-//!     ● …
+//!   Antigravity (agy)
+//!     ● user@…
+//!        Gemini 100% · Claude+GPT 82%
+//!        Gemini Models  7d 100%
+//!        Claude and GPT models  7d 82%
 //!   ────────
 //!   Add Account ▸
 //!   Remove ▸
@@ -26,6 +27,7 @@ use tauri::{
 };
 
 use usage_core::account::Provider;
+use usage_core::fetch::agy::AgyQuotaPool;
 use usage_core::fetch::codex::window_label;
 use usage_core::models::QuotaUsage;
 
@@ -45,7 +47,7 @@ fn vendor_title(p: Provider) -> &'static str {
     match p {
         Provider::Codex => "Codex",
         Provider::Claude => "Claude",
-        Provider::Agy => "Gemini",
+        Provider::Agy => "Antigravity (agy)",
     }
 }
 
@@ -87,8 +89,77 @@ fn format_quota_window(q: &QuotaUsage, fallback_label: &str) -> String {
     format!("{label} {}", format_percent(q.percent))
 }
 
+fn format_token_windows(totals: &usage_core::models::WindowTotals) -> String {
+    format!(
+        "5h {} · 7d {}",
+        format_tokens(totals.five_hours),
+        format_tokens(totals.week)
+    )
+}
+
+fn short_pool_name(name: &str) -> &str {
+    let l = name.to_ascii_lowercase();
+    if l.contains("gemini") {
+        "Gemini"
+    } else if l.contains("claude") || l.contains("gpt") {
+        "Claude+GPT"
+    } else {
+        name
+    }
+}
+
+fn format_pool_compact(pool: &AgyQuotaPool) -> String {
+    let mut parts = Vec::new();
+    if let Some(q) = &pool.five_hour {
+        parts.push(format_quota_window(q, "5h"));
+    }
+    if let Some(q) = &pool.week {
+        parts.push(format_quota_window(q, "7d"));
+    }
+    if parts.is_empty() {
+        return format!("{} —", short_pool_name(&pool.name));
+    }
+    format!("{} {}", short_pool_name(&pool.name), parts.join(" · "))
+}
+
+fn format_pool_detail(pool: &AgyQuotaPool) -> String {
+    let mut parts = Vec::new();
+    if let Some(q) = &pool.five_hour {
+        parts.push(format_quota_window(q, "5h"));
+    }
+    if let Some(q) = &pool.week {
+        parts.push(format_quota_window(q, "7d"));
+    }
+    let mut line = format!("{}  {}", pool.name, parts.join(" · "));
+    if let Some(reset) = pool
+        .five_hour
+        .as_ref()
+        .and_then(relative_reset)
+        .or_else(|| pool.week.as_ref().and_then(relative_reset))
+    {
+        line.push_str(" · resets ");
+        line.push_str(&reset);
+    }
+    line
+}
+
 /// Usage detail line under the account name.
 pub fn format_usage_detail(usage: &AccountUsage) -> String {
+    if !usage.pool_breakdown.is_empty() {
+        let mut line = usage
+            .pool_breakdown
+            .iter()
+            .map(format_pool_compact)
+            .collect::<Vec<_>>()
+            .join(" · ");
+        if usage.status != "ok" {
+            line.push_str(" (");
+            line.push_str(&usage.status);
+            line.push(')');
+        }
+        return line;
+    }
+
     let has_quota = usage.five_hour.is_some() || usage.week.is_some();
     let mut parts = Vec::new();
     if has_quota {
@@ -103,8 +174,7 @@ pub fn format_usage_detail(usage: &AccountUsage) -> String {
             parts.push("7d —".into());
         }
     } else {
-        parts.push(format!("5h {}", format_tokens(usage.totals.five_hours)));
-        parts.push(format!("7d {}", format_tokens(usage.totals.week)));
+        parts.push(format_token_windows(&usage.totals));
     }
 
     let mut line = parts.join(" · ");
@@ -171,6 +241,16 @@ fn append_vendor_section(
             false,
             None::<&str>,
         )?)?;
+        // Agy: one indented row per Model Quota pool (Gemini / Claude+GPT).
+        for (i, pool) in usage.pool_breakdown.iter().enumerate() {
+            menu.append(&MenuItem::with_id(
+                app,
+                format!("pool-{}-{i}", usage.account.id),
+                format!("        {}", format_pool_detail(pool)),
+                false,
+                None::<&str>,
+            )?)?;
+        }
     }
     Ok(())
 }
@@ -216,13 +296,6 @@ pub fn build_menu(app: &AppHandle, usages: &[AccountUsage]) -> tauri::Result<Men
         true,
         None::<&str>,
     )?)?;
-    add_submenu.append(&MenuItem::with_id(
-        app,
-        "add-agy",
-        "Add Gemini (local logs)",
-        true,
-        None::<&str>,
-    )?)?;
     add_submenu.append(&PredefinedMenuItem::separator(app)?)?;
     add_submenu.append(&MenuItem::with_id(
         app,
@@ -235,6 +308,13 @@ pub fn build_menu(app: &AppHandle, usages: &[AccountUsage]) -> tauri::Result<Men
         app,
         "add-claude-oauth",
         "Login Claude (browser)",
+        true,
+        None::<&str>,
+    )?)?;
+    add_submenu.append(&MenuItem::with_id(
+        app,
+        "add-agy-oauth",
+        "Login Antigravity (browser)",
         true,
         None::<&str>,
     )?)?;
@@ -318,6 +398,7 @@ pub fn tooltip_for(usages: &[AccountUsage]) -> String {
 mod tests {
     use super::*;
     use usage_core::account::Account;
+    use usage_core::fetch::agy::AgyQuotaPool;
     use usage_core::models::WindowTotals;
 
     fn sample(provider: Provider, name: &str, five: f64, week: f64) -> AccountUsage {
@@ -340,6 +421,7 @@ mod tests {
                 window_seconds: Some(604_800),
             }),
             totals: WindowTotals::default(),
+            pool_breakdown: Vec::new(),
             status: "ok".into(),
         }
     }
@@ -350,6 +432,41 @@ mod tests {
         let detail = format_usage_detail(&u);
         assert!(detail.contains("5h 38%"), "{detail}");
         assert!(detail.contains("7d 6%"), "{detail}");
+    }
+
+    #[test]
+    fn agy_detail_uses_pool_remaining() {
+        let mut u = sample(Provider::Agy, "a@b.com", 0.0, 0.0);
+        u.five_hour = None;
+        u.week = Some(QuotaUsage {
+            percent: 82.0,
+            resets_at: None,
+            window_seconds: Some(604_800),
+        });
+        u.pool_breakdown = vec![
+            AgyQuotaPool {
+                name: "Gemini Models".into(),
+                five_hour: None,
+                week: Some(QuotaUsage {
+                    percent: 100.0,
+                    resets_at: None,
+                    window_seconds: Some(604_800),
+                }),
+            },
+            AgyQuotaPool {
+                name: "Claude and GPT models".into(),
+                five_hour: None,
+                week: Some(QuotaUsage {
+                    percent: 81.6,
+                    resets_at: None,
+                    window_seconds: Some(604_800),
+                }),
+            },
+        ];
+        let detail = format_usage_detail(&u);
+        assert!(detail.contains("Gemini"), "{detail}");
+        assert!(detail.contains("100%"), "{detail}");
+        assert!(detail.contains("Claude+GPT"), "{detail}");
     }
 
     #[test]

@@ -1,10 +1,10 @@
-//! Import credentials (or local-only accounts) from CLI config files.
+//! Import credentials from CLI config files.
 //!
 //! Codex: `~/.codex/auth.json` (or `$CODEX_HOME/auth.json`)
 //! Claude: macOS Keychain / Windows Credential Manager service
 //!   `Claude Code-credentials` (preferred), then
 //!   `~/.claude/.credentials.json` (or `$CLAUDE_CONFIG_DIR/...`)
-//! Agy: no auth file — creates a local-log-only account with empty credentials.
+//! Agy: not imported from CLI token DBs — use browser OAuth (`add-agy-oauth`).
 //!
 //! SECURITY: never log/print access_token or refresh_token values.
 
@@ -41,7 +41,7 @@ fn default_label(provider: Provider) -> String {
     match provider {
         Provider::Codex => "Codex".into(),
         Provider::Claude => "Claude".into(),
-        Provider::Agy => "Gemini".into(),
+        Provider::Agy => "agy".into(),
     }
 }
 
@@ -243,25 +243,14 @@ fn parse_expires_at(v: &serde_json::Value) -> Option<chrono::DateTime<Utc>> {
     None
 }
 
-/// Empty placeholder credentials for local-log-only accounts (agy).
-pub fn local_only_credentials() -> Credentials {
-    Credentials {
-        access_token: String::new(),
-        refresh_token: None,
-        account_id: None,
-        expires_at: None,
-    }
-}
-
-/// Loads credentials for `provider` from the local CLI config, or returns
-/// empty credentials for agy. Errors when the expected auth file is missing
-/// or unreadable (Codex/Claude).
+/// Loads credentials for `provider` from the local CLI config.
+/// Agy has no CLI auth import — use browser OAuth (`add-agy-oauth`).
 pub fn import_from_cli(provider: Provider) -> Result<ImportedAccount, String> {
     match provider {
-        Provider::Agy => Ok(ImportedAccount {
-            credentials: local_only_credentials(),
-            label: default_label(Provider::Agy),
-        }),
+        Provider::Agy => Err(
+            "Antigravity is not imported from local CLI token DBs — use Login Antigravity (browser)"
+                .into(),
+        ),
         Provider::Codex => {
             let path = paths::codex_auth_file()
                 .ok_or_else(|| "could not resolve home directory".to_string())?;
@@ -402,10 +391,9 @@ mod tests {
     }
 
     #[test]
-    fn agy_import_returns_empty_creds() {
-        let imported = import_from_cli(Provider::Agy).unwrap();
-        assert!(imported.credentials.access_token.is_empty());
-        assert_eq!(imported.label, "Gemini");
+    fn agy_import_is_rejected() {
+        let err = import_from_cli(Provider::Agy).unwrap_err();
+        assert!(err.contains("Antigravity"), "{err}");
     }
 
     /// Live Keychain smoke (macOS). Ignored by default so CI without Claude
