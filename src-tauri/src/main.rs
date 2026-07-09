@@ -1,8 +1,13 @@
 //! UsageCheck — menu-bar / system-tray usage monitor.
 //!
 //! macOS: menu-bar accessory (no Dock icon, no popup window).
+//! Windows: notification-area tray only (no console, no main window).
 //! Left-click the tray icon opens a native menu (Docker-style) with live
 //! usage rows, Add/Remove account actions, Refresh, and Quit.
+
+// Hide the console window on Windows release builds so the app is tray-only
+// (otherwise a blank console looks like a separate on-screen window).
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::time::Duration;
 
@@ -25,7 +30,10 @@ use store::AccountStore;
 const POLL_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Builds a simple 22×22 bar-chart tray glyph as raw RGBA (no PNG decoder
-/// feature required). Black-on-transparent so macOS template rendering works.
+/// feature required).
+///
+/// - macOS: black bars (template image; system tints for light/dark menu bar).
+/// - Windows: light bars so the glyph stays visible on the dark taskbar.
 fn tray_icon_image() -> tauri::image::Image<'static> {
     const W: u32 = 22;
     const H: u32 = 22;
@@ -34,15 +42,19 @@ fn tray_icon_image() -> tauri::image::Image<'static> {
     let bar_w = 4u32;
     let gap = 2u32;
     let heights = [7u32, 11u32, 9u32];
+    #[cfg(target_os = "macos")]
+    let (r, g, b) = (0u8, 0u8, 0u8);
+    #[cfg(not(target_os = "macos"))]
+    let (r, g, b) = (240u8, 240u8, 240u8);
     let mut x0 = margin;
     for bh in heights {
         let y0 = H - margin - bh;
         for y in y0..(H - margin) {
             for x in x0..(x0 + bar_w) {
                 let i = ((y * W + x) * 4) as usize;
-                rgba[i] = 0;
-                rgba[i + 1] = 0;
-                rgba[i + 2] = 0;
+                rgba[i] = r;
+                rgba[i + 1] = g;
+                rgba[i + 2] = b;
                 rgba[i + 3] = 255;
             }
         }
@@ -141,7 +153,8 @@ fn main() {
                 app.set_activation_policy(tauri::ActivationPolicy::Accessory);
             }
 
-            // Destroy any config-declared webview — this app is tray-menu only.
+            // Destroy any config-declared webview — this app is tray-menu only
+            // on both macOS and Windows (no separate usage window).
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.close();
             }
@@ -151,16 +164,22 @@ fn main() {
 
             let initial = tray_menu::build_menu(app.handle(), &[])?;
 
-            TrayIconBuilder::with_id(tray_menu::tray_id())
+            let mut tray = TrayIconBuilder::with_id(tray_menu::tray_id())
                 .icon(tray_icon_image())
-                .icon_as_template(true)
                 .menu(&initial)
                 .tooltip("UsageCheck")
+                // macOS + Windows: left-click opens the native usage menu
+                // (same Docker-style UX; no separate popup window).
                 .show_menu_on_left_click(true)
                 .on_menu_event(|app, event| {
                     handle_menu_event(app, event.id.as_ref());
-                })
-                .build(app)?;
+                });
+            #[cfg(target_os = "macos")]
+            {
+                // Template tinting is macOS-only; ignore on Windows.
+                tray = tray.icon_as_template(true);
+            }
+            tray.build(app)?;
 
             // Initial poll + periodic refresh.
             let app_handle = app.handle().clone();
