@@ -1,0 +1,23 @@
+# Keep Actions and npm deps current; ignore glib until Tauri migrates off gtk-rs 0.18.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: npm
+    directory: /ui
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    ignore:
+      # glib < 0.20 is a Linux-only transitive dep of Tauri's gtk/webkit2gtk 0.18
+      # stack (libappindicator). Patched glib 0.20 requires gtk-rs 0.20, which
+      # upstream Tauri has not adopted yet. Shipping targets are macOS/Windows.
+      - dependency-name: glib
+        versions: ["< 0.20.0"]
