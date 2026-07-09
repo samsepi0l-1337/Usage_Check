@@ -64,6 +64,35 @@ pub fn claude_credential_files() -> Vec<PathBuf> {
         .collect()
 }
 
+/// macOS Keychain / Windows Credential Manager service name used by Claude Code.
+///
+/// Matches Claude Code CLI: default `Claude Code-credentials`, or
+/// `Claude Code-credentials-{sha256(CLAUDE_CONFIG_DIR)[0..8]}` when
+/// `CLAUDE_CONFIG_DIR` is set.
+pub fn claude_keychain_service_name() -> String {
+    use sha2::{Digest, Sha256};
+
+    match std::env::var("CLAUDE_CONFIG_DIR") {
+        Ok(dir) if !dir.trim().is_empty() => {
+            let hash = Sha256::digest(dir.as_bytes());
+            let short = hex_prefix(&hash, 8);
+            format!("Claude Code-credentials-{short}")
+        }
+        _ => "Claude Code-credentials".to_string(),
+    }
+}
+
+fn hex_prefix(bytes: impl AsRef<[u8]>, n: usize) -> String {
+    let needed = n.div_ceil(2);
+    bytes.as_ref()[..needed.min(bytes.as_ref().len())]
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<String>()
+        .chars()
+        .take(n)
+        .collect()
+}
+
 /// Claude project roots used for JSONL scanning.
 pub fn claude_project_roots() -> Vec<PathBuf> {
     claude_config_roots()
@@ -111,6 +140,23 @@ mod tests {
                 p.file_name().and_then(|n| n.to_str()),
                 Some(".credentials.json")
             );
+        }
+    }
+
+    #[test]
+    fn claude_keychain_service_default_name() {
+        // Unset CLAUDE_CONFIG_DIR for this assertion when possible; if the
+        // ambient env already sets it, just check the hashed form.
+        let name = claude_keychain_service_name();
+        assert!(
+            name == "Claude Code-credentials"
+                || name.starts_with("Claude Code-credentials-"),
+            "unexpected service name: {name}"
+        );
+        if name.contains('-') && name != "Claude Code-credentials" {
+            let suffix = name.rsplit('-').next().unwrap();
+            assert_eq!(suffix.len(), 8);
+            assert!(suffix.chars().all(|c| c.is_ascii_hexdigit()));
         }
     }
 }

@@ -1,10 +1,14 @@
 //! Import credentials (or local-only accounts) from CLI config files.
 //!
 //! Codex: `~/.codex/auth.json` (or `$CODEX_HOME/auth.json`)
-//! Claude: `~/.claude/.credentials.json` (or `$CLAUDE_CONFIG_DIR/...`)
+//! Claude: macOS Keychain / Windows Credential Manager service
+//!   `Claude Code-credentials` (preferred), then
+//!   `~/.claude/.credentials.json` (or `$CLAUDE_CONFIG_DIR/...`)
 //! Agy: no auth file — creates a local-log-only account with empty credentials.
 //!
 //! SECURITY: never log/print access_token or refresh_token values.
+
+use std::process::Command;
 
 use chrono::{TimeZone, Utc};
 use usage_core::account::{Credentials, Provider};
@@ -53,27 +57,33 @@ pub fn parse_codex_auth_json(root: &serde_json::Value) -> Option<Credentials> {
     })
 }
 
-/// Pure parser for Claude `.credentials.json` body. Looks under
-/// `claudeAiOauth` for `accessToken` / `refreshToken` / `expiresAt`.
+/// Pure parser for Claude credentials JSON (file or Keychain password blob).
+/// Accepts either `{ "claudeAiOauth": { ... } }` or a flat `{ "accessToken": ... }`
+/// object (Claude Code uses both shapes).
 pub fn parse_claude_credentials_json(root: &serde_json::Value) -> Option<Credentials> {
-    let oauth = root.get("claudeAiOauth")?;
+    let oauth = root
+        .get("claudeAiOauth")
+        .filter(|v| v.is_object())
+        .unwrap_or(root);
+
     let access = oauth.get("accessToken")?.as_str()?.to_string();
     if access.is_empty() {
         return None;
     }
 
-    let expires_at = oauth.get("expiresAt").and_then(parse_expires_at);
-    // Skip clearly-expired tokens (same as Swift).
-    if let Some(exp) = expires_at {
-        if exp < Utc::now() {
-            return None;
-        }
-    }
-
     let refresh_token = oauth
         .get("refreshToken")
         .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
         .map(str::to_string);
+
+    let expires_at = oauth.get("expiresAt").and_then(parse_expires_at);
+    // Skip clearly-expired tokens unless a refresh_token can renew them.
+    if let Some(exp) = expires_at {
+        if exp < Utc::now() && refresh_token.is_none() {
+            return None;
+        }
+    }
 
     Some(Credentials {
         access_token: access,
@@ -81,6 +91,85 @@ pub fn parse_claude_credentials_json(root: &serde_json::Value) -> Option<Credent
         account_id: None,
         expires_at,
     })
+}
+
+/// Candidate Keychain account names for Claude Code (username first, then
+/// account-less lookup — same order as Claude Code CLI).
+fn claude_keychain_accounts() -> Vec<Option<String>> {
+    let mut accounts: Vec<Option<String>> = Vec::new();
+    for key in ["USER", "USERNAME", "LOGNAME"] {
+        if let Ok(v) = std::env::var(key) {
+            let trimmed = v.trim();
+            if !trimmed.is_empty()
+                && !accounts
+                    .iter()
+                    .any(|a| a.as_deref() == Some(trimmed))
+            {
+                accounts.push(Some(trimmed.to_string()));
+            }
+        }
+    }
+    // Claude Code also tries `security ...` without `-a`.
+    accounts.push(None);
+    accounts
+}
+
+/// Parses a Keychain / file secret blob into credentials. Never logs `secret`.
+fn credentials_from_secret_blob(secret: &str) -> Option<Credentials> {
+    let root: serde_json::Value = serde_json::from_str(secret.trim()).ok()?;
+    parse_claude_credentials_json(&root)
+}
+
+/// macOS: read via `/usr/bin/security` (same path Claude Code CLI uses).
+/// The Security.framework/`keyring` crate path often fails for third-party
+/// apps until the user grants Keychain access; `security` already works for
+/// the logged-in user session.
+#[cfg(target_os = "macos")]
+fn read_claude_from_macos_security(service: &str, account: Option<&str>) -> Option<Credentials> {
+    let mut cmd = Command::new("/usr/bin/security");
+    cmd.arg("find-generic-password").arg("-s").arg(service);
+    if let Some(account) = account {
+        cmd.arg("-a").arg(account);
+    }
+    cmd.arg("-w");
+    let output = cmd.output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let secret = String::from_utf8(output.stdout).ok()?;
+    credentials_from_secret_blob(&secret)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn read_claude_from_macos_security(_service: &str, _account: Option<&str>) -> Option<Credentials> {
+    None
+}
+
+/// Windows / fallback: `keyring` crate (Credential Manager / Keychain API).
+fn read_claude_from_keyring_crate(service: &str, account: &str) -> Option<Credentials> {
+    let entry = keyring::Entry::new(service, account).ok()?;
+    let secret = entry.get_password().ok()?;
+    credentials_from_secret_blob(&secret)
+}
+
+/// Reads Claude credentials from the OS credential store. Prefer macOS
+/// `security` CLI (Claude Code's own path), then `keyring`, then files.
+/// Never logs the secret payload.
+fn read_claude_from_keychain() -> Option<Credentials> {
+    let service = paths::claude_keychain_service_name();
+    for account in claude_keychain_accounts() {
+        if let Some(creds) =
+            read_claude_from_macos_security(&service, account.as_deref())
+        {
+            return Some(creds);
+        }
+        if let Some(account) = account.as_deref() {
+            if let Some(creds) = read_claude_from_keyring_crate(&service, account) {
+                return Some(creds);
+            }
+        }
+    }
+    None
 }
 
 fn parse_expires_at(v: &serde_json::Value) -> Option<chrono::DateTime<Utc>> {
@@ -127,10 +216,13 @@ pub fn import_from_cli(provider: Provider) -> Result<Credentials, String> {
                 .ok_or_else(|| "Codex auth.json has no usable access_token".to_string())
         }
         Provider::Claude => {
-            let files = paths::claude_credential_files();
-            if files.is_empty() {
-                return Err("could not resolve home directory".to_string());
+            // Claude Code stores OAuth in the OS keychain first; the on-disk
+            // `.credentials.json` is only a fallback (often absent on macOS).
+            if let Some(creds) = read_claude_from_keychain() {
+                return Ok(creds);
             }
+
+            let files = paths::claude_credential_files();
             for path in &files {
                 let Ok(data) = std::fs::read_to_string(path) else {
                     continue;
@@ -143,7 +235,8 @@ pub fn import_from_cli(provider: Provider) -> Result<Credentials, String> {
                 }
             }
             Err(
-                "Claude credentials not found — run `claude` login first, or set CLAUDE_CONFIG_DIR"
+                "Claude credentials not found — run `claude` login first \
+                 (macOS: Keychain item \"Claude Code-credentials\", or ~/.claude/.credentials.json)"
                     .to_string(),
             )
         }
@@ -200,7 +293,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_expired_claude_token() {
+    fn rejects_expired_claude_token_without_refresh() {
         let past_ms = (Utc::now().timestamp() - 3600) * 1000;
         let root = json!({
             "claudeAiOauth": {
@@ -212,8 +305,43 @@ mod tests {
     }
 
     #[test]
+    fn accepts_expired_claude_token_when_refresh_present() {
+        let past_ms = (Utc::now().timestamp() - 3600) * 1000;
+        let root = json!({
+            "claudeAiOauth": {
+                "accessToken": "claude-at",
+                "refreshToken": "claude-rt",
+                "expiresAt": past_ms
+            }
+        });
+        let c = parse_claude_credentials_json(&root).unwrap();
+        assert_eq!(c.refresh_token.as_deref(), Some("claude-rt"));
+    }
+
+    #[test]
+    fn parses_flat_claude_oauth_object() {
+        let root = json!({
+            "accessToken": "flat-at",
+            "refreshToken": "flat-rt"
+        });
+        let c = parse_claude_credentials_json(&root).unwrap();
+        assert_eq!(c.access_token, "flat-at");
+    }
+
+    #[test]
     fn agy_import_returns_empty_creds() {
         let c = import_from_cli(Provider::Agy).unwrap();
         assert!(c.access_token.is_empty());
+    }
+
+    /// Live Keychain smoke (macOS). Ignored by default so CI without Claude
+    /// login still passes. Run with: `cargo test --bins -- --ignored`
+    #[test]
+    #[ignore]
+    fn imports_claude_from_local_keychain_when_present() {
+        let creds = import_from_cli(Provider::Claude).expect("claude import");
+        assert!(!creds.access_token.is_empty());
+        // Never assert on token contents — only shape.
+        assert!(creds.access_token.starts_with("sk-ant-") || creds.access_token.len() > 20);
     }
 }
