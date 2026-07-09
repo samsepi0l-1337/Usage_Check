@@ -163,6 +163,22 @@ impl AccountStore {
             let _ = write_secret_file(&path, &json);
         }
     }
+
+    /// Updates the display label for an existing account (e.g. after learning
+    /// the email from a live usage response).
+    pub fn update_label(&self, id: &str, label: &str) {
+        let mut accounts = self.list();
+        let mut changed = false;
+        for account in &mut accounts {
+            if account.id == id && account.label != label {
+                account.label = label.to_string();
+                changed = true;
+            }
+        }
+        if changed {
+            let _ = self.save_index(&accounts);
+        }
+    }
 }
 
 impl Default for AccountStore {

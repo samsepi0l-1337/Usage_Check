@@ -64,22 +64,15 @@ async fn refresh_tray(app: &AppHandle) {
 fn import_provider(app: &AppHandle, provider: Provider) {
     let store = app.state::<AccountStore>();
     match import::import_from_cli(provider) {
-        Ok(creds) => {
-            let label = match provider {
-                Provider::Agy => "agy (local logs)".to_string(),
-                Provider::Codex => "codex (CLI import)".to_string(),
-                Provider::Claude => "claude (CLI import)".to_string(),
-            };
-            match store.add(provider, label, creds) {
-                Ok(_) => {
-                    let app2 = app.clone();
-                    tauri::async_runtime::spawn(async move {
-                        refresh_tray(&app2).await;
-                    });
-                }
-                Err(e) => eprintln!("import: failed to save account: {e}"),
+        Ok(imported) => match store.add(provider, imported.label, imported.credentials) {
+            Ok(_) => {
+                let app2 = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    refresh_tray(&app2).await;
+                });
             }
-        }
+            Err(e) => eprintln!("import: failed to save account: {e}"),
+        },
         Err(e) => eprintln!("import: {e}"),
     }
 }
@@ -90,7 +83,11 @@ fn oauth_provider(app: &AppHandle, provider: Provider) {
         match oauth::begin_login(provider).await {
             Ok(creds) => {
                 let store = app2.state::<AccountStore>();
-                let label = format!("{} account", provider.as_str());
+                let label = match provider {
+                    Provider::Codex => "Codex".to_string(),
+                    Provider::Claude => "Claude".to_string(),
+                    Provider::Agy => "Gemini".to_string(),
+                };
                 if let Err(e) = store.add(provider, label, creds) {
                     eprintln!("oauth: failed to save account: {e}");
                     return;

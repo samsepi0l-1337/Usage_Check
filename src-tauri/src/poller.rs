@@ -49,21 +49,68 @@ async fn maybe_refresh(store: &AccountStore, id: &str, provider: Provider, creds
 }
 
 /// A single account's usage snapshot: live quota (when available) plus
-/// local-log token totals, ready to render as a card.
+/// local-log token totals, ready to render in the tray menu.
 #[derive(Clone, Debug, Serialize)]
 pub struct AccountUsage {
     pub account: Account,
+    /// Prefer email / plan-aware name over the stored label when available.
+    pub display_name: String,
+    pub plan: Option<String>,
     pub five_hour: Option<QuotaUsage>,
     pub week: Option<QuotaUsage>,
     pub totals: WindowTotals,
     pub status: String,
 }
 
+fn display_name_for(account: &Account, email: Option<&str>, plan: Option<&str>) -> String {
+    if let Some(email) = email.filter(|s| !s.is_empty()) {
+        return email.to_string();
+    }
+    let label = account.label.trim();
+    if !label.is_empty()
+        && !label.ends_with(" (CLI import)")
+        && !label.ends_with(" account")
+        && label != "agy (local logs)"
+        && label != "Gemini (local logs)"
+    {
+        return label.to_string();
+    }
+    if let Some(plan) = plan.filter(|s| !s.is_empty()) {
+        return format!("{} · {}", provider_short(account.provider), plan);
+    }
+    if !label.is_empty() {
+        return label.to_string();
+    }
+    provider_short(account.provider).to_string()
+}
+
+fn provider_short(p: Provider) -> &'static str {
+    match p {
+        Provider::Codex => "Codex",
+        Provider::Claude => "Claude",
+        Provider::Agy => "Gemini",
+    }
+}
+
 /// Maps a parsed `CodexQuota` + local-log `totals` into an `AccountUsage`
 /// with `status = "ok"`. Pure — no I/O.
-pub fn account_usage_from_codex(account: &Account, quota: &CodexQuota, totals: WindowTotals) -> AccountUsage {
+pub fn account_usage_from_codex(
+    account: &Account,
+    quota: &CodexQuota,
+    totals: WindowTotals,
+) -> AccountUsage {
+    let mut account = account.clone();
+    if let Some(email) = quota.email.as_deref() {
+        account.label = email.to_string();
+    }
     AccountUsage {
-        account: account.clone(),
+        display_name: display_name_for(
+            &account,
+            quota.email.as_deref(),
+            quota.plan.as_deref(),
+        ),
+        plan: quota.plan.clone(),
+        account,
         five_hour: quota.five_hour.clone(),
         week: quota.week.clone(),
         totals,
@@ -73,8 +120,16 @@ pub fn account_usage_from_codex(account: &Account, quota: &CodexQuota, totals: W
 
 /// Maps a parsed `ClaudeQuota` + local-log `totals` into an `AccountUsage`
 /// with `status = "ok"`. Pure — no I/O.
-pub fn account_usage_from_claude(account: &Account, quota: &ClaudeQuota, totals: WindowTotals) -> AccountUsage {
+pub fn account_usage_from_claude(
+    account: &Account,
+    quota: &ClaudeQuota,
+    totals: WindowTotals,
+    email: Option<&str>,
+    plan: Option<&str>,
+) -> AccountUsage {
     AccountUsage {
+        display_name: display_name_for(account, email, plan),
+        plan: plan.map(str::to_string),
         account: account.clone(),
         five_hour: quota.five_hour.clone(),
         week: quota.week.clone(),
@@ -88,6 +143,8 @@ pub fn account_usage_from_claude(account: &Account, quota: &ClaudeQuota, totals:
 /// path when the HTTP fetch fails.
 fn account_usage_from_logs(account: &Account, totals: WindowTotals, status: &str) -> AccountUsage {
     AccountUsage {
+        display_name: display_name_for(account, None, None),
+        plan: None,
         account: account.clone(),
         five_hour: None,
         week: None,
@@ -223,6 +280,9 @@ pub async fn poll_all(store: &AccountStore) -> Vec<AccountUsage> {
                         let creds = maybe_refresh(store, &account.id, Provider::Codex, creds).await;
                         match fetch_codex_quota(&client, &creds).await {
                             Ok(quota) => {
+                                if let Some(email) = quota.email.as_deref() {
+                                    store.update_label(&account.id, email);
+                                }
                                 let totals = aggregate_local_logs(Provider::Codex).unwrap_or_default();
                                 account_usage_from_codex(&account, &quota, totals)
                             }
@@ -245,7 +305,13 @@ pub async fn poll_all(store: &AccountStore) -> Vec<AccountUsage> {
                         match fetch_claude_quota(&client, &creds).await {
                             Ok(quota) => {
                                 let totals = aggregate_local_logs(Provider::Claude).unwrap_or_default();
-                                account_usage_from_claude(&account, &quota, totals)
+                                // Prefer a non-generic stored label (email) when present.
+                                let email = if account.label.contains('@') {
+                                    Some(account.label.as_str())
+                                } else {
+                                    None
+                                };
+                                account_usage_from_claude(&account, &quota, totals, email, None)
                             }
                             Err(status) => {
                                 let totals = aggregate_local_logs(Provider::Claude).unwrap_or_default();
@@ -277,12 +343,14 @@ mod tests {
     fn maps_codex_quota_to_account_usage() {
         let acct = Account { id: "1".into(), provider: Provider::Codex, label: "w".into() };
         let quota = CodexQuota {
-            plan: None,
-            five_hour: Some(QuotaUsage { percent: 12.0, resets_at: None, window_seconds: None }),
+            plan: Some("prolite".into()),
+            email: Some("a@b.com".into()),
+            five_hour: Some(QuotaUsage { percent: 12.0, resets_at: None, window_seconds: Some(18000) }),
             week: None,
         };
         let au = account_usage_from_codex(&acct, &quota, WindowTotals::default());
         assert_eq!(au.status, "ok");
+        assert_eq!(au.display_name, "a@b.com");
         assert_eq!(au.five_hour.as_ref().unwrap().percent, 12.0);
     }
 
@@ -293,8 +361,9 @@ mod tests {
             five_hour: Some(QuotaUsage { percent: 30.0, resets_at: None, window_seconds: None }),
             week: Some(QuotaUsage { percent: 55.5, resets_at: None, window_seconds: None }),
         };
-        let au = account_usage_from_claude(&acct, &quota, WindowTotals::default());
+        let au = account_usage_from_claude(&acct, &quota, WindowTotals::default(), Some("c@d.com"), None);
         assert_eq!(au.status, "ok");
+        assert_eq!(au.display_name, "c@d.com");
         assert_eq!(au.five_hour.as_ref().unwrap().percent, 30.0);
         assert_eq!(au.week.as_ref().unwrap().percent, 55.5);
     }
