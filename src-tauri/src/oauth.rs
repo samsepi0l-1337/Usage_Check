@@ -53,6 +53,8 @@ https://www.googleapis.com/auth/experimentsandconfigs";
 /// Prefer the Antigravity enterprise-style Google client when multiple
 /// `*.apps.googleusercontent.com` IDs appear in a binary (numeric prefix).
 const AGY_PREFERRED_CLIENT_PREFIX: &str = "1071006060591-";
+const GOOGLE_CLIENT_SUFFIX: &[u8] = b".apps.googleusercontent.com";
+const GOCSPX_PREFIX: &[u8] = b"GOCSPX-";
 
 /// Resolves Antigravity Google OAuth client_id + client_secret without
 /// embedding them in source (GitHub push protection blocks that).
@@ -73,10 +75,21 @@ pub fn resolve_agy_oauth_client() -> Result<(String, String), String> {
     }
 
     for path in agy_oauth_binary_candidates() {
-        if let Ok(data) = std::fs::read(&path) {
-            if let Some(pair) = extract_google_oauth_pair(&data) {
-                return Ok(pair);
-            }
+        let Ok(meta) = std::fs::metadata(&path) else {
+            continue;
+        };
+        if !meta.is_file() || meta.len() == 0 {
+            continue;
+        }
+        // Skip tiny stubs / huge unrelated files.
+        if meta.len() < 1024 || meta.len() > 400_000_000 {
+            continue;
+        }
+        let Ok(data) = std::fs::read(&path) else {
+            continue;
+        };
+        if let Some(pair) = extract_google_oauth_pair(&data) {
+            return Ok(pair);
         }
     }
 
@@ -90,96 +103,169 @@ pub fn resolve_agy_oauth_client() -> Result<(String, String), String> {
 
 fn agy_oauth_binary_candidates() -> Vec<std::path::PathBuf> {
     let mut out = Vec::new();
+    let mut push_unique = |p: std::path::PathBuf| {
+        if !out.iter().any(|x| x == &p) {
+            out.push(p);
+        }
+    };
+
     if let Ok(p) = std::env::var("ANTIGRAVITY_CLI_PATH") {
-        out.push(std::path::PathBuf::from(p));
+        push_unique(std::path::PathBuf::from(p));
     }
-    if let Some(home) = std::env::var_os("HOME") {
+    // GUI apps often lack Homebrew on PATH — still probe absolute locations.
+    if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
         let home = std::path::PathBuf::from(home);
-        out.push(home.join(".local/bin/agy"));
+        push_unique(home.join(".local/bin/agy"));
+        push_unique(home.join("bin/agy"));
     }
-    out.push(std::path::PathBuf::from("/opt/homebrew/bin/agy"));
-    out.push(std::path::PathBuf::from("/usr/local/bin/agy"));
-    out.push(std::path::PathBuf::from(
+    push_unique(std::path::PathBuf::from("/opt/homebrew/bin/agy"));
+    push_unique(std::path::PathBuf::from("/usr/local/bin/agy"));
+    push_unique(std::path::PathBuf::from(
         "/Applications/Antigravity.app/Contents/Resources/bin/language_server",
     ));
-    out.push(std::path::PathBuf::from(
+    push_unique(std::path::PathBuf::from(
         "/Applications/Antigravity.app/Contents/MacOS/Antigravity",
     ));
+    // Windows installs (best-effort).
+    if let Some(pf) = std::env::var_os("ProgramFiles") {
+        let pf = std::path::PathBuf::from(pf);
+        push_unique(pf.join("Antigravity/Antigravity.exe"));
+        push_unique(pf.join("Antigravity/resources/bin/language_server.exe"));
+    }
+    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+        let local = std::path::PathBuf::from(local);
+        push_unique(local.join("Programs/Antigravity/Antigravity.exe"));
+        push_unique(local.join("Antigravity/agy.exe"));
+    }
+    // PATH lookup for `agy` when present (CLI shells / packaged PATH).
+    if let Ok(path) = std::env::var("PATH") {
+        for dir in std::env::split_paths(&path) {
+            push_unique(dir.join("agy"));
+            push_unique(dir.join("agy.exe"));
+        }
+    }
+    out
+}
+
+fn find_bytes(haystack: &[u8], needle: &[u8]) -> Vec<usize> {
+    let mut out = Vec::new();
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return out;
+    }
+    let mut i = 0;
+    while i + needle.len() <= haystack.len() {
+        if &haystack[i..i + needle.len()] == needle {
+            out.push(i);
+            i += needle.len();
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
+fn is_secret_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'-' || b == b'_'
+}
+
+/// Finds `N-xxx.apps.googleusercontent.com` even when glued to adjacent ASCII
+/// in a Go binary (no NUL separators).
+fn find_google_client_ids(data: &[u8]) -> Vec<(usize, String)> {
+    let mut out = Vec::new();
+    for end_at in find_bytes(data, GOOGLE_CLIENT_SUFFIX) {
+        let suffix_end = end_at + GOOGLE_CLIENT_SUFFIX.len();
+        // Parse only the token immediately before this suffix:
+        //   {digits}-{alphanumeric_id}.apps.googleusercontent.com
+        // Do not walk through earlier glued tokens (binaries concatenate many
+        // ASCII strings with no separators).
+        let mut i = end_at;
+        while i > 0 && data[i - 1].is_ascii_alphanumeric() {
+            i -= 1;
+        }
+        if i == end_at {
+            continue;
+        }
+        if i == 0 || data[i - 1] != b'-' {
+            continue;
+        }
+        i -= 1; // consume '-'
+        let digit_end = i;
+        while i > 0 && data[i - 1].is_ascii_digit() {
+            i -= 1;
+        }
+        if i == digit_end {
+            continue;
+        }
+        let start = i;
+        let raw = &data[start..suffix_end];
+        let Ok(text) = std::str::from_utf8(raw) else {
+            continue;
+        };
+        if text.len() < 40 {
+            continue;
+        }
+        if !out.iter().any(|(_, c)| c == text) {
+            out.push((start, text.to_string()));
+        }
+    }
+    out
+}
+
+/// Finds `GOCSPX-…` secrets. Antigravity binaries concatenate two secrets
+/// back-to-back (`GOCSPX-…GOCSPX-…`); stop at the next `GOCSPX-` boundary.
+/// Body length is capped to the observed Google client-secret range so
+/// trailing glued ASCII is not consumed.
+fn find_gocspx_secrets(data: &[u8]) -> Vec<(usize, String)> {
+    // Live Antigravity/agy binaries use ~28–33 char bodies after `GOCSPX-`.
+    const MAX_BODY: usize = 35;
+    let mut out = Vec::new();
+    for start in find_bytes(data, GOCSPX_PREFIX) {
+        let body_start = start + GOCSPX_PREFIX.len();
+        let mut end = body_start;
+        while end < data.len()
+            && end - body_start < MAX_BODY
+            && is_secret_byte(data[end])
+            && !data[end..].starts_with(GOCSPX_PREFIX)
+        {
+            end += 1;
+        }
+        if end - body_start < 10 {
+            continue;
+        }
+        let Ok(text) = std::str::from_utf8(&data[start..end]) else {
+            continue;
+        };
+        if !out.iter().any(|(_, s)| s == text) {
+            out.push((start, text.to_string()));
+        }
+    }
     out
 }
 
 /// Scans binary bytes for a Google OAuth client id + `GOCSPX-…` secret pair.
 /// Prefers the Antigravity enterprise client id prefix when several exist.
 pub fn extract_google_oauth_pair(data: &[u8]) -> Option<(String, String)> {
-    let clients = extract_ascii_matches(data, |s| {
-        s.ends_with(".apps.googleusercontent.com")
-            && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'.')
-            && s.contains('-')
-            && s.len() > 40
-    });
-    let secrets = extract_ascii_matches(data, |s| {
-        s.starts_with("GOCSPX-")
-            && s.len() > 10
-            && s.bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
-    });
+    let clients = find_google_client_ids(data);
+    let secrets = find_gocspx_secrets(data);
     if clients.is_empty() || secrets.is_empty() {
         return None;
     }
 
-    let client = clients
+    let (client_pos, client) = clients
         .iter()
-        .find(|c| c.starts_with(AGY_PREFERRED_CLIENT_PREFIX))
+        .find(|(_, c)| c.starts_with(AGY_PREFERRED_CLIENT_PREFIX))
         .cloned()
         .unwrap_or_else(|| clients[0].clone());
 
-    // Prefer the secret that appears nearest to the chosen client id in the file.
-    let client_pos = data
-        .windows(client.len())
-        .position(|w| w == client.as_bytes())
-        .unwrap_or(0);
     let mut best: Option<(usize, String)> = None;
-    for secret in &secrets {
-        let Some(pos) = data
-            .windows(secret.len())
-            .position(|w| w == secret.as_bytes())
-        else {
-            continue;
-        };
-        let dist = client_pos.abs_diff(pos);
+    for (pos, secret) in &secrets {
+        let dist = client_pos.abs_diff(*pos);
         if best.as_ref().map(|(d, _)| dist < *d).unwrap_or(true) {
             best = Some((dist, secret.clone()));
         }
     }
     let secret = best?.1;
     Some((client, secret))
-}
-
-fn extract_ascii_matches(data: &[u8], pred: impl Fn(&str) -> bool) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut start = None;
-    for (i, &b) in data.iter().enumerate() {
-        let ok = b.is_ascii_graphic() && b != b'"' && b != b'\'' && b != b'\\' && b != b'<';
-        if ok {
-            if start.is_none() {
-                start = Some(i);
-            }
-        } else if let Some(s) = start.take() {
-            if let Ok(text) = std::str::from_utf8(&data[s..i]) {
-                if pred(text) && !out.iter().any(|x| x == text) {
-                    out.push(text.to_string());
-                }
-            }
-        }
-    }
-    if let Some(s) = start {
-        if let Ok(text) = std::str::from_utf8(&data[s..]) {
-            if pred(text) && !out.iter().any(|x| x == text) {
-                out.push(text.to_string());
-            }
-        }
-    }
-    out
 }
 
 /// Returns the OAuth configuration for a provider.
@@ -613,12 +699,59 @@ mod tests {
 
     #[test]
     fn extract_google_oauth_pair_prefers_enterprise_prefix() {
-        let blob = b"noise 884354919052-other.apps.googleusercontent.com xx \
-GOCSPX-AAAA1111 BBB 1071006060591-exampleclientid000000000000000.apps.googleusercontent.com \
-yy GOCSPX-BBBB2222 end";
+        // Mimic Go binary packing with NUL separators between string table entries,
+        // plus one concatenated GOCSPX pair (as seen in agy).
+        let blob = concat!(
+            "\0",
+            "884354919052-otherclientid000000000000000.apps.googleusercontent.com",
+            "\0",
+            "GOCSPX-AAAA1111BBBB2222CCCC3333",
+            "\0",
+            "1071006060591-exampleclientid000000000000000.apps.googleusercontent.com",
+            "\0",
+            "GOCSPX-EEEE5555FFFF6666GGGG7777",
+            "GOCSPX-HHHH8888IIII9999JJJJ0000",
+            "\0",
+        )
+        .as_bytes();
         let (id, secret) = extract_google_oauth_pair(blob).unwrap();
-        assert!(id.starts_with("1071006060591-"));
-        assert_eq!(secret, "GOCSPX-BBBB2222");
+        assert!(id.starts_with("1071006060591-"), "{id}");
+        assert!(id.ends_with(".apps.googleusercontent.com"), "{id}");
+        assert!(secret.starts_with("GOCSPX-"), "{secret}");
+        assert!(!secret[7..].contains("GOCSPX-"), "must split concatenated secrets: {secret}");
+        // Nearest-by-offset picks AAAA (immediately before the preferred client).
+        assert_eq!(secret, "GOCSPX-AAAA1111BBBB2222CCCC3333");
+    }
+
+    #[test]
+    fn extract_splits_concatenated_gocspx_secrets() {
+        let blob = b"1071006060591-exampleclientid000000000000000.apps.googleusercontent.com\0\
+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PX-SECONDSECRETVALUEHERE00";
+        let (_id, secret) = extract_google_oauth_pair(blob).unwrap();
+        assert_eq!(secret, "GOCSPX-FIRSTSECRETVALUEHERE0000");
+        assert!(!secret[7..].contains("GOCSPX-"));
+    }
+
+    #[test]
+    fn resolve_agy_oauth_client_from_local_install_when_present() {
+        // GUI tray apps often have no env vars; resolution must succeed from
+        // a local Antigravity/agy install when available.
+        std::env::remove_var("ANTIGRAVITY_OAUTH_CLIENT_ID");
+        std::env::remove_var("ANTIGRAVITY_OAUTH_CLIENT_SECRET");
+        match resolve_agy_oauth_client() {
+            Ok((id, secret)) => {
+                assert!(id.contains("apps.googleusercontent.com"), "{id}");
+                assert!(secret.starts_with("GOCSPX-"), "secret shape");
+                assert!(!secret[7..].contains("GOCSPX-"), "must not concatenate secrets");
+            }
+            Err(e) => {
+                // CI / machines without Antigravity installed.
+                assert!(
+                    e.contains("Antigravity OAuth credentials not found"),
+                    "{e}"
+                );
+            }
+        }
     }
 
     #[test]
