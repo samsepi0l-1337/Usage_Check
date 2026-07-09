@@ -247,12 +247,16 @@ async fn fetch_codex_quota(client: &reqwest::Client, creds: &Credentials) -> Res
 
 /// Fetches live Claude quota via HTTP using `creds.access_token`. Same
 /// success/error shape as `fetch_codex_quota`.
+///
+/// Anthropic rate-limits unknown User-Agents (429). Use a Claude Code UA so
+/// the OAuth usage endpoint accepts the request (verified against live API).
 async fn fetch_claude_quota(client: &reqwest::Client, creds: &Credentials) -> Result<ClaudeQuota, Option<u16>> {
     let req = client
         .get("https://api.anthropic.com/api/oauth/usage")
         .header("Accept", "application/json")
         .header("anthropic-beta", "oauth-2025-04-20")
-        .header("User-Agent", "UsageCheck")
+        .header("anthropic-version", "2023-06-01")
+        .header("User-Agent", "claude-code/2.1.197")
         .bearer_auth(&creds.access_token);
 
     let resp = req.send().await.map_err(|_| None)?;
@@ -265,10 +269,11 @@ async fn fetch_claude_quota(client: &reqwest::Client, creds: &Credentials) -> Re
 }
 
 /// Maps an HTTP failure to a status string: 401/403 (expired/invalid token)
-/// -> "needs_login", anything else (network error, 5xx, etc.) -> "error".
+/// -> "needs_login", 429 -> "rate_limited", anything else -> "error".
 fn status_for_failure(status: Option<u16>) -> &'static str {
     match status {
         Some(401) | Some(403) => "needs_login",
+        Some(429) => "rate_limited",
         _ => "error",
     }
 }
@@ -405,6 +410,7 @@ mod tests {
     fn status_for_failure_maps_auth_errors() {
         assert_eq!(status_for_failure(Some(401)), "needs_login");
         assert_eq!(status_for_failure(Some(403)), "needs_login");
+        assert_eq!(status_for_failure(Some(429)), "rate_limited");
         assert_eq!(status_for_failure(Some(500)), "error");
         assert_eq!(status_for_failure(None), "error");
     }
