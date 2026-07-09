@@ -41,7 +41,8 @@ Prerequisites:
 
 - Rust (stable toolchain) with `cargo`
 - Node.js + npm
-- [`tauri-cli`](https://tauri.app/) (`cargo install tauri-cli --version "^2"`, or use `cargo tauri` if already available)
+- Optional: [`tauri-cli`](https://tauri.app/) for installer bundles
+  (`cargo install tauri-cli --version "^2"`)
 
 Build the frontend once (required before a release build; `cargo tauri dev`
 also expects `ui/dist` to exist or a dev server configured):
@@ -53,28 +54,42 @@ npm run build
 cd ..
 ```
 
-Run in development mode (hot-reloads the Tauri shell):
+Run the release binary directly (macOS / Windows, after a native build):
+
+```sh
+cargo build -p usage-app --release
+./target/release/usage-app          # macOS / Linux
+# target\release\usage-app.exe      # Windows
+```
+
+Or use the Tauri CLI for a packaged app (`.app` / `.msi` / `.exe` installer):
+
+```sh
+cargo tauri build
+```
+
+Development mode (hot-reloads the Tauri shell when `tauri-cli` is installed):
 
 ```sh
 cargo tauri dev
 ```
 
-Build a release binary:
-
-```sh
-cargo build -p usage-app --release
-```
-
-The release binary is at `target/release/usage-app` (or the platform-specific
-Tauri bundle, if using `cargo tauri build`, under `src-tauri/target/release/bundle/`).
+**Windows:** build on a Windows host. The tray/WebView shell is not
+cross-compiled from macOS. The same Cargo workspace and `ui/` frontend are
+used on both platforms.
 
 ## Verify
 
 ```sh
-cargo test -p usage-core   # 16 tests — core models/aggregate/fetch/scanners/account
-cargo test -p usage-app    # 17 tests — oauth/poller/store
+cargo test -p usage-core   # core models/aggregate/fetch/scanners/account
+cargo test -p usage-app    # oauth/poller/store/import/paths
 cargo build -p usage-app --release
 ```
+
+On macOS the release binary is `target/release/usage-app`. On Windows, build
+on a Windows host the same way (or use `cargo tauri build` for an installer
+bundle). Cross-compiling the tray/WebView shell from macOS to Windows is not
+supported out of the box.
 
 GUI, tray, OAuth, and keychain persistence behavior can't be verified
 headlessly — see
@@ -86,16 +101,21 @@ for the manual end-to-end checklist to run on a real machine before a release.
 Click the tray icon to open the popup, then click **"계정 추가"** ("Add
 account") to open the provider picker:
 
-- **Codex** and **Claude**: picking either opens your system browser to that
-  provider's OAuth login page (PKCE flow via a local loopback callback
-  server). On success, a new account card appears and starts polling.
-- **agy**: agy/Antigravity has no discoverable public OAuth flow (see
-  `src-tauri/src/oauth.rs`), so picking it shows a fallback message ("agy
-  OAuth unavailable — use fallback import") instead of opening a browser — no
-  account is added via this path today.
+- **Codex** / **Claude** — **브라우저 로그인**: opens the system browser for
+  that provider's OAuth login (PKCE via a local loopback callback). On
+  success, a new account card appears and starts polling.
+- **Codex** / **Claude** — **CLI에서 가져오기**: imports tokens already stored
+  by the CLI (`~/.codex/auth.json`, or `$CODEX_HOME/auth.json`; Claude's
+  `.credentials.json` under `~/.claude` / `$CLAUDE_CONFIG_DIR`). Useful when
+  you are already logged in via `codex login` / `claude` and do not want a
+  second browser flow.
+- **agy** — **로컬 로그로 추가**: agy has no public OAuth or quota API, so this
+  registers a local-log-only account that shows 5h/7d token totals scanned
+  from `~/.gemini` (and `~/.config/gemini`).
 
-Accounts can be removed individually from their card (✕). Removing an account
-deletes its credentials from the OS keychain.
+Right-click (or use the tray menu) → **Quit UsageCheck** to exit. Accounts can
+be removed individually from their card (✕); that also deletes credentials
+from the OS keychain.
 
 ## Data Sources
 

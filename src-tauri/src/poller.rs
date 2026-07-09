@@ -22,6 +22,7 @@ use usage_core::models::{ModelTokenEvent, QuotaUsage, WindowTotals};
 use usage_core::scanners::{claude as claude_scanner, codex as codex_scanner, gemini as gemini_scanner};
 
 use crate::oauth;
+use crate::paths;
 use crate::store::AccountStore;
 
 /// Refresh proactively when the access token expires within this window.
@@ -96,42 +97,37 @@ fn account_usage_from_logs(account: &Account, totals: WindowTotals, status: &str
 }
 
 /// Reads and aggregates local JSONL logs for a provider into `WindowTotals`.
-/// Returns `Err` if the log directory could not be read at all (still
-/// distinguished from "read fine, zero events").
+/// Returns `Err` if the home directory could not be resolved at all.
 fn aggregate_local_logs(provider: Provider) -> Result<WindowTotals, ()> {
-    let home = match dirs_home() {
-        Some(h) => h,
-        None => return Err(()),
-    };
+    let (roots, parse_line): (Vec<std::path::PathBuf>, fn(&str) -> Option<ModelTokenEvent>) =
+        match provider {
+            Provider::Codex => (paths::codex_session_roots(), codex_scanner::parse_codex_line),
+            Provider::Claude => (paths::claude_project_roots(), claude_scanner::parse_claude_line),
+            Provider::Agy => (paths::gemini_log_roots(), gemini_scanner::parse_gemini_line),
+        };
 
-    let (root, parse_line): (std::path::PathBuf, fn(&str) -> Option<ModelTokenEvent>) = match provider {
-        Provider::Codex => (home.join(".codex/sessions"), codex_scanner::parse_codex_line),
-        Provider::Claude => (home.join(".claude/projects"), claude_scanner::parse_claude_line),
-        Provider::Agy => (home.join(".gemini"), gemini_scanner::parse_gemini_line),
-    };
-
-    if !root.exists() {
-        // No logs yet is not an error — just zero totals.
-        return Ok(WindowTotals::default());
+    if roots.is_empty() {
+        return Err(());
     }
 
     let mut events = Vec::new();
-    for path in walk_jsonl(&root) {
-        let Ok(content) = std::fs::read_to_string(&path) else {
+    for root in roots {
+        if !root.exists() {
             continue;
-        };
-        for line in content.lines() {
-            if let Some(ev) = parse_line(line) {
-                events.push(ev);
+        }
+        for path in walk_jsonl(&root) {
+            let Ok(content) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            for line in content.lines() {
+                if let Some(ev) = parse_line(line) {
+                    events.push(ev);
+                }
             }
         }
     }
 
     Ok(aggregate(&events, Utc::now()))
-}
-
-fn dirs_home() -> Option<std::path::PathBuf> {
-    std::env::var_os("HOME").map(std::path::PathBuf::from)
 }
 
 /// Recursively collects `.jsonl` file paths under `root`. Best-effort: read
@@ -223,7 +219,7 @@ pub async fn poll_all(store: &AccountStore) -> Vec<AccountUsage> {
             }
             Provider::Codex => {
                 match store.credentials(&account.id) {
-                    Some(creds) => {
+                    Some(creds) if !creds.access_token.is_empty() => {
                         let creds = maybe_refresh(store, &account.id, Provider::Codex, creds).await;
                         match fetch_codex_quota(&client, &creds).await {
                             Ok(quota) => {
@@ -236,7 +232,7 @@ pub async fn poll_all(store: &AccountStore) -> Vec<AccountUsage> {
                             }
                         }
                     }
-                    None => {
+                    _ => {
                         let totals = aggregate_local_logs(Provider::Codex).unwrap_or_default();
                         account_usage_from_logs(&account, totals, "needs_login")
                     }
@@ -244,7 +240,7 @@ pub async fn poll_all(store: &AccountStore) -> Vec<AccountUsage> {
             }
             Provider::Claude => {
                 match store.credentials(&account.id) {
-                    Some(creds) => {
+                    Some(creds) if !creds.access_token.is_empty() => {
                         let creds = maybe_refresh(store, &account.id, Provider::Claude, creds).await;
                         match fetch_claude_quota(&client, &creds).await {
                             Ok(quota) => {
@@ -257,7 +253,7 @@ pub async fn poll_all(store: &AccountStore) -> Vec<AccountUsage> {
                             }
                         }
                     }
-                    None => {
+                    _ => {
                         let totals = aggregate_local_logs(Provider::Claude).unwrap_or_default();
                         account_usage_from_logs(&account, totals, "needs_login")
                     }
