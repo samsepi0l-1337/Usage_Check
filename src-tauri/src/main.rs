@@ -164,22 +164,25 @@ fn main() {
 
             let initial = tray_menu::build_menu(app.handle(), &[])?;
 
-            let mut tray = TrayIconBuilder::with_id(tray_menu::tray_id())
+            // macOS + Windows: left-click opens the native usage menu
+            // (same Docker-style UX; no separate popup window).
+            let tray = TrayIconBuilder::with_id(tray_menu::tray_id())
                 .icon(tray_icon_image())
                 .menu(&initial)
                 .tooltip("UsageCheck")
-                // macOS + Windows: left-click opens the native usage menu
-                // (same Docker-style UX; no separate popup window).
                 .show_menu_on_left_click(true)
                 .on_menu_event(|app, event| {
                     handle_menu_event(app, event.id.as_ref());
                 });
             #[cfg(target_os = "macos")]
             {
-                // Template tinting is macOS-only; ignore on Windows.
-                tray = tray.icon_as_template(true);
+                // Template tinting is macOS-only.
+                tray.icon_as_template(true).build(app)?;
             }
-            tray.build(app)?;
+            #[cfg(not(target_os = "macos"))]
+            {
+                tray.build(app)?;
+            }
 
             // Initial poll + periodic refresh.
             let app_handle = app.handle().clone();

@@ -8,6 +8,7 @@
 //!
 //! SECURITY: never log/print access_token or refresh_token values.
 
+#[cfg(target_os = "macos")]
 use std::process::Command;
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
