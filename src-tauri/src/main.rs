@@ -52,8 +52,12 @@ fn tray_icon_image() -> tauri::image::Image<'static> {
 }
 
 /// Polls all accounts and rebuilds the tray menu on the main thread.
+///
+/// Uses a fresh `AccountStore` handle (file-backed ZST) instead of holding
+/// `app.state()` across `.await` — Tauri's managed-state guard must not cross
+/// suspension points.
 async fn refresh_tray(app: &AppHandle) {
-    let store = app.state::<AccountStore>();
+    let store = AccountStore::new();
     let snapshot = poller::poll_all(&store).await;
     let app2 = app.clone();
     let _ = app.run_on_main_thread(move || {
@@ -141,6 +145,9 @@ fn main() {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.close();
             }
+
+            // Collapse duplicate CLI/OAuth imports of the same account.
+            AccountStore::new().dedupe();
 
             let initial = tray_menu::build_menu(app.handle(), &[])?;
 

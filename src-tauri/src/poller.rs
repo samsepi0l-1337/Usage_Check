@@ -189,7 +189,9 @@ fn aggregate_local_logs(provider: Provider) -> Result<WindowTotals, ()> {
 
 /// Recursively collects `.jsonl` file paths under `root`. Best-effort: read
 /// errors on individual directories are skipped rather than propagated.
+/// Caps the number of files so tray refresh stays responsive.
 fn walk_jsonl(root: &std::path::Path) -> Vec<std::path::PathBuf> {
+    const MAX_FILES: usize = 200;
     let mut out = Vec::new();
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
@@ -200,10 +202,21 @@ fn walk_jsonl(root: &std::path::Path) -> Vec<std::path::PathBuf> {
             let path = entry.path();
             if path.is_dir() {
                 stack.push(path);
-            } else if path.extension().and_then(|e| e.to_str()).map(|e| e.starts_with("jsonl")).unwrap_or(false)
-                || path.file_name().and_then(|n| n.to_str()).map(|n| n.contains("transcript") && n.ends_with(".jsonl")).unwrap_or(false)
+            } else if path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.starts_with("jsonl"))
+                .unwrap_or(false)
+                || path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|n| n.contains("transcript") && n.ends_with(".jsonl"))
+                    .unwrap_or(false)
             {
                 out.push(path);
+                if out.len() >= MAX_FILES {
+                    return out;
+                }
             }
         }
     }
@@ -283,12 +296,22 @@ pub async fn poll_all(store: &AccountStore) -> Vec<AccountUsage> {
                                 if let Some(email) = quota.email.as_deref() {
                                     store.update_label(&account.id, email);
                                 }
-                                let totals = aggregate_local_logs(Provider::Codex).unwrap_or_default();
-                                account_usage_from_codex(&account, &quota, totals)
+                                // Live quota is authoritative for the tray; skip
+                                // scanning thousands of local JSONL files.
+                                account_usage_from_codex(
+                                    &account,
+                                    &quota,
+                                    WindowTotals::default(),
+                                )
                             }
                             Err(status) => {
-                                let totals = aggregate_local_logs(Provider::Codex).unwrap_or_default();
-                                account_usage_from_logs(&account, totals, status_for_failure(status))
+                                let totals =
+                                    aggregate_local_logs(Provider::Codex).unwrap_or_default();
+                                account_usage_from_logs(
+                                    &account,
+                                    totals,
+                                    status_for_failure(status),
+                                )
                             }
                         }
                     }
@@ -304,18 +327,28 @@ pub async fn poll_all(store: &AccountStore) -> Vec<AccountUsage> {
                         let creds = maybe_refresh(store, &account.id, Provider::Claude, creds).await;
                         match fetch_claude_quota(&client, &creds).await {
                             Ok(quota) => {
-                                let totals = aggregate_local_logs(Provider::Claude).unwrap_or_default();
-                                // Prefer a non-generic stored label (email) when present.
                                 let email = if account.label.contains('@') {
                                     Some(account.label.as_str())
                                 } else {
                                     None
                                 };
-                                account_usage_from_claude(&account, &quota, totals, email, None)
+                                // Live quota is authoritative; skip local JSONL scan.
+                                account_usage_from_claude(
+                                    &account,
+                                    &quota,
+                                    WindowTotals::default(),
+                                    email,
+                                    None,
+                                )
                             }
                             Err(status) => {
-                                let totals = aggregate_local_logs(Provider::Claude).unwrap_or_default();
-                                account_usage_from_logs(&account, totals, status_for_failure(status))
+                                let totals =
+                                    aggregate_local_logs(Provider::Claude).unwrap_or_default();
+                                account_usage_from_logs(
+                                    &account,
+                                    totals,
+                                    status_for_failure(status),
+                                )
                             }
                         }
                     }

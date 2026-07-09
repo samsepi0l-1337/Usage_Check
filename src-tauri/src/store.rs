@@ -84,13 +84,68 @@ fn write_secret_file(path: &PathBuf, contents: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// File-backed account store.
+/// File-backed account store (zero-sized — all state lives on disk).
+#[derive(Clone, Copy, Debug, Default)]
 pub struct AccountStore;
 
 impl AccountStore {
     pub fn new() -> Self {
         let _ = ensure_dirs();
         AccountStore
+    }
+
+    /// Collapses duplicate Codex/Claude rows that share the same
+    /// `account_id` or identical access token (keeps the first).
+    pub fn dedupe(&self) {
+        let accounts = self.list();
+        if accounts.len() <= 1 {
+            return;
+        }
+        let mut keep: Vec<Account> = Vec::new();
+        let mut seen_account_ids: Vec<String> = Vec::new();
+        let mut seen_tokens: Vec<String> = Vec::new();
+        let mut removed: Vec<String> = Vec::new();
+
+        for account in accounts {
+            let creds = self.credentials(&account.id);
+            let account_id = creds
+                .as_ref()
+                .and_then(|c| c.account_id.clone())
+                .filter(|s| !s.is_empty());
+            let token = creds
+                .as_ref()
+                .map(|c| c.access_token.clone())
+                .filter(|s| !s.is_empty());
+
+            let dup = account_id
+                .as_ref()
+                .is_some_and(|id| seen_account_ids.iter().any(|s| s == id))
+                || token
+                    .as_ref()
+                    .is_some_and(|t| seen_tokens.iter().any(|s| s == t));
+
+            if dup {
+                removed.push(account.id);
+                continue;
+            }
+            if let Some(id) = account_id {
+                seen_account_ids.push(id);
+            }
+            if let Some(t) = token {
+                seen_tokens.push(t);
+            }
+            keep.push(account);
+        }
+
+        if removed.is_empty() {
+            return;
+        }
+        for id in &removed {
+            if let Some(path) = cred_path(id) {
+                let _ = fs::remove_file(path);
+            }
+        }
+        let _ = self.save_index(&keep);
     }
 
     /// Reads the account index. Returns an empty vec if absent/unreadable.
@@ -112,6 +167,10 @@ impl AccountStore {
 
     /// Adds a new account and persists credentials. Returns an error if the
     /// app-data directory cannot be written (so the UI can surface it).
+    ///
+    /// If an existing account for the same provider already has the same
+    /// `account_id` (Codex) or the same non-empty `access_token`, its
+    /// credentials/label are updated in place instead of creating a duplicate.
     pub fn add(
         &self,
         provider: Provider,
@@ -119,6 +178,31 @@ impl AccountStore {
         creds: Credentials,
     ) -> Result<Account, String> {
         ensure_dirs().ok_or_else(|| "could not resolve app data directory".to_string())?;
+
+        let mut accounts = self.list();
+        if let Some(existing) = accounts.iter_mut().find(|a| {
+            if a.provider != provider {
+                return false;
+            }
+            let Some(existing_creds) = self.credentials(&a.id) else {
+                return false;
+            };
+            match (
+                creds.account_id.as_deref().filter(|s| !s.is_empty()),
+                existing_creds.account_id.as_deref().filter(|s| !s.is_empty()),
+            ) {
+                (Some(new_id), Some(old_id)) if new_id == old_id => return true,
+                _ => {}
+            }
+            !creds.access_token.is_empty() && existing_creds.access_token == creds.access_token
+        }) {
+            existing.label = label.clone();
+            let id = existing.id.clone();
+            let account = existing.clone();
+            self.save_index(&accounts)?;
+            self.update_credentials(&id, &creds);
+            return Ok(account);
+        }
 
         let account = Account {
             id: uuid::Uuid::new_v4().to_string(),
@@ -131,7 +215,6 @@ impl AccountStore {
             .map_err(|e| format!("serialize credentials: {e}"))?;
         write_secret_file(&path, &json)?;
 
-        let mut accounts = self.list();
         accounts.push(account.clone());
         self.save_index(&accounts)?;
 
@@ -178,12 +261,6 @@ impl AccountStore {
         if changed {
             let _ = self.save_index(&accounts);
         }
-    }
-}
-
-impl Default for AccountStore {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
