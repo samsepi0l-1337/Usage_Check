@@ -1,23 +1,27 @@
+//! UsageCheck — menu-bar / system-tray usage monitor.
+//!
+//! macOS: menu-bar accessory (no Dock icon, no popup window).
+//! Left-click the tray icon opens a native menu (Docker-style) with live
+//! usage rows, Add/Remove account actions, Refresh, and Quit.
+
 use std::time::Duration;
 
 use tauri::{
-    menu::{Menu, MenuItem},
-    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Emitter, Manager,
+    tray::TrayIconBuilder,
+    AppHandle, Manager,
 };
-use usage_core::account::{Account, Provider};
+use usage_core::account::Provider;
 
 mod import;
 mod oauth;
 mod paths;
 mod poller;
 mod store;
+mod tray_menu;
 
-use poller::AccountUsage;
 use store::AccountStore;
 
-/// Interval between background usage-poll ticks that feed the `usage-updated`
-/// event to the frontend.
+/// Interval between background usage-poll ticks that refresh the tray menu.
 const POLL_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Builds a simple 22×22 bar-chart tray glyph as raw RGBA (no PNG decoder
@@ -47,78 +51,88 @@ fn tray_icon_image() -> tauri::image::Image<'static> {
     tauri::image::Image::new_owned(rgba, W, H)
 }
 
-#[tauri::command]
-fn list_accounts(state: tauri::State<'_, AccountStore>) -> Vec<Account> {
-    state.list()
+/// Polls all accounts and rebuilds the tray menu on the main thread.
+async fn refresh_tray(app: &AppHandle) {
+    let store = app.state::<AccountStore>();
+    let snapshot = poller::poll_all(&store).await;
+    let app2 = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        tray_menu::apply_menu(&app2, &snapshot);
+    });
 }
 
-/// Runs the OAuth login flow for `provider` and, on success, persists the new
-/// account (with a default "<provider> account" label) in the store. On
-/// failure (e.g. agy has no reproducible OAuth flow — see `oauth::config`),
-/// the error string is propagated so the UI can show the fallback message
-/// instead of throwing.
-#[tauri::command]
-async fn add_account(
-    provider: String,
-    state: tauri::State<'_, AccountStore>,
-) -> Result<Account, String> {
-    let provider = Provider::from_str(&provider)
-        .ok_or_else(|| format!("unknown provider: {provider}"))?;
-
-    let creds = oauth::begin_login(provider).await?;
-
-    let label = format!("{} account", provider.as_str());
-    let account = state.add(provider, label, creds);
-    Ok(account)
+fn import_provider(app: &AppHandle, provider: Provider) {
+    let store = app.state::<AccountStore>();
+    match import::import_from_cli(provider) {
+        Ok(creds) => {
+            let label = match provider {
+                Provider::Agy => "agy (local logs)".to_string(),
+                Provider::Codex => "codex (CLI import)".to_string(),
+                Provider::Claude => "claude (CLI import)".to_string(),
+            };
+            match store.add(provider, label, creds) {
+                Ok(_) => {
+                    let app2 = app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        refresh_tray(&app2).await;
+                    });
+                }
+                Err(e) => eprintln!("import: failed to save account: {e}"),
+            }
+        }
+        Err(e) => eprintln!("import: {e}"),
+    }
 }
 
-/// Imports an account from the local CLI config (Codex/Claude auth files) or
-/// registers a local-log-only agy account. This is the fallback path when
-/// browser OAuth is unavailable or the user already logged in via the CLI.
-#[tauri::command]
-fn import_account(
-    provider: String,
-    state: tauri::State<'_, AccountStore>,
-) -> Result<Account, String> {
-    let provider = Provider::from_str(&provider)
-        .ok_or_else(|| format!("unknown provider: {provider}"))?;
-
-    let creds = import::import_from_cli(provider)?;
-    let label = match provider {
-        Provider::Agy => "agy (local logs)".to_string(),
-        Provider::Codex => "codex (CLI import)".to_string(),
-        Provider::Claude => "claude (CLI import)".to_string(),
-    };
-    Ok(state.add(provider, label, creds))
+fn oauth_provider(app: &AppHandle, provider: Provider) {
+    let app2 = app.clone();
+    tauri::async_runtime::spawn(async move {
+        match oauth::begin_login(provider).await {
+            Ok(creds) => {
+                let store = app2.state::<AccountStore>();
+                let label = format!("{} account", provider.as_str());
+                if let Err(e) = store.add(provider, label, creds) {
+                    eprintln!("oauth: failed to save account: {e}");
+                    return;
+                }
+                refresh_tray(&app2).await;
+            }
+            Err(e) => eprintln!("oauth: {e}"),
+        }
+    });
 }
 
-#[tauri::command]
-fn remove_account(id: String, state: tauri::State<'_, AccountStore>) {
-    state.remove(&id);
-}
-
-#[tauri::command]
-async fn get_usage(state: tauri::State<'_, AccountStore>) -> Result<Vec<AccountUsage>, String> {
-    Ok(poller::poll_all(&state).await)
+fn handle_menu_event(app: &AppHandle, id: &str) {
+    match id {
+        "quit" => {
+            app.exit(0);
+        }
+        "refresh" => {
+            let app2 = app.clone();
+            tauri::async_runtime::spawn(async move {
+                refresh_tray(&app2).await;
+            });
+        }
+        "add-codex-cli" => import_provider(app, Provider::Codex),
+        "add-claude-cli" => import_provider(app, Provider::Claude),
+        "add-agy" => import_provider(app, Provider::Agy),
+        "add-codex-oauth" => oauth_provider(app, Provider::Codex),
+        "add-claude-oauth" => oauth_provider(app, Provider::Claude),
+        other if other.starts_with("remove-") => {
+            let account_id = &other["remove-".len()..];
+            app.state::<AccountStore>().remove(account_id);
+            let app2 = app.clone();
+            tauri::async_runtime::spawn(async move {
+                refresh_tray(&app2).await;
+            });
+        }
+        _ => {}
+    }
 }
 
 fn main() {
     tauri::Builder::default()
         .manage(AccountStore::new())
-        .invoke_handler(tauri::generate_handler![
-            list_accounts,
-            add_account,
-            import_account,
-            remove_account,
-            get_usage
-        ])
-        .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                // Tray apps hide instead of destroying the popup window.
-                let _ = window.hide();
-                api.prevent_close();
-            }
-        })
         .setup(|app| {
             #[cfg(target_os = "macos")]
             {
@@ -126,58 +140,32 @@ fn main() {
                 app.set_activation_policy(tauri::ActivationPolicy::Accessory);
             }
 
-            let quit = MenuItem::with_id(app, "quit", "Quit UsageCheck", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&quit])?;
+            // Destroy any config-declared webview — this app is tray-menu only.
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.close();
+            }
 
-            TrayIconBuilder::new()
+            let initial = tray_menu::build_menu(app.handle(), &[])?;
+
+            TrayIconBuilder::with_id(tray_menu::tray_id())
                 .icon(tray_icon_image())
                 .icon_as_template(true)
-                .menu(&menu)
+                .menu(&initial)
                 .tooltip("UsageCheck")
-                .show_menu_on_left_click(false)
+                .show_menu_on_left_click(true)
                 .on_menu_event(|app, event| {
-                    if event.id.as_ref() == "quit" {
-                        app.exit(0);
-                    }
-                })
-                .on_tray_icon_event(|tray, event| match event {
-                    TrayIconEvent::Click {
-                        button: MouseButton::Left,
-                        button_state: MouseButtonState::Up,
-                        ..
-                    } => {
-                        let app = tray.app_handle();
-                        if let Some(window) = app.get_webview_window("main") {
-                            if window.is_visible().unwrap_or(false) {
-                                if let Err(e) = window.hide() {
-                                    eprintln!("tray: hide failed: {e}");
-                                }
-                            } else {
-                                if let Err(e) = window.show() {
-                                    eprintln!("tray: show failed: {e}");
-                                }
-                                if let Err(e) = window.set_focus() {
-                                    eprintln!("tray: set_focus failed: {e}");
-                                }
-                            }
-                        }
-                    }
-                    _ => {}
+                    handle_menu_event(app, event.id.as_ref());
                 })
                 .build(app)?;
 
-            // Background poll loop: every 60s, build a fresh usage snapshot
-            // and broadcast it to any listening webview.
+            // Initial poll + periodic refresh.
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
+                refresh_tray(&app_handle).await;
                 let mut interval = tokio::time::interval(POLL_INTERVAL);
                 loop {
                     interval.tick().await;
-                    let store = app_handle.state::<AccountStore>();
-                    let snapshot = poller::poll_all(&store).await;
-                    if let Err(e) = app_handle.emit("usage-updated", snapshot) {
-                        eprintln!("poll loop: emit failed: {e}");
-                    }
+                    refresh_tray(&app_handle).await;
                 }
             });
 
@@ -187,9 +175,8 @@ fn main() {
         .expect("error while building tauri application")
         .run(|_app_handle, event| {
             if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
-                // Keep the tray process alive when the (hidden) window would
-                // otherwise trigger a default exit. Explicit Quit still passes
-                // Some(exit_code) via `app.exit(0)`.
+                // Keep the tray process alive when no windows remain.
+                // Explicit Quit still passes Some(exit_code) via `app.exit(0)`.
                 if code.is_none() {
                     api.prevent_exit();
                 }

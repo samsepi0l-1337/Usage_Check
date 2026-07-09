@@ -4,34 +4,29 @@ Cross-platform (macOS menu bar / Windows taskbar) usage monitor for Codex,
 Claude Code, and agy (Antigravity/Gemini-family) usage, built as a Tauri app
 with a shared Rust core.
 
-The app lives in the system tray. Click the tray icon to open a small
-borderless popup listing every account you've added, each with live usage
-gauges.
+The app lives in the system tray / menu bar only (no separate popup window).
+Click the tray icon to open a native menu (Docker-style) with live usage
+rows, Add/Remove account actions, Refresh, and Quit.
 
 ## What It Shows
 
-- **Multi-account**: add any number of Codex, Claude, and agy accounts side
-  by side.
-- **Codex** and **Claude** accounts: per-account 5-hour and 7-day quota
-  gauges, fetched from each provider's usage API using the account's stored
-  OAuth credentials.
-- **agy** accounts: agy has no quota/usage API, so cards show local token
-  totals (best-effort, scanned from local agy/Gemini CLI logs) instead of a
-  percentage gauge.
-- A background poll loop refreshes all accounts every 60 seconds and pushes
-  updates to the popup live.
+- **Multi-account**: add any number of Codex, Claude, and agy accounts.
+- **Codex** and **Claude**: 5-hour and 7-day quota percentages in the tray
+  menu, fetched from each provider's usage API.
+- **agy**: no quota API — menu shows local token totals from Gemini/agy logs.
+- A background poll refreshes the tray menu every 60 seconds.
 
 ## Architecture
 
 - `crates/usage-core` — pure Rust core: provider/account models, usage
   aggregation, provider fetchers (Codex/Claude API clients), local log
   scanners (Codex/Claude/agy), all covered by unit tests.
-- `src-tauri` (`usage-app`) — the Tauri v2 shell: system tray + borderless
-  popup window, PKCE OAuth login flow, an OS-keychain-backed account store,
-  a background poller, and the 4 Tauri commands the UI calls
-  (`list_accounts`, `add_account`, `remove_account`, `get_usage`).
-- `ui/` — the popup's web frontend (TypeScript + Vite), rendering per-account
-  gauges and the account picker/add flow.
+- `src-tauri` (`usage-app`) — Tauri v2 tray shell: native menu bar menu,
+  PKCE OAuth, file-backed account store under Application Support /
+  `%APPDATA%`, background poller, CLI credential import (including Claude
+  Keychain on macOS).
+- `ui/` — legacy Vite frontend (unused by the tray-menu shell; kept for
+  optional future UI work).
 - `Sources/` — the original Swift/macOS-only menu bar app. **Reference only**;
   it is not built or maintained as part of this rewrite.
 
@@ -44,17 +39,7 @@ Prerequisites:
 - Optional: [`tauri-cli`](https://tauri.app/) for installer bundles
   (`cargo install tauri-cli --version "^2"`)
 
-Build the frontend once (required before a release build; `cargo tauri dev`
-also expects `ui/dist` to exist or a dev server configured):
-
-```sh
-cd ui
-npm install
-npm run build
-cd ..
-```
-
-Run the release binary directly (macOS / Windows, after a native build):
+The tray-menu shell does not need the Vite UI. Build and run:
 
 ```sh
 cargo build -p usage-app --release
@@ -62,31 +47,19 @@ cargo build -p usage-app --release
 # target\release\usage-app.exe      # Windows
 ```
 
-Important: build with the default features (includes `custom-protocol`) so the
-UI is embedded from `ui/dist`. A release binary built *without*
-`custom-protocol` loads `http://localhost:5173` and shows a blank white popup
-when the Vite dev server is not running. Always run `npm run build` in `ui/`
-before `cargo build --release` (or use `cargo tauri build`, which runs
-`beforeBuildCommand` for you).
-
-Also ensure Vite uses relative asset paths (`base: "./"` in `ui/vite.config.ts`)
-so CSS/JS resolve under Tauri's custom protocol.
-
 Or use the Tauri CLI for a packaged app (`.app` / `.msi` / `.exe` installer):
 
 ```sh
 cargo tauri build
 ```
 
-Development mode (hot-reloads the Tauri shell when `tauri-cli` is installed):
+**Windows:** build on a Windows host. The tray shell is not cross-compiled
+from macOS.
 
-```sh
-cargo tauri dev
-```
+Accounts are stored under:
 
-**Windows:** build on a Windows host. The tray/WebView shell is not
-cross-compiled from macOS. The same Cargo workspace and `ui/` frontend are
-used on both platforms.
+- macOS: `~/Library/Application Support/UsageCheck/`
+- Windows: `%APPDATA%/UsageCheck/`
 
 ## Verify
 
