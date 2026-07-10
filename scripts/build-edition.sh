@@ -27,13 +27,12 @@ cd "$ROOT_DIR/src-tauri"
 
 if [[ "$EDITION" == "free" ]]; then
   exec cargo tauri build \
-    --no-default-features \
     --features custom-protocol,edition-free \
     "$@"
 else
   exec cargo tauri build \
-    --no-default-features \
     --features custom-protocol,edition-pro \
     --config tauri.pro.conf.json \
-    "$@"
+    "$@" \
+    -- --no-default-features
 fi

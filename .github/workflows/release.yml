@@ -82,12 +82,20 @@ jobs:
 
       - name: Build bundles (${{ matrix.edition }})
         working-directory: src-tauri
+        shell: bash
         run: |
+          set -euo pipefail
+          extra_args=()
+          if [ "${{ matrix.edition }}" = "pro" ]; then
+            # Tauri CLI owns --features; pass --no-default-features to cargo so
+            # edition-free (default) is not enabled alongside edition-pro.
+            extra_args+=(-- --no-default-features)
+          fi
           cargo tauri build \
-            --no-default-features \
-            --features ${{ matrix.cargo_features }} \
+            --features "${{ matrix.cargo_features }}" \
             ${{ matrix.tauri_config }} \
-            ${{ matrix.args }}
+            ${{ matrix.args }} \
+            "${extra_args[@]}"
 
       - name: Collect bundle paths
         id: bundles
