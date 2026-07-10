@@ -4,7 +4,8 @@
 //! - Gemini Models (weekly / optional 5h)
 //! - Claude and GPT models (weekly / optional 5h)
 //!
-//! Fractions are *remaining* (1.0 = 100% left), matching the desktop UI.
+//! API fractions are *remaining* (1.0 = 100% left). UsageCheck stores and
+//! displays *used* percent (0–100), matching Codex/Claude tray semantics.
 
 use chrono::{DateTime, TimeZone, Utc};
 use serde::Serialize;
@@ -81,8 +82,8 @@ fn remaining_to_quota(bucket: &Value) -> Option<(bool /*is_week*/, QuotaUsage)> 
         })
         .and_then(|x| x.as_f64())?;
 
-    // Antigravity UI shows remaining %; store as 0–100 remaining.
-    let percent = (remaining * 100.0).clamp(0.0, 100.0);
+    // API remainingFraction → used % (0 unused … 100 exhausted), like Codex/Claude.
+    let percent = ((1.0 - remaining) * 100.0).clamp(0.0, 100.0);
     let bucket_id = bucket
         .get("bucketId")
         .or_else(|| bucket.get("bucket_id"))
@@ -138,9 +139,9 @@ fn parse_group(group: &Value) -> Option<AgyQuotaPool> {
             continue;
         };
         if is_week {
-            week = Some(pick_lower_remaining(week, quota));
+            week = Some(pick_higher_used(week, quota));
         } else {
-            five_hour = Some(pick_lower_remaining(five_hour, quota));
+            five_hour = Some(pick_higher_used(five_hour, quota));
         }
     }
     if five_hour.is_none() && week.is_none() {
@@ -153,9 +154,10 @@ fn parse_group(group: &Value) -> Option<AgyQuotaPool> {
     })
 }
 
-fn pick_lower_remaining(existing: Option<QuotaUsage>, next: QuotaUsage) -> QuotaUsage {
+/// Most constrained window = highest used %.
+fn pick_higher_used(existing: Option<QuotaUsage>, next: QuotaUsage) -> QuotaUsage {
     match existing {
-        Some(prev) if prev.percent <= next.percent => prev,
+        Some(prev) if prev.percent >= next.percent => prev,
         _ => next,
     }
 }
@@ -221,10 +223,10 @@ pub fn compact_windows(pools: &[AgyQuotaPool]) -> (Option<QuotaUsage>, Option<Qu
     let mut week = None;
     for pool in pools {
         if let Some(q) = &pool.five_hour {
-            five = Some(pick_lower_remaining(five.clone(), q.clone()));
+            five = Some(pick_higher_used(five.clone(), q.clone()));
         }
         if let Some(q) = &pool.week {
-            week = Some(pick_lower_remaining(week.clone(), q.clone()));
+            week = Some(pick_higher_used(week.clone(), q.clone()));
         }
     }
     (five, week)
@@ -265,11 +267,13 @@ mod tests {
         let q = parse_agy_quota_summary(&v);
         assert_eq!(q.pools.len(), 2);
         assert_eq!(q.pools[0].name, "Gemini Models");
-        assert!((q.pools[0].week.as_ref().unwrap().percent - 100.0).abs() < 0.01);
-        assert!((q.pools[1].week.as_ref().unwrap().percent - 81.5893).abs() < 0.01);
+        // remaining 1.0 → used 0%; remaining 0.815893 → used ~18.4107%
+        assert!((q.pools[0].week.as_ref().unwrap().percent - 0.0).abs() < 0.01);
+        assert!((q.pools[1].week.as_ref().unwrap().percent - 18.4107).abs() < 0.01);
         let (five, week) = compact_windows(&q.pools);
         assert!(five.is_none());
-        assert!((week.unwrap().percent - 81.5893).abs() < 0.01);
+        // Most constrained = highest used.
+        assert!((week.unwrap().percent - 18.4107).abs() < 0.01);
     }
 
     #[test]

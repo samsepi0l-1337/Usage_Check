@@ -2,7 +2,7 @@
 //!
 //! When Antigravity.app is open it exposes Connect-RPC on a loopback HTTPS
 //! port with `--csrf_token`. That is the same source as the in-app
-//! "Model Quota" UI (Gemini / Claude+GPT remaining %).
+//! "Model Quota" UI (Gemini / Claude+GPT); UsageCheck converts to used %.
 
 use std::process::Command;
 

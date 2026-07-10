@@ -10,9 +10,9 @@
 //!   ────────
 //!   Antigravity (agy)
 //!     ● user@…
-//!        Gemini 100% · Claude+GPT 82%
-//!        Gemini Models  7d 100%
-//!        Claude and GPT models  7d 82%
+//!        Gemini 0% · Claude+GPT 18%
+//!        Gemini Models  7d 0%
+//!        Claude and GPT models  7d 18%
 //!   ────────
 //!   Add Account ▸
 //!   Remove ▸
@@ -435,11 +435,11 @@ mod tests {
     }
 
     #[test]
-    fn agy_detail_uses_pool_remaining() {
+    fn agy_detail_uses_pool_used_percent() {
         let mut u = sample(Provider::Agy, "a@b.com", 0.0, 0.0);
         u.five_hour = None;
         u.week = Some(QuotaUsage {
-            percent: 82.0,
+            percent: 18.4,
             resets_at: None,
             window_seconds: Some(604_800),
         });
@@ -448,7 +448,7 @@ mod tests {
                 name: "Gemini Models".into(),
                 five_hour: None,
                 week: Some(QuotaUsage {
-                    percent: 100.0,
+                    percent: 0.0,
                     resets_at: None,
                     window_seconds: Some(604_800),
                 }),
@@ -457,7 +457,7 @@ mod tests {
                 name: "Claude and GPT models".into(),
                 five_hour: None,
                 week: Some(QuotaUsage {
-                    percent: 81.6,
+                    percent: 18.4,
                     resets_at: None,
                     window_seconds: Some(604_800),
                 }),
@@ -465,8 +465,9 @@ mod tests {
         ];
         let detail = format_usage_detail(&u);
         assert!(detail.contains("Gemini"), "{detail}");
-        assert!(detail.contains("100%"), "{detail}");
+        assert!(detail.contains("0%"), "{detail}");
         assert!(detail.contains("Claude+GPT"), "{detail}");
+        assert!(detail.contains("18.4%"), "{detail}");
     }
 
     #[test]

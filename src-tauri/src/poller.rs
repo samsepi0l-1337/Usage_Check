@@ -71,7 +71,7 @@ pub struct AccountUsage {
     pub five_hour: Option<QuotaUsage>,
     pub week: Option<QuotaUsage>,
     pub totals: WindowTotals,
-    /// Agy: Gemini / Claude+GPT pool rows (remaining %).
+    /// Agy: Gemini / Claude+GPT pool rows (used %, like Codex/Claude).
     pub pool_breakdown: Vec<AgyQuotaPool>,
     pub status: String,
 }
@@ -575,7 +575,7 @@ mod tests {
                 name: "Gemini Models".into(),
                 five_hour: None,
                 week: Some(QuotaUsage {
-                    percent: 100.0,
+                    percent: 0.0,
                     resets_at: None,
                     window_seconds: Some(604_800),
                 }),
@@ -584,7 +584,7 @@ mod tests {
         let au = account_usage_from_agy(&acct, &quota, "ok");
         assert_eq!(au.display_name, "a@b.com");
         assert_eq!(au.pool_breakdown.len(), 1);
-        assert!((au.week.as_ref().unwrap().percent - 100.0).abs() < 0.01);
+        assert!((au.week.as_ref().unwrap().percent - 0.0).abs() < 0.01);
     }
 
     #[test]
