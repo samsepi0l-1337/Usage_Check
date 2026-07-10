@@ -21,41 +21,54 @@ rows, Add/Remove account actions, Refresh, and Quit.
 
 ## Free vs Pro editions
 
-| Edition | Providers | Build |
-| ------- | --------- | ----- |
-| **Free** (default) | Codex, Claude, agy (Gemini/Antigravity) | `./scripts/build-edition.sh free` |
-| **Pro** | Free providers + Cursor, Grok, Higgsfield | `./scripts/build-edition.sh pro` |
+UsageCheck ships as **two compile-time editions** (v0.1.4+), not a single
+binary unlocked at runtime. Deep reference:
+[`docs/editions.md`](docs/editions.md).
 
-Pro-only import paths:
+| Edition | Product name | Bundle ID | Providers | Build |
+| ------- | ------------ | --------- | --------- | ----- |
+| **Free** (default) | `UsageCheck-Free` | `com.usagecheck.desktop.free` | Codex, Claude, agy (Gemini/Antigravity) | `./scripts/build-edition.sh free` |
+| **Pro** | `UsageCheck-Pro` | `com.usagecheck.desktop.pro` | Free + Cursor, Grok, Higgsfield | `./scripts/build-edition.sh pro` |
 
-- **Cursor** — reads `cursorAuth/accessToken` from Cursor's local
-  `state.vscdb` (read-only) and calls the undocumented
-  `GetCurrentPeriodUsage` Connect RPC on `api2.cursor.sh`. This API may
-  change without notice.
-- **Grok** — xAI Management API prepaid balance (`XAI_MGMT_KEY` +
-  `XAI_TEAM_ID` env vars at import time).
-- **Higgsfield** — imports `~/.config/higgsfield/credentials.json` after
-  `higgsfield auth login`; polls via `higgsfield account --json` when the
-  CLI is installed. Shows `needs_setup` when the CLI or JSON shape is
-  unavailable.
+**Gemini** is `Provider::Agy` (Antigravity Gemini Models quota), not a
+separate enum.
+
+Pro-only import paths (tray → Add account):
+
+- **Cursor** — **Import Cursor (local)**: read-only `state.vscdb` →
+  undocumented `GetCurrentPeriodUsage` on `api2.cursor.sh`.
+- **Grok** — **Import Grok (clipboard)**: copy Management Key → tray import
+  (validates via xAI API; team ID resolved automatically). Fallback:
+  **Import Grok (env vars)** with `XAI_MGMT_KEY` + `XAI_TEAM_ID`.
+- **Higgsfield** — **Login Higgsfield (browser)** runs `higgsfield auth login`
+  and imports credentials; **Import Higgsfield (CLI)** re-imports after a
+  terminal login. Polls `higgsfield account --json`. Status `needs_setup`
+  when the CLI or JSON shape is unavailable.
 
 Plain `cargo build` produces the **Free** edition. Pro builds use
-`--no-default-features --features custom-protocol,edition-pro` (see
-`scripts/build-edition.sh`).
+`--no-default-features --features custom-protocol,edition-pro` and
+`tauri.pro.conf.json` (see `scripts/build-edition.sh`).
 
-**License note:** Pro is a separate binary artifact (`UsageCheck-Pro`) with
-additional provider modules compiled in. There is no online license server;
-distribution is by edition-specific installers from CI.
+**License note:** Pro is a separate binary with additional provider modules
+compiled in. There is no online license server; distribution is by
+edition-specific installers from CI.
+
+**CI releases:** push a `v*` tag (e.g. `v0.1.4`) or run the Release workflow
+manually. Artifacts: `UsageCheck-Free-macos`, `UsageCheck-Pro-macos`,
+`UsageCheck-Free-windows`, `UsageCheck-Pro-windows`. See
+[`docs/editions.md`](docs/editions.md#ci-release-matrix).
 
 ## Architecture
 
 - `crates/usage-core` — pure Rust core: provider/account models, usage
-  aggregation, provider fetchers (Codex/Claude API clients), local log
-  scanners (Codex/Claude/agy), all covered by unit tests.
+  aggregation, provider fetchers (Codex/Claude API clients; Pro:
+  Cursor/Grok/Higgsfield parsers), local log scanners (Codex/Claude/agy),
+  edition helpers (`edition.rs`), all covered by unit tests.
 - `src-tauri` (`usage-app`) — Tauri v2 tray shell: native menu bar menu,
   PKCE OAuth, file-backed account store under Application Support /
   `%APPDATA%`, background poller, CLI credential import (including Claude
-  Keychain on macOS).
+  Keychain on macOS; Pro: Cursor `state.vscdb`, Grok clipboard/env, Higgsfield
+  browser login/CLI).
 - `ui/` — legacy Vite frontend (unused by the tray-menu shell; kept for
   optional future UI work).
 - `Sources/` — the original Swift/macOS-only menu bar app. **Reference only**;

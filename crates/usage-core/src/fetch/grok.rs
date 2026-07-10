@@ -2,6 +2,46 @@ use serde_json::Value;
 
 use crate::models::QuotaUsage;
 
+/// Resolves the billing team ID from `GET /auth/management-keys/validation`.
+///
+/// Prefers `scopeId` when `scope` is `SCOPE_TEAM` (or absent); falls back to
+/// deprecated `teamId`.
+pub fn team_id_from_validation(root: &Value) -> Option<String> {
+    let scope = root
+        .get("scope")
+        .and_then(|v| v.as_str())
+        .unwrap_or("SCOPE_TEAM");
+    if let Some(scope_id) = root
+        .get("scopeId")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+    {
+        if scope == "SCOPE_TEAM" || scope == "SCOPE_UNSPECIFIED" {
+            return Some(scope_id.to_string());
+        }
+    }
+    root.get("teamId")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+/// Parses clipboard paste text into `(management_key, optional_team_id)`.
+///
+/// Accepts a single key line, or key + team ID on separate non-empty lines.
+pub fn parse_grok_paste(text: &str) -> (String, Option<String>) {
+    let lines: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    match lines.as_slice() {
+        [] => (String::new(), None),
+        [key] => (key.to_string(), None),
+        [key, team, ..] => (key.to_string(), Some(team.to_string())),
+    }
+}
+
 /// Parsed xAI prepaid credit balance (Management API).
 #[derive(Clone, Debug, PartialEq)]
 pub struct GrokPrepaid {
@@ -97,5 +137,35 @@ mod tests {
         let q = parse_grok_prepaid_balance(&v);
         assert!(q.period.is_none());
         assert_eq!(q.detail_suffix.as_deref(), Some("$5.00 left"));
+    }
+
+    #[test]
+    fn team_id_prefers_scope_id_for_team_scope() {
+        let v = json!({
+            "scope": "SCOPE_TEAM",
+            "scopeId": "team-from-scope",
+            "teamId": "legacy-team"
+        });
+        assert_eq!(team_id_from_validation(&v).as_deref(), Some("team-from-scope"));
+    }
+
+    #[test]
+    fn team_id_falls_back_to_deprecated_team_id() {
+        let v = json!({ "teamId": "legacy-only" });
+        assert_eq!(team_id_from_validation(&v).as_deref(), Some("legacy-only"));
+    }
+
+    #[test]
+    fn parse_grok_paste_single_line() {
+        let (key, team) = parse_grok_paste("  xai-mgmt-key-abc  \n");
+        assert_eq!(key, "xai-mgmt-key-abc");
+        assert!(team.is_none());
+    }
+
+    #[test]
+    fn parse_grok_paste_key_and_team_lines() {
+        let (key, team) = parse_grok_paste("key-line\nteam-uuid\n");
+        assert_eq!(key, "key-line");
+        assert_eq!(team.as_deref(), Some("team-uuid"));
     }
 }

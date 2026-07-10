@@ -26,6 +26,7 @@ base64 = "0.22"
 urlencoding = "2"
 rand = "0.8"
 rusqlite = { version = "0.32", features = ["bundled"] }
+arboard = "3"
 
 [features]
 # Keep custom-protocol on by default for plain `cargo build --release`.

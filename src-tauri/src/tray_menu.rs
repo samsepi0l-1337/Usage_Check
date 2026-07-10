@@ -341,8 +341,22 @@ pub fn build_menu(app: &AppHandle, usages: &[AccountUsage]) -> tauri::Result<Men
         )?)?;
         add_submenu.append(&MenuItem::with_id(
             app,
+            "add-grok-clipboard",
+            "Import Grok (clipboard)",
+            true,
+            None::<&str>,
+        )?)?;
+        add_submenu.append(&MenuItem::with_id(
+            app,
             "add-grok-env",
             "Import Grok (env vars)",
+            true,
+            None::<&str>,
+        )?)?;
+        add_submenu.append(&MenuItem::with_id(
+            app,
+            "add-higgsfield-login",
+            "Login Higgsfield (browser)",
             true,
             None::<&str>,
         )?)?;

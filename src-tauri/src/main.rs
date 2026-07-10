@@ -102,6 +102,40 @@ fn import_provider(app: &AppHandle, provider: Provider) {
     }
 }
 
+#[cfg(feature = "edition-pro")]
+fn import_grok_clipboard(app: &AppHandle) {
+    let app2 = app.clone();
+    tauri::async_runtime::spawn(async move {
+        match import::import_grok_from_clipboard().await {
+            Ok(imported) => {
+                let store = app2.state::<AccountStore>();
+                match store.add(Provider::Grok, imported.label, imported.credentials) {
+                    Ok(_) => refresh_tray(&app2).await,
+                    Err(e) => eprintln!("import: failed to save Grok account: {e}"),
+                }
+            }
+            Err(e) => eprintln!("import grok: {e}"),
+        }
+    });
+}
+
+#[cfg(feature = "edition-pro")]
+fn higgsfield_browser_login(app: &AppHandle) {
+    let app2 = app.clone();
+    tauri::async_runtime::spawn(async move {
+        match import::run_higgsfield_browser_login().await {
+            Ok(imported) => {
+                let store = app2.state::<AccountStore>();
+                match store.add(Provider::Higgsfield, imported.label, imported.credentials) {
+                    Ok(_) => refresh_tray(&app2).await,
+                    Err(e) => eprintln!("import: failed to save Higgsfield account: {e}"),
+                }
+            }
+            Err(e) => eprintln!("higgsfield login: {e}"),
+        }
+    });
+}
+
 fn oauth_provider(app: &AppHandle, provider: Provider) {
     let app2 = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -151,7 +185,11 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
         #[cfg(feature = "edition-pro")]
         "add-cursor-local" => import_provider(app, Provider::Cursor),
         #[cfg(feature = "edition-pro")]
+        "add-grok-clipboard" => import_grok_clipboard(app),
+        #[cfg(feature = "edition-pro")]
         "add-grok-env" => import_provider(app, Provider::Grok),
+        #[cfg(feature = "edition-pro")]
+        "add-higgsfield-login" => higgsfield_browser_login(app),
         #[cfg(feature = "edition-pro")]
         "add-higgsfield-cli" => import_provider(app, Provider::Higgsfield),
         other if other.starts_with("remove-") => {
