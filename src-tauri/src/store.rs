@@ -12,7 +12,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use usage_core::account::{Account, Credentials, Provider};
+use usage_core::account::{Account, AuthSource, Credentials, Provider};
 
 const APP_DIR: &str = "UsageCheck";
 const INDEX_FILE: &str = "accounts.json";
@@ -230,10 +230,32 @@ impl AccountStore {
             }
         }
 
+        let id = uuid::Uuid::new_v4().to_string();
+        let auth_source = match provider {
+            Provider::Codex | Provider::Claude | Provider::Agy => AuthSource::BrowserOAuth {
+                credential_id: id.clone(),
+            },
+            #[cfg(feature = "edition-pro")]
+            Provider::Cursor => AuthSource::CursorDatabase {
+                database_path: crate::paths::cursor_state_vscdb()
+                    .ok_or_else(|| "could not resolve Cursor database path".to_string())?,
+                expected_identity: label.clone(),
+            },
+            #[cfg(feature = "edition-pro")]
+            Provider::Grok => AuthSource::XaiManagement {
+                credential_id: id.clone(),
+                team_id: creds.account_id.clone().unwrap_or_default(),
+            },
+            #[cfg(feature = "edition-pro")]
+            Provider::Higgsfield => AuthSource::HiggsfieldCli {
+                expected_identity: label.clone(),
+            },
+        };
         let account = Account {
-            id: uuid::Uuid::new_v4().to_string(),
+            id,
             provider,
             label,
+            auth_source,
         };
 
         let path = cred_path(&account.id).ok_or_else(|| "could not resolve cred path".to_string())?;
@@ -293,7 +315,7 @@ impl AccountStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use usage_core::account::{Account, Provider};
+    use usage_core::account::{Account, AuthSource, ProfileOwnership, Provider};
 
     #[test]
     fn index_roundtrips() {
@@ -301,6 +323,11 @@ mod tests {
             id: "1".into(),
             provider: Provider::Codex,
             label: "work".into(),
+            auth_source: AuthSource::CliProfile {
+                profile_root: "/profiles/codex-work".into(),
+                ownership: ProfileOwnership::External,
+                expected_identity: "work".into(),
+            },
         }];
         let s = serialize_index(&accts);
         assert_eq!(parse_index(&s), accts);
@@ -324,6 +351,9 @@ mod tests {
             id: "agy-1".into(),
             provider: Provider::Agy,
             label: "old@example.com".into(),
+            auth_source: AuthSource::BrowserOAuth {
+                credential_id: "agy-credential-1".into(),
+            },
         }];
         let idxs: Vec<usize> = accounts
             .iter()
@@ -338,11 +368,17 @@ mod tests {
                 id: "agy-1".into(),
                 provider: Provider::Agy,
                 label: "a@ex.com".into(),
+                auth_source: AuthSource::BrowserOAuth {
+                    credential_id: "agy-credential-1".into(),
+                },
             },
             Account {
                 id: "agy-2".into(),
                 provider: Provider::Agy,
                 label: "b@ex.com".into(),
+                auth_source: AuthSource::BrowserOAuth {
+                    credential_id: "agy-credential-2".into(),
+                },
             },
         ];
         let multi_idxs: Vec<usize> = multi

@@ -1087,7 +1087,7 @@ pub async fn poll_all(store: &AccountStore) -> Vec<AccountUsage> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use usage_core::account::{Account, Provider};
+    use usage_core::account::{Account, AuthSource, ProfileOwnership, Provider};
     use usage_core::fetch::codex::CodexQuota;
     use usage_core::models::{QuotaUsage, WindowTotals};
 
@@ -1097,6 +1097,11 @@ mod tests {
             id: "1".into(),
             provider: Provider::Codex,
             label: "w".into(),
+            auth_source: AuthSource::CliProfile {
+                profile_root: "/profiles/codex".into(),
+                ownership: ProfileOwnership::External,
+                expected_identity: "w".into(),
+            },
         };
         let quota = CodexQuota {
             plan: Some("prolite".into()),
@@ -1120,6 +1125,11 @@ mod tests {
             id: "2".into(),
             provider: Provider::Claude,
             label: "w".into(),
+            auth_source: AuthSource::CliProfile {
+                profile_root: "/profiles/claude".into(),
+                ownership: ProfileOwnership::External,
+                expected_identity: "w".into(),
+            },
         };
         let quota = ClaudeQuota {
             five_hour: Some(QuotaUsage {
@@ -1147,6 +1157,9 @@ mod tests {
             id: "3".into(),
             provider: Provider::Agy,
             label: "agy".into(),
+            auth_source: AuthSource::BrowserOAuth {
+                credential_id: "agy-credential".into(),
+            },
         };
         let quota = AgyQuota {
             email: Some("a@b.com".into()),
@@ -1197,6 +1210,9 @@ mod tests {
                     id: "row-a".into(),
                     provider: Provider::Codex,
                     label: "a@ex.com".into(),
+                    auth_source: AuthSource::BrowserOAuth {
+                        credential_id: "codex-credential-a".into(),
+                    },
                 },
                 Credentials {
                     access_token: "a-old".into(),
@@ -1210,6 +1226,9 @@ mod tests {
                     id: "row-b".into(),
                     provider: Provider::Codex,
                     label: "b@ex.com".into(),
+                    auth_source: AuthSource::BrowserOAuth {
+                        credential_id: "codex-credential-b".into(),
+                    },
                 },
                 Credentials {
                     access_token: "b-old".into(),

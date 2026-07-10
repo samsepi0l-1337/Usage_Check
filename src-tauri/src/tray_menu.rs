@@ -447,9 +447,36 @@ pub fn tooltip_for(usages: &[AccountUsage]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use usage_core::account::Account;
+    use usage_core::account::{Account, AuthSource, ProfileOwnership};
     use usage_core::fetch::agy::AgyQuotaPool;
     use usage_core::models::WindowTotals;
+
+    fn sample_auth_source(provider: Provider, identity: &str) -> AuthSource {
+        match provider {
+            Provider::Codex | Provider::Claude => AuthSource::CliProfile {
+                profile_root: format!("/profiles/{identity}").into(),
+                ownership: ProfileOwnership::External,
+                expected_identity: identity.into(),
+            },
+            Provider::Agy => AuthSource::BrowserOAuth {
+                credential_id: format!("{identity}-credential"),
+            },
+            #[cfg(feature = "edition-pro")]
+            Provider::Cursor => AuthSource::CursorDatabase {
+                database_path: "/profiles/cursor/state.vscdb".into(),
+                expected_identity: identity.into(),
+            },
+            #[cfg(feature = "edition-pro")]
+            Provider::Grok => AuthSource::XaiManagement {
+                credential_id: format!("{identity}-credential"),
+                team_id: identity.into(),
+            },
+            #[cfg(feature = "edition-pro")]
+            Provider::Higgsfield => AuthSource::HiggsfieldCli {
+                expected_identity: identity.into(),
+            },
+        }
+    }
 
     fn sample(provider: Provider, name: &str, five: f64, week: f64) -> AccountUsage {
         AccountUsage {
@@ -457,6 +484,7 @@ mod tests {
                 id: name.into(),
                 provider,
                 label: name.into(),
+                auth_source: sample_auth_source(provider, name),
             },
             display_name: name.into(),
             plan: None,
@@ -536,6 +564,7 @@ mod tests {
                 id: "c1".into(),
                 provider: Provider::Cursor,
                 label: "user@example.com".into(),
+                auth_source: sample_auth_source(Provider::Cursor, "user@example.com"),
             },
             display_name: "user@example.com".into(),
             plan: Some("pro".into()),
