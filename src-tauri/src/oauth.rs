@@ -350,6 +350,11 @@ pub fn config(provider: Provider) -> Result<ProviderOAuth, String> {
                 use_pkce: false,
             })
         }
+        #[cfg(feature = "edition-pro")]
+        Provider::Cursor | Provider::Grok | Provider::Higgsfield => Err(format!(
+            "{} uses local import — choose Import from the tray Add Account menu",
+            provider.display_name()
+        )),
     }
 }
 

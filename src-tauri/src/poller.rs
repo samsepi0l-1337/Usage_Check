@@ -19,6 +19,12 @@ use usage_core::aggregate::aggregate;
 use usage_core::fetch::agy::{compact_windows, parse_agy_quota_summary, AgyQuota, AgyQuotaPool};
 use usage_core::fetch::claude::{parse_claude_usage, ClaudeQuota};
 use usage_core::fetch::codex::{parse_codex_usage, CodexQuota};
+#[cfg(feature = "edition-pro")]
+use usage_core::fetch::cursor::{cursor_quota_with_auth, parse_cursor_period_usage, CursorQuota};
+#[cfg(feature = "edition-pro")]
+use usage_core::fetch::grok::{parse_grok_prepaid_balance, GrokPrepaid};
+#[cfg(feature = "edition-pro")]
+use usage_core::fetch::higgsfield::{parse_higgsfield_account, HiggsfieldCredits};
 use usage_core::models::{ModelTokenEvent, QuotaUsage, WindowTotals};
 use usage_core::scanners::{claude as claude_scanner, codex as codex_scanner};
 
@@ -128,6 +134,8 @@ pub struct AccountUsage {
     pub totals: WindowTotals,
     /// Agy: Gemini / Claude+GPT pool rows (used %, like Codex/Claude).
     pub pool_breakdown: Vec<AgyQuotaPool>,
+    /// Pro providers: secondary label (`$12 left`, `809 credits left`).
+    pub detail_suffix: Option<String>,
     pub status: String,
 }
 
@@ -161,11 +169,7 @@ fn display_name_for(account: &Account, email: Option<&str>, plan: Option<&str>) 
 }
 
 fn provider_short(p: Provider) -> &'static str {
-    match p {
-        Provider::Codex => "Codex",
-        Provider::Claude => "Claude",
-        Provider::Agy => "agy",
-    }
+    p.display_name()
 }
 
 /// Maps a parsed `CodexQuota` + local-log `totals` into an `AccountUsage`
@@ -191,6 +195,7 @@ pub fn account_usage_from_codex(
         week: quota.week.clone(),
         totals,
         pool_breakdown: Vec::new(),
+        detail_suffix: None,
         status: "ok".to_string(),
     }
 }
@@ -212,6 +217,7 @@ pub fn account_usage_from_claude(
         week: quota.week.clone(),
         totals,
         pool_breakdown: Vec::new(),
+        detail_suffix: None,
         status: "ok".to_string(),
     }
 }
@@ -227,6 +233,7 @@ pub fn account_usage_from_agy(account: &Account, quota: &AgyQuota, status: &str)
         week,
         totals: WindowTotals::default(),
         pool_breakdown: quota.pools.clone(),
+        detail_suffix: None,
         status: status.to_string(),
     }
 }
@@ -242,6 +249,7 @@ fn account_usage_from_logs(account: &Account, totals: WindowTotals, status: &str
         week: None,
         totals,
         pool_breakdown: Vec::new(),
+        detail_suffix: None,
         status: status.to_string(),
     }
 }
@@ -255,6 +263,8 @@ fn aggregate_local_logs(provider: Provider) -> Result<WindowTotals, ()> {
         Provider::Codex => (paths::codex_session_roots(), codex_scanner::parse_codex_line),
         Provider::Claude => (paths::claude_project_roots(), claude_scanner::parse_claude_line),
         Provider::Agy => return Err(()),
+        #[cfg(feature = "edition-pro")]
+        Provider::Cursor | Provider::Grok | Provider::Higgsfield => return Err(()),
     };
 
     if roots.is_empty() {
@@ -434,6 +444,310 @@ async fn fetch_agy_quota_remote(
         return Ok(quota);
     }
     Err(last_status)
+}
+
+#[cfg(feature = "edition-pro")]
+const CURSOR_API_BASE: &str = "https://api2.cursor.sh";
+#[cfg(feature = "edition-pro")]
+const CURSOR_OAUTH_CLIENT_ID: &str = "KbZUR41cY7W6zRSdpSUJ7I7mLYBKOCmB";
+
+#[cfg(feature = "edition-pro")]
+async fn refresh_cursor_access_token(
+    client: &reqwest::Client,
+    refresh_token: &str,
+) -> Result<String, ()> {
+    let body = serde_json::json!({
+        "grant_type": "refresh_token",
+        "client_id": CURSOR_OAUTH_CLIENT_ID,
+        "refresh_token": refresh_token,
+    });
+    let resp = client
+        .post(format!("{CURSOR_API_BASE}/oauth/token"))
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|_| ())?;
+    if !resp.status().is_success() {
+        return Err(());
+    }
+    let root: serde_json::Value = resp.json().await.map_err(|_| ())?;
+    if root.get("shouldLogout").and_then(|v| v.as_bool()).unwrap_or(false) {
+        return Err(());
+    }
+    root.get("access_token")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .ok_or(())
+}
+
+#[cfg(feature = "edition-pro")]
+async fn fetch_cursor_quota(
+    client: &reqwest::Client,
+    creds: &Credentials,
+) -> Result<CursorQuota, Option<u16>> {
+    let resp = client
+        .post(format!(
+            "{CURSOR_API_BASE}/aiserver.v1.DashboardService/GetCurrentPeriodUsage"
+        ))
+        .header("Accept", "application/json")
+        .header("Content-Type", "application/json")
+        .header("Connect-Protocol-Version", "1")
+        .header("User-Agent", "UsageCheck")
+        .bearer_auth(&creds.access_token)
+        .json(&serde_json::json!({}))
+        .send()
+        .await
+        .map_err(|_| None)?;
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(Some(status.as_u16()));
+    }
+    let body: serde_json::Value = resp.json().await.map_err(|_| Some(status.as_u16()))?;
+    Ok(parse_cursor_period_usage(&body))
+}
+
+#[cfg(feature = "edition-pro")]
+async fn fetch_grok_prepaid(
+    client: &reqwest::Client,
+    creds: &Credentials,
+) -> Result<GrokPrepaid, Option<u16>> {
+    let team_id = creds
+        .account_id
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .ok_or(None)?;
+    let url = format!(
+        "https://management-api.x.ai/v1/billing/teams/{team_id}/prepaid/balance"
+    );
+    let resp = client
+        .get(url)
+        .header("Accept", "application/json")
+        .header("User-Agent", "UsageCheck")
+        .bearer_auth(&creds.access_token)
+        .send()
+        .await
+        .map_err(|_| None)?;
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(Some(status.as_u16()));
+    }
+    let body: serde_json::Value = resp.json().await.map_err(|_| Some(status.as_u16()))?;
+    Ok(parse_grok_prepaid_balance(&body))
+}
+
+#[cfg(feature = "edition-pro")]
+fn account_usage_from_cursor(account: &Account, quota: &CursorQuota, status: &str) -> AccountUsage {
+    AccountUsage {
+        display_name: display_name_for(account, quota.email.as_deref(), quota.plan.as_deref()),
+        plan: quota.plan.clone(),
+        account: account.clone(),
+        five_hour: None,
+        week: quota.period.clone(),
+        totals: WindowTotals::default(),
+        pool_breakdown: Vec::new(),
+        detail_suffix: quota.detail_suffix.clone(),
+        status: status.to_string(),
+    }
+}
+
+#[cfg(feature = "edition-pro")]
+fn account_usage_from_grok(account: &Account, prepaid: &GrokPrepaid, status: &str) -> AccountUsage {
+    AccountUsage {
+        display_name: display_name_for(account, None, Some("API credits")),
+        plan: Some("API credits".into()),
+        account: account.clone(),
+        five_hour: None,
+        week: prepaid.period.clone(),
+        totals: WindowTotals::default(),
+        pool_breakdown: Vec::new(),
+        detail_suffix: prepaid.detail_suffix.clone(),
+        status: status.to_string(),
+    }
+}
+
+#[cfg(feature = "edition-pro")]
+fn account_usage_from_higgsfield(
+    account: &Account,
+    credits: &HiggsfieldCredits,
+    status: &str,
+) -> AccountUsage {
+    AccountUsage {
+        display_name: display_name_for(account, credits.email.as_deref(), credits.plan.as_deref()),
+        plan: credits.plan.clone(),
+        account: account.clone(),
+        five_hour: None,
+        week: credits.to_quota(),
+        totals: WindowTotals::default(),
+        pool_breakdown: Vec::new(),
+        detail_suffix: credits.detail_suffix(),
+        status: status.to_string(),
+    }
+}
+
+#[cfg(feature = "edition-pro")]
+fn sync_cursor_creds_from_local(
+    store: &AccountStore,
+    account: &Account,
+    stored: Credentials,
+) -> Credentials {
+    let Ok(imported) = crate::cursor_local::load_cursor_local_auth() else {
+        return stored;
+    };
+    if imported.credentials.access_token.is_empty()
+        || imported.credentials.access_token == stored.access_token
+    {
+        return stored;
+    }
+    if !import::cli_identity_matches(
+        &stored,
+        &account.label,
+        &imported.credentials,
+        &imported.label,
+    ) && !account.label.eq_ignore_ascii_case(&imported.label)
+    {
+        return stored;
+    }
+    store.update_credentials(&account.id, &imported.credentials);
+    if !imported.label.is_empty() {
+        store.update_label(&account.id, &imported.label);
+    }
+    imported.credentials
+}
+
+#[cfg(feature = "edition-pro")]
+async fn poll_cursor(
+    store: &AccountStore,
+    client: &reqwest::Client,
+    account: &Account,
+) -> AccountUsage {
+    let Some(mut creds) = store.credentials(&account.id) else {
+        return account_usage_from_cursor(
+            account,
+            &CursorQuota {
+                email: None,
+                plan: None,
+                period: None,
+                detail_suffix: None,
+            },
+            "needs_login",
+        );
+    };
+    creds = sync_cursor_creds_from_local(store, account, creds);
+    if let Some(refresh) = creds.refresh_token.as_deref() {
+        if let Ok(new_token) = refresh_cursor_access_token(client, refresh).await {
+            creds.access_token = new_token;
+            store.update_credentials(&account.id, &creds);
+        }
+    }
+
+    let plan = creds.account_id.clone();
+    match fetch_cursor_quota(client, &creds).await {
+        Ok(mut quota) => {
+            quota = cursor_quota_with_auth(
+                quota,
+                if account.label.contains('@') {
+                    Some(account.label.clone())
+                } else {
+                    None
+                },
+                plan,
+            );
+            account_usage_from_cursor(account, &quota, "ok")
+        }
+        Err(status) => account_usage_from_cursor(
+            account,
+            &CursorQuota {
+                email: None,
+                plan: creds.account_id.clone(),
+                period: None,
+                detail_suffix: None,
+            },
+            status_for_failure(status),
+        ),
+    }
+}
+
+#[cfg(feature = "edition-pro")]
+async fn poll_grok(
+    store: &AccountStore,
+    client: &reqwest::Client,
+    account: &Account,
+) -> AccountUsage {
+    let Some(creds) = store.credentials(&account.id) else {
+        return account_usage_from_grok(
+            account,
+            &GrokPrepaid {
+                period: None,
+                detail_suffix: Some("needs setup".into()),
+            },
+            "needs_login",
+        );
+    };
+    match fetch_grok_prepaid(client, &creds).await {
+        Ok(prepaid) => account_usage_from_grok(account, &prepaid, "ok"),
+        Err(status) => account_usage_from_grok(
+            account,
+            &GrokPrepaid {
+                period: None,
+                detail_suffix: None,
+            },
+            status_for_failure(status),
+        ),
+    }
+}
+
+#[cfg(feature = "edition-pro")]
+fn fetch_higgsfield_account_json() -> Result<serde_json::Value, ()> {
+    use std::process::Command;
+
+    let output = Command::new("higgsfield")
+        .args(["account", "--json"])
+        .output()
+        .map_err(|_| ())?;
+    if !output.status.success() {
+        return Err(());
+    }
+    serde_json::from_slice(&output.stdout).map_err(|_| ())
+}
+
+#[cfg(feature = "edition-pro")]
+async fn poll_higgsfield(store: &AccountStore, account: &Account) -> AccountUsage {
+    if store.credentials(&account.id).is_none() {
+        return account_usage_from_higgsfield(
+            account,
+            &HiggsfieldCredits {
+                email: None,
+                plan: None,
+                credits_remaining: None,
+                credits_total: None,
+            },
+            "needs_login",
+        );
+    }
+
+    match fetch_higgsfield_account_json() {
+        Ok(root) => {
+            let credits = parse_higgsfield_account(&root);
+            let status = if credits.credits_remaining.is_some() {
+                "ok"
+            } else {
+                "needs_setup"
+            };
+            account_usage_from_higgsfield(account, &credits, status)
+        }
+        Err(()) => account_usage_from_higgsfield(
+            account,
+            &HiggsfieldCredits {
+                email: None,
+                plan: None,
+                credits_remaining: None,
+                credits_total: None,
+            },
+            "needs_setup",
+        ),
+    }
 }
 
 /// Maps an HTTP failure to a status string: 401/403 (expired/invalid token)
@@ -757,6 +1071,12 @@ pub async fn poll_all(store: &AccountStore) -> Vec<AccountUsage> {
             Provider::Agy => poll_agy(store, &client, &account).await,
             Provider::Codex => poll_codex(store, &client, &account, codex_cli.as_ref()).await,
             Provider::Claude => poll_claude(store, &client, &account, claude_cli.as_ref()).await,
+            #[cfg(feature = "edition-pro")]
+            Provider::Cursor => poll_cursor(store, &client, &account).await,
+            #[cfg(feature = "edition-pro")]
+            Provider::Grok => poll_grok(store, &client, &account).await,
+            #[cfg(feature = "edition-pro")]
+            Provider::Higgsfield => poll_higgsfield(store, &account).await,
         };
         out.push(usage);
     }

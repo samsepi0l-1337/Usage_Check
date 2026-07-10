@@ -38,11 +38,7 @@ pub fn email_from_jwt(jwt: &str) -> Option<String> {
 }
 
 fn default_label(provider: Provider) -> String {
-    match provider {
-        Provider::Codex => "Codex".into(),
-        Provider::Claude => "Claude".into(),
-        Provider::Agy => "agy".into(),
-    }
+    provider.display_name().to_string()
 }
 
 /// Reads `~/.claude.json` `oauthAccount` (email + accountUuid). Pure file I/O
@@ -391,7 +387,91 @@ pub fn import_from_cli(provider: Provider) -> Result<ImportedAccount, String> {
         ),
         Provider::Codex => load_codex_cli_auth(),
         Provider::Claude => load_claude_cli_auth(),
+        #[cfg(feature = "edition-pro")]
+        Provider::Cursor => crate::cursor_local::load_cursor_local_auth(),
+        #[cfg(feature = "edition-pro")]
+        Provider::Grok => load_grok_env_auth(),
+        #[cfg(feature = "edition-pro")]
+        Provider::Higgsfield => load_higgsfield_cli_auth(),
     }
+}
+
+#[cfg(feature = "edition-pro")]
+/// xAI Management API credentials from `XAI_MGMT_KEY` + `XAI_TEAM_ID`.
+pub fn load_grok_env_auth() -> Result<ImportedAccount, String> {
+    let key = std::env::var("XAI_MGMT_KEY")
+        .or_else(|_| std::env::var("XAI_MANAGEMENT_KEY"))
+        .map_err(|_| {
+            "set XAI_MGMT_KEY (or XAI_MANAGEMENT_KEY) with your xAI Management Key".to_string()
+        })?;
+    if key.trim().is_empty() {
+        return Err("XAI_MGMT_KEY is empty".into());
+    }
+    let team_id = std::env::var("XAI_TEAM_ID")
+        .map_err(|_| "set XAI_TEAM_ID with your xAI team ID".to_string())?;
+    if team_id.trim().is_empty() {
+        return Err("XAI_TEAM_ID is empty".into());
+    }
+    Ok(ImportedAccount {
+        label: format!("Grok · team {team_id}"),
+        credentials: Credentials {
+            access_token: key,
+            refresh_token: None,
+            account_id: Some(team_id),
+            expires_at: None,
+        },
+    })
+}
+
+#[cfg(feature = "edition-pro")]
+fn parse_higgsfield_credentials_json(root: &serde_json::Value) -> Option<Credentials> {
+    let access_token = root
+        .get("access_token")
+        .or_else(|| root.get("accessToken"))
+        .or_else(|| root.get("token"))
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())?
+        .to_string();
+    let refresh_token = root
+        .get("refresh_token")
+        .or_else(|| root.get("refreshToken"))
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    Some(Credentials {
+        access_token,
+        refresh_token,
+        account_id: None,
+        expires_at: None,
+    })
+}
+
+#[cfg(feature = "edition-pro")]
+/// Higgsfield CLI credentials from `~/.config/higgsfield/credentials.json`.
+pub fn load_higgsfield_cli_auth() -> Result<ImportedAccount, String> {
+    let path = paths::higgsfield_credentials_file()
+        .ok_or_else(|| "could not resolve home directory".to_string())?;
+    let data = std::fs::read_to_string(&path).map_err(|_| {
+        format!(
+            "Higgsfield credentials not found at {} — run `higgsfield auth login` first",
+            path.display()
+        )
+    })?;
+    let root: serde_json::Value = serde_json::from_str(&data)
+        .map_err(|_| "Higgsfield credentials.json is not valid JSON".to_string())?;
+    let credentials = parse_higgsfield_credentials_json(&root).ok_or_else(|| {
+        "Higgsfield credentials.json has no usable access_token — run `higgsfield auth login`"
+            .to_string()
+    })?;
+    let email = root
+        .get("email")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    Ok(ImportedAccount {
+        label: email.unwrap_or_else(|| default_label(Provider::Higgsfield)),
+        credentials,
+    })
 }
 
 #[cfg(test)]

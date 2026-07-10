@@ -31,6 +31,7 @@ use usage_core::fetch::agy::AgyQuotaPool;
 use usage_core::fetch::codex::window_label;
 use usage_core::models::QuotaUsage;
 
+use crate::edition;
 use crate::poller::AccountUsage;
 
 const TRAY_ID: &str = "main";
@@ -44,11 +45,7 @@ fn status_dot(status: &str) -> &'static str {
 }
 
 fn vendor_title(p: Provider) -> &'static str {
-    match p {
-        Provider::Codex => "Codex",
-        Provider::Claude => "Claude",
-        Provider::Agy => "Antigravity (agy)",
-    }
+    p.display_name()
 }
 
 fn format_tokens(n: i64) -> String {
@@ -160,9 +157,10 @@ pub fn format_usage_detail(usage: &AccountUsage) -> String {
         return line;
     }
 
-    let has_quota = usage.five_hour.is_some() || usage.week.is_some();
-    let mut parts = Vec::new();
-    if has_quota {
+    let has_five = usage.five_hour.is_some();
+    let has_week = usage.week.is_some();
+    let mut line = if has_five && has_week {
+        let mut parts = Vec::new();
         if let Some(q) = &usage.five_hour {
             parts.push(format_quota_window(q, "5h"));
         } else {
@@ -173,19 +171,32 @@ pub fn format_usage_detail(usage: &AccountUsage) -> String {
         } else {
             parts.push("7d —".into());
         }
+        parts.join(" · ")
+    } else if let Some(q) = usage.week.as_ref().or(usage.five_hour.as_ref()) {
+        let mut single = format_percent(q.percent);
+        if let Some(suffix) = &usage.detail_suffix {
+            single.push_str(" · ");
+            single.push_str(suffix);
+        }
+        single
+    } else if let Some(suffix) = &usage.detail_suffix {
+        suffix.clone()
+    } else if has_five || has_week {
+        "—".into()
     } else {
-        parts.push(format_token_windows(&usage.totals));
-    }
+        format_token_windows(&usage.totals)
+    };
 
-    let mut line = parts.join(" · ");
-    if let Some(reset) = usage
-        .five_hour
-        .as_ref()
-        .and_then(relative_reset)
-        .or_else(|| usage.week.as_ref().and_then(relative_reset))
-    {
-        line.push_str(" · resets ");
-        line.push_str(&reset);
+    if has_five || has_week {
+        if let Some(reset) = usage
+            .five_hour
+            .as_ref()
+            .and_then(relative_reset)
+            .or_else(|| usage.week.as_ref().and_then(relative_reset))
+        {
+            line.push_str(" · resets ");
+            line.push_str(&reset);
+        }
     }
     if usage.status != "ok" {
         line.push_str(" (");
@@ -268,7 +279,7 @@ pub fn build_menu(app: &AppHandle, usages: &[AccountUsage]) -> tauri::Result<Men
             None::<&str>,
         )?)?;
     } else {
-        let order = [Provider::Codex, Provider::Claude, Provider::Agy];
+        let order = edition::all_providers();
         let mut first_section = true;
         for provider in order {
             let group: Vec<&AccountUsage> = usages
@@ -318,11 +329,36 @@ pub fn build_menu(app: &AppHandle, usages: &[AccountUsage]) -> tauri::Result<Men
         true,
         None::<&str>,
     )?)?;
+    #[cfg(feature = "edition-pro")]
+    {
+        add_submenu.append(&PredefinedMenuItem::separator(app)?)?;
+        add_submenu.append(&MenuItem::with_id(
+            app,
+            "add-cursor-local",
+            "Import Cursor (local)",
+            true,
+            None::<&str>,
+        )?)?;
+        add_submenu.append(&MenuItem::with_id(
+            app,
+            "add-grok-env",
+            "Import Grok (env vars)",
+            true,
+            None::<&str>,
+        )?)?;
+        add_submenu.append(&MenuItem::with_id(
+            app,
+            "add-higgsfield-cli",
+            "Import Higgsfield (CLI)",
+            true,
+            None::<&str>,
+        )?)?;
+    }
     menu.append(&add_submenu)?;
 
     if !usages.is_empty() {
         let remove_submenu = Submenu::with_id(app, "remove-account", "Remove", true)?;
-        for provider in [Provider::Codex, Provider::Claude, Provider::Agy] {
+        for provider in edition::all_providers() {
             for usage in usages.iter().filter(|u| u.account.provider == provider) {
                 let id = format!("remove-{}", usage.account.id);
                 let label = format!(
@@ -353,7 +389,7 @@ pub fn build_menu(app: &AppHandle, usages: &[AccountUsage]) -> tauri::Result<Men
     menu.append(&MenuItem::with_id(
         app,
         "quit",
-        "Quit UsageCheck",
+        format!("Quit {}", edition::product_name()),
         true,
         Some("CmdOrCtrl+Q"),
     )?)?;
@@ -384,7 +420,7 @@ pub fn tray_id() -> &'static str {
 /// Tooltip summarizing the first few accounts.
 pub fn tooltip_for(usages: &[AccountUsage]) -> String {
     if usages.is_empty() {
-        return "UsageCheck — no accounts".into();
+        return format!("{} — no accounts", edition::product_name()).into();
     }
     usages
         .iter()
@@ -422,6 +458,7 @@ mod tests {
             }),
             totals: WindowTotals::default(),
             pool_breakdown: Vec::new(),
+            detail_suffix: None,
             status: "ok".into(),
         }
     }
@@ -475,5 +512,32 @@ mod tests {
         let u = sample(Provider::Claude, "c@d.com", 10.0, 20.0);
         assert_eq!(account_name_line(&u), "  ● c@d.com");
         assert!(account_usage_line(&u).starts_with("     "));
+    }
+
+    #[cfg(feature = "edition-pro")]
+    #[test]
+    fn paid_detail_shows_percent_and_suffix() {
+        let u = AccountUsage {
+            account: Account {
+                id: "c1".into(),
+                provider: Provider::Cursor,
+                label: "user@example.com".into(),
+            },
+            display_name: "user@example.com".into(),
+            plan: Some("pro".into()),
+            five_hour: None,
+            week: Some(QuotaUsage {
+                percent: 46.4,
+                resets_at: None,
+                window_seconds: None,
+            }),
+            totals: WindowTotals::default(),
+            pool_breakdown: Vec::new(),
+            detail_suffix: Some("$167.78 left".into()),
+            status: "ok".into(),
+        };
+        let detail = format_usage_detail(&u);
+        assert!(detail.contains("46.4%"), "{detail}");
+        assert!(detail.contains("$167.78 left"), "{detail}");
     }
 }

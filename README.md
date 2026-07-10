@@ -13,8 +13,39 @@ rows, Add/Remove account actions, Refresh, and Quit.
 - **Multi-account**: add any number of Codex, Claude, and agy accounts.
 - **Codex** and **Claude**: 5-hour and 7-day quota percentages in the tray
   menu, fetched from each provider's usage API.
-- **agy**: no quota API — menu shows local token totals from Gemini/agy logs.
+- **agy**: Antigravity Model Quota (Gemini / Claude+GPT pools) as used % in
+  the tray menu.
+- **UsageCheck Pro** adds **Cursor**, **Grok (xAI API credits)**, and
+  **Higgsfield** (credits via CLI when available).
 - A background poll refreshes the tray menu every 60 seconds.
+
+## Free vs Pro editions
+
+| Edition | Providers | Build |
+| ------- | --------- | ----- |
+| **Free** (default) | Codex, Claude, agy (Gemini/Antigravity) | `./scripts/build-edition.sh free` |
+| **Pro** | Free providers + Cursor, Grok, Higgsfield | `./scripts/build-edition.sh pro` |
+
+Pro-only import paths:
+
+- **Cursor** — reads `cursorAuth/accessToken` from Cursor's local
+  `state.vscdb` (read-only) and calls the undocumented
+  `GetCurrentPeriodUsage` Connect RPC on `api2.cursor.sh`. This API may
+  change without notice.
+- **Grok** — xAI Management API prepaid balance (`XAI_MGMT_KEY` +
+  `XAI_TEAM_ID` env vars at import time).
+- **Higgsfield** — imports `~/.config/higgsfield/credentials.json` after
+  `higgsfield auth login`; polls via `higgsfield account --json` when the
+  CLI is installed. Shows `needs_setup` when the CLI or JSON shape is
+  unavailable.
+
+Plain `cargo build` produces the **Free** edition. Pro builds use
+`--no-default-features --features custom-protocol,edition-pro` (see
+`scripts/build-edition.sh`).
+
+**License note:** Pro is a separate binary artifact (`UsageCheck-Pro`) with
+additional provider modules compiled in. There is no online license server;
+distribution is by edition-specific installers from CI.
 
 ## Architecture
 
@@ -101,6 +132,11 @@ Accounts are stored under:
 cargo test -p usage-core   # core models/aggregate/fetch/scanners/account
 cargo test -p usage-app    # oauth/poller/store/import/paths
 cargo build -p usage-app --release
+
+# Both editions (mutually exclusive features):
+cargo test -p usage-core --no-default-features --features edition-free
+cargo test -p usage-core --no-default-features --features edition-pro
+cargo test -p usage-app --no-default-features --features custom-protocol,edition-pro
 ```
 
 On macOS the release binary is `target/release/usage-app`. On Windows, build

@@ -18,11 +18,33 @@ jobs:
           # Pin macOS 15 so the runner image does not silently jump to macOS 26
           # when the macos-latest label migrates.
           - platform: macos-15
+            edition: free
+            cargo_features: custom-protocol,edition-free
+            tauri_config: ""
+            product_name: UsageCheck-Free
             args: --bundles dmg,app
-            artifact: macos
+            artifact: macos-free
+          - platform: macos-15
+            edition: pro
+            cargo_features: custom-protocol,edition-pro
+            tauri_config: --config tauri.pro.conf.json
+            product_name: UsageCheck-Pro
+            args: --bundles dmg,app
+            artifact: macos-pro
           - platform: windows-latest
+            edition: free
+            cargo_features: custom-protocol,edition-free
+            tauri_config: ""
+            product_name: UsageCheck-Free
             args: --bundles nsis,msi
-            artifact: windows
+            artifact: windows-free
+          - platform: windows-latest
+            edition: pro
+            cargo_features: custom-protocol,edition-pro
+            tauri_config: --config tauri.pro.conf.json
+            product_name: UsageCheck-Pro
+            args: --bundles nsis,msi
+            artifact: windows-pro
 
     runs-on: ${{ matrix.platform }}
 
@@ -42,6 +64,7 @@ jobs:
         uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri -> target
+          key: edition-${{ matrix.edition }}
 
       - name: Install Linux deps
         if: runner.os == 'Linux'
@@ -57,9 +80,14 @@ jobs:
       - name: Install Tauri CLI
         run: cargo install tauri-cli --version "^2" --locked
 
-      - name: Build bundles
+      - name: Build bundles (${{ matrix.edition }})
         working-directory: src-tauri
-        run: cargo tauri build ${{ matrix.args }}
+        run: |
+          cargo tauri build \
+            --no-default-features \
+            --features ${{ matrix.cargo_features }} \
+            ${{ matrix.tauri_config }} \
+            ${{ matrix.args }}
 
       - name: Collect bundle paths
         id: bundles
@@ -83,12 +111,12 @@ jobs:
       # Without an Apple Developer ID, Tauri must still ad-hoc sign the .app bundle
       # (signingIdentity "-"). Linker-only signatures look "damaged" under Gatekeeper.
       - name: Verify macOS ad-hoc code signature
-        if: matrix.artifact == 'macos'
+        if: startsWith(matrix.artifact, 'macos')
         shell: bash
         run: |
           set -euo pipefail
           BUNDLE_DIR="${{ steps.bundles.outputs.dir }}"
-          APP="$BUNDLE_DIR/macos/UsageCheck.app"
+          APP="$BUNDLE_DIR/macos/${{ matrix.product_name }}.app"
           test -d "$APP"
           codesign --verify --deep --strict --verbose=2 "$APP"
           codesign -dv --verbose=4 "$APP" 2>&1 | tee /tmp/usagecheck-codesign.txt
@@ -101,20 +129,20 @@ jobs:
           fi
 
       - name: Upload macOS artifacts
-        if: matrix.artifact == 'macos'
+        if: startsWith(matrix.artifact, 'macos')
         uses: actions/upload-artifact@v6
         with:
-          name: UsageCheck-macos
+          name: ${{ matrix.product_name }}-macos
           path: |
             ${{ steps.bundles.outputs.dir }}/dmg/*.dmg
             ${{ steps.bundles.outputs.dir }}/macos/*.app
           if-no-files-found: error
 
       - name: Upload Windows artifacts
-        if: matrix.artifact == 'windows'
+        if: startsWith(matrix.artifact, 'windows')
         uses: actions/upload-artifact@v6
         with:
-          name: UsageCheck-windows
+          name: ${{ matrix.product_name }}-windows
           path: |
             ${{ steps.bundles.outputs.dir }}/nsis/*.exe
             ${{ steps.bundles.outputs.dir }}/msi/*.msi
@@ -135,8 +163,11 @@ jobs:
         with:
           # Artifacts keep bundle subdirs (dmg/, nsis/, msi/) from upload paths.
           files: |
-            dist/UsageCheck-macos/**/*.dmg
-            dist/UsageCheck-windows/**/*.exe
-            dist/UsageCheck-windows/**/*.msi
+            dist/UsageCheck-Free-macos/**/*.dmg
+            dist/UsageCheck-Pro-macos/**/*.dmg
+            dist/UsageCheck-Free-windows/**/*.exe
+            dist/UsageCheck-Pro-windows/**/*.exe
+            dist/UsageCheck-Free-windows/**/*.msi
+            dist/UsageCheck-Pro-windows/**/*.msi
           fail_on_unmatched_files: true
           generate_release_notes: true

@@ -93,6 +93,54 @@ fn hex_prefix(bytes: impl AsRef<[u8]>, n: usize) -> String {
         .collect()
 }
 
+/// Cursor `state.vscdb` (read-only) under globalStorage.
+pub fn cursor_state_vscdb() -> Option<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        return home_dir().map(|h| {
+            h.join("Library")
+                .join("Application Support")
+                .join("Cursor")
+                .join("User")
+                .join("globalStorage")
+                .join("state.vscdb")
+        });
+    }
+    #[cfg(target_os = "windows")]
+    {
+        return std::env::var_os("APPDATA")
+            .map(PathBuf::from)
+            .or_else(home_dir)
+            .map(|h| {
+                h.join("Cursor")
+                    .join("User")
+                    .join("globalStorage")
+                    .join("state.vscdb")
+            });
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        return home_dir().map(|h| {
+            h.join(".config")
+                .join("Cursor")
+                .join("User")
+                .join("globalStorage")
+                .join("state.vscdb")
+        });
+    }
+}
+
+/// Higgsfield CLI credentials (`higgsfield auth login`).
+pub fn higgsfield_credentials_file() -> Option<PathBuf> {
+    if let Ok(raw) = std::env::var("HIGGSFIELD_CONFIG_DIR") {
+        let p = PathBuf::from(raw);
+        if !p.as_os_str().is_empty() {
+            return Some(p.join("credentials.json"));
+        }
+    }
+    home_dir().map(|h| h.join(".config").join("higgsfield").join("credentials.json"))
+}
+
 /// Claude project roots used for JSONL scanning.
 pub fn claude_project_roots() -> Vec<PathBuf> {
     claude_config_roots()

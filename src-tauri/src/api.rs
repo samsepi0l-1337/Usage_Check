@@ -364,6 +364,7 @@ mod tests {
             }),
             totals: WindowTotals::default(),
             pool_breakdown: Vec::new(),
+            detail_suffix: None,
             status: "ok".into(),
         }
     }

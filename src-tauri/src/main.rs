@@ -19,6 +19,9 @@ use usage_core::account::Provider;
 
 mod agy_local;
 mod api;
+#[cfg(feature = "edition-pro")]
+mod cursor_local;
+mod edition;
 mod import;
 mod oauth;
 mod paths;
@@ -113,6 +116,10 @@ fn oauth_provider(app: &AppHandle, provider: Provider) {
                     Provider::Agy => oauth::agy_email_from_access_token(&creds.access_token)
                         .await
                         .unwrap_or_else(|| "agy".to_string()),
+                    #[cfg(feature = "edition-pro")]
+                    Provider::Cursor | Provider::Grok | Provider::Higgsfield => {
+                        provider.display_name().to_string()
+                    }
                 };
                 if let Err(e) = store.add(provider, label, creds) {
                     eprintln!("oauth: failed to save account: {e}");
@@ -141,6 +148,12 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
         "add-codex-oauth" => oauth_provider(app, Provider::Codex),
         "add-claude-oauth" => oauth_provider(app, Provider::Claude),
         "add-agy-oauth" => oauth_provider(app, Provider::Agy),
+        #[cfg(feature = "edition-pro")]
+        "add-cursor-local" => import_provider(app, Provider::Cursor),
+        #[cfg(feature = "edition-pro")]
+        "add-grok-env" => import_provider(app, Provider::Grok),
+        #[cfg(feature = "edition-pro")]
+        "add-higgsfield-cli" => import_provider(app, Provider::Higgsfield),
         other if other.starts_with("remove-") => {
             let account_id = &other["remove-".len()..];
             app.state::<AccountStore>().remove(account_id);
@@ -180,7 +193,7 @@ fn main() {
             let tray = TrayIconBuilder::with_id(tray_menu::tray_id())
                 .icon(tray_icon_image())
                 .menu(&initial)
-                .tooltip("UsageCheck")
+                .tooltip(edition::product_name())
                 .show_menu_on_left_click(true)
                 .on_menu_event(|app, event| {
                     handle_menu_event(app, event.id.as_ref());

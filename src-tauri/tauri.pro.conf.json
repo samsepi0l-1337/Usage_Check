@@ -1,0 +1,8 @@
+{
+  "productName": "UsageCheck-Pro",
+  "identifier": "com.usagecheck.desktop.pro",
+  "bundle": {
+    "shortDescription": "Menu bar usage monitor — Codex, Claude, Gemini, and Pro providers",
+    "longDescription": "UsageCheck Pro shows Codex, Claude Code, Gemini (agy), and additional paid providers (Cursor, Grok, Higgsfield) in the macOS menu bar / Windows system tray."
+  }
+}
