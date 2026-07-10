@@ -23,6 +23,7 @@ use usage_core::models::{ModelTokenEvent, QuotaUsage, WindowTotals};
 use usage_core::scanners::{claude as claude_scanner, codex as codex_scanner};
 
 use crate::agy_local;
+use crate::import::{self, ImportedAccount};
 use crate::oauth;
 use crate::paths;
 use crate::store::AccountStore;
@@ -58,6 +59,60 @@ async fn maybe_refresh(store: &AccountStore, id: &str, provider: Provider, creds
         }
         Err(_) => creds,
     }
+}
+
+/// When `codex login` rotates tokens in `~/.codex/auth.json`, UsageCheck's
+/// file-backed copy can keep the old access_token (same identity). Prefer the
+/// CLI snapshot for the *matching* account only — never overwrite siblings.
+fn sync_codex_creds_from_cli(
+    store: &AccountStore,
+    account: &Account,
+    stored: Credentials,
+    cli: Option<&ImportedAccount>,
+) -> Credentials {
+    let Some(imported) = cli else {
+        return stored;
+    };
+    if !import::codex_cli_creds_are_newer(
+        &stored,
+        &account.label,
+        &imported.credentials,
+        &imported.label,
+    ) {
+        return stored;
+    }
+    store.update_credentials(&account.id, &imported.credentials);
+    if !imported.label.is_empty() && imported.label != "Codex" {
+        store.update_label(&account.id, &imported.label);
+    }
+    imported.credentials.clone()
+}
+
+/// When `claude` login rotates Keychain tokens, UsageCheck's file-backed copy
+/// can keep a still-unexpired but revoked access_token. Prefer the CLI
+/// snapshot for the *matching* account only — never overwrite siblings.
+fn sync_claude_creds_from_cli(
+    store: &AccountStore,
+    account: &Account,
+    stored: Credentials,
+    cli: Option<&ImportedAccount>,
+) -> Credentials {
+    let Some(imported) = cli else {
+        return stored;
+    };
+    if !import::claude_cli_creds_are_newer(
+        &stored,
+        &account.label,
+        &imported.credentials,
+        &imported.label,
+    ) {
+        return stored;
+    }
+    store.update_credentials(&account.id, &imported.credentials);
+    if !imported.label.is_empty() && imported.label != "Claude" {
+        store.update_label(&account.id, &imported.label);
+    }
+    imported.credentials.clone()
 }
 
 /// A single account's usage snapshot: live quota (when available) plus
@@ -391,6 +446,38 @@ fn status_for_failure(status: Option<u16>) -> &'static str {
     }
 }
 
+/// Backfills Google `account_id` / email label for legacy agy rows that were
+/// saved before identity was persisted (opaque `ya29` tokens, no `id_token`).
+async fn enrich_agy_identity(store: &AccountStore, account: &Account, creds: &mut Credentials) {
+    let needs_id = creds
+        .account_id
+        .as_deref()
+        .map(|s| s.is_empty())
+        .unwrap_or(true);
+    let needs_label = !account.label.contains('@');
+    if !needs_id && !needs_label {
+        return;
+    }
+    let Some(identity) = oauth::agy_identity_from_access_token(&creds.access_token).await else {
+        return;
+    };
+    let mut changed = false;
+    if needs_id {
+        if let Some(id) = identity.account_id.filter(|s| !s.is_empty()) {
+            creds.account_id = Some(id);
+            changed = true;
+        }
+    }
+    if changed {
+        store.update_credentials(&account.id, creds);
+    }
+    if needs_label {
+        if let Some(email) = identity.email.filter(|s| !s.is_empty()) {
+            store.update_label(&account.id, &email);
+        }
+    }
+}
+
 async fn poll_agy(store: &AccountStore, client: &reqwest::Client, account: &Account) -> AccountUsage {
     // 1) Prefer live Antigravity.app language_server (same as Model Quota UI).
     if let Some(quota) = agy_local::fetch_local_quota().await {
@@ -403,9 +490,27 @@ async fn poll_agy(store: &AccountStore, client: &reqwest::Client, account: &Acco
     // 2) OAuth remote Cloud Code fallback.
     match store.credentials(&account.id) {
         Some(creds) if !creds.access_token.is_empty() => {
-            let creds = maybe_refresh(store, &account.id, Provider::Agy, creds).await;
+            let mut creds = maybe_refresh(store, &account.id, Provider::Agy, creds).await;
+            enrich_agy_identity(store, account, &mut creds).await;
             match fetch_agy_quota_remote(client, &creds).await {
-                Ok(quota) => account_usage_from_agy(account, &quota, "ok"),
+                Ok(mut quota) => {
+                    // Remote summary has no email; use stored label / userinfo.
+                    if quota.email.is_none() {
+                        let label = store
+                            .list()
+                            .into_iter()
+                            .find(|a| a.id == account.id)
+                            .map(|a| a.label)
+                            .unwrap_or_else(|| account.label.clone());
+                        if label.contains('@') {
+                            quota.email = Some(label);
+                        }
+                    }
+                    if let Some(email) = quota.email.as_deref() {
+                        store.update_label(&account.id, email);
+                    }
+                    account_usage_from_agy(account, &quota, "ok")
+                }
                 Err(status) => account_usage_from_agy(
                     account,
                     &AgyQuota {
@@ -429,74 +534,229 @@ async fn poll_agy(store: &AccountStore, client: &reqwest::Client, account: &Acco
     }
 }
 
+async fn poll_codex(
+    store: &AccountStore,
+    client: &reqwest::Client,
+    account: &Account,
+    cli: Option<&ImportedAccount>,
+) -> AccountUsage {
+    match store.credentials(&account.id) {
+        Some(creds) if !creds.access_token.is_empty() => {
+            let creds = sync_codex_creds_from_cli(store, account, creds, cli);
+            let creds = maybe_refresh(store, &account.id, Provider::Codex, creds).await;
+            match fetch_codex_quota(client, &creds).await {
+                Ok(quota) => {
+                    if let Some(email) = quota.email.as_deref() {
+                        store.update_label(&account.id, email);
+                    }
+                    account_usage_from_codex(account, &quota, WindowTotals::default())
+                }
+                Err(status) => {
+                    // Auth failure for the matching identity: re-read auth.json
+                    // once more (covers race where CLI wrote mid-poll) and retry
+                    // before falling back to local logs. Never adopts a
+                    // different CLI account onto this row.
+                    if matches!(status, Some(401) | Some(403)) {
+                        if let Ok(fresh) = import::load_codex_cli_auth() {
+                            let retried = sync_codex_creds_from_cli(
+                                store,
+                                account,
+                                creds.clone(),
+                                Some(&fresh),
+                            );
+                            if retried.access_token != creds.access_token {
+                                if let Ok(quota) = fetch_codex_quota(client, &retried).await {
+                                    if let Some(email) = quota.email.as_deref() {
+                                        store.update_label(&account.id, email);
+                                    }
+                                    return account_usage_from_codex(
+                                        account,
+                                        &quota,
+                                        WindowTotals::default(),
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    let totals = aggregate_local_logs(Provider::Codex).unwrap_or_default();
+                    account_usage_from_logs(account, totals, status_for_failure(status))
+                }
+            }
+        }
+        _ => {
+            // No usable stored token: adopt CLI auth only when identity matches
+            // this row. Never wipe/replace siblings or invent a match.
+            if let Some(imported) = cli {
+                let stored = store.credentials(&account.id).unwrap_or(Credentials {
+                    access_token: String::new(),
+                    refresh_token: None,
+                    account_id: None,
+                    expires_at: None,
+                });
+                let adopt = import::cli_identity_matches(
+                    &stored,
+                    &account.label,
+                    &imported.credentials,
+                    &imported.label,
+                );
+                if adopt && !imported.credentials.access_token.is_empty() {
+                    store.update_credentials(&account.id, &imported.credentials);
+                    if !imported.label.is_empty() && imported.label != "Codex" {
+                        store.update_label(&account.id, &imported.label);
+                    }
+                    let creds = maybe_refresh(
+                        store,
+                        &account.id,
+                        Provider::Codex,
+                        imported.credentials.clone(),
+                    )
+                    .await;
+                    if let Ok(quota) = fetch_codex_quota(client, &creds).await {
+                        if let Some(email) = quota.email.as_deref() {
+                            store.update_label(&account.id, email);
+                        }
+                        return account_usage_from_codex(
+                            account,
+                            &quota,
+                            WindowTotals::default(),
+                        );
+                    }
+                }
+            }
+            let totals = aggregate_local_logs(Provider::Codex).unwrap_or_default();
+            account_usage_from_logs(account, totals, "needs_login")
+        }
+    }
+}
+
+async fn poll_claude(
+    store: &AccountStore,
+    client: &reqwest::Client,
+    account: &Account,
+    cli: Option<&ImportedAccount>,
+) -> AccountUsage {
+    match store.credentials(&account.id) {
+        Some(creds) if !creds.access_token.is_empty() => {
+            let creds = sync_claude_creds_from_cli(store, account, creds, cli);
+            let creds = maybe_refresh(store, &account.id, Provider::Claude, creds).await;
+            match fetch_claude_quota(client, &creds).await {
+                Ok(quota) => {
+                    let email = if account.label.contains('@') {
+                        Some(account.label.as_str())
+                    } else {
+                        None
+                    };
+                    account_usage_from_claude(
+                        account,
+                        &quota,
+                        WindowTotals::default(),
+                        email,
+                        None,
+                    )
+                }
+                Err(status) => {
+                    // Matching-identity token revoked: re-read Keychain once
+                    // and retry on 401/403. Never adopts a different CLI
+                    // account onto this row.
+                    if matches!(status, Some(401) | Some(403)) {
+                        if let Ok(fresh) = import::load_claude_cli_auth() {
+                            let retried = sync_claude_creds_from_cli(
+                                store,
+                                account,
+                                creds.clone(),
+                                Some(&fresh),
+                            );
+                            if retried.access_token != creds.access_token {
+                                if let Ok(quota) = fetch_claude_quota(client, &retried).await {
+                                    let email = if !fresh.label.is_empty()
+                                        && fresh.label.contains('@')
+                                    {
+                                        Some(fresh.label.as_str())
+                                    } else if account.label.contains('@') {
+                                        Some(account.label.as_str())
+                                    } else {
+                                        None
+                                    };
+                                    return account_usage_from_claude(
+                                        account,
+                                        &quota,
+                                        WindowTotals::default(),
+                                        email,
+                                        None,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    let totals = aggregate_local_logs(Provider::Claude).unwrap_or_default();
+                    account_usage_from_logs(account, totals, status_for_failure(status))
+                }
+            }
+        }
+        _ => {
+            if let Some(imported) = cli {
+                let stored = store.credentials(&account.id).unwrap_or(Credentials {
+                    access_token: String::new(),
+                    refresh_token: None,
+                    account_id: None,
+                    expires_at: None,
+                });
+                let adopt = import::cli_identity_matches(
+                    &stored,
+                    &account.label,
+                    &imported.credentials,
+                    &imported.label,
+                );
+                if adopt && !imported.credentials.access_token.is_empty() {
+                    store.update_credentials(&account.id, &imported.credentials);
+                    if !imported.label.is_empty() && imported.label != "Claude" {
+                        store.update_label(&account.id, &imported.label);
+                    }
+                    let creds = maybe_refresh(
+                        store,
+                        &account.id,
+                        Provider::Claude,
+                        imported.credentials.clone(),
+                    )
+                    .await;
+                    if let Ok(quota) = fetch_claude_quota(client, &creds).await {
+                        let email = if imported.label.contains('@') {
+                            Some(imported.label.as_str())
+                        } else {
+                            None
+                        };
+                        return account_usage_from_claude(
+                            account,
+                            &quota,
+                            WindowTotals::default(),
+                            email,
+                            None,
+                        );
+                    }
+                }
+            }
+            let totals = aggregate_local_logs(Provider::Claude).unwrap_or_default();
+            account_usage_from_logs(account, totals, "needs_login")
+        }
+    }
+}
+
 /// Builds the full per-account usage snapshot.
 pub async fn poll_all(store: &AccountStore) -> Vec<AccountUsage> {
     let client = reqwest::Client::new();
     let accounts = store.list();
     let mut out = Vec::with_capacity(accounts.len());
 
+    // Read CLI auth once per poll tick so the *matching* row can sync after
+    // terminal login. Never use sole-row replace — siblings stay intact.
+    let codex_cli = import::load_codex_cli_auth().ok();
+    let claude_cli = import::load_claude_cli_auth().ok();
+
     for account in accounts {
         let usage = match account.provider {
             Provider::Agy => poll_agy(store, &client, &account).await,
-            Provider::Codex => {
-                match store.credentials(&account.id) {
-                    Some(creds) if !creds.access_token.is_empty() => {
-                        let creds = maybe_refresh(store, &account.id, Provider::Codex, creds).await;
-                        match fetch_codex_quota(&client, &creds).await {
-                            Ok(quota) => {
-                                if let Some(email) = quota.email.as_deref() {
-                                    store.update_label(&account.id, email);
-                                }
-                                account_usage_from_codex(
-                                    &account,
-                                    &quota,
-                                    WindowTotals::default(),
-                                )
-                            }
-                            Err(status) => {
-                                let totals = aggregate_local_logs(Provider::Codex).unwrap_or_default();
-                                account_usage_from_logs(&account, totals, status_for_failure(status))
-                            }
-                        }
-                    }
-                    _ => {
-                        let totals = aggregate_local_logs(Provider::Codex).unwrap_or_default();
-                        account_usage_from_logs(&account, totals, "needs_login")
-                    }
-                }
-            }
-            Provider::Claude => {
-                match store.credentials(&account.id) {
-                    Some(creds) if !creds.access_token.is_empty() => {
-                        let creds = maybe_refresh(store, &account.id, Provider::Claude, creds).await;
-                        match fetch_claude_quota(&client, &creds).await {
-                            Ok(quota) => {
-                                let email = if account.label.contains('@') {
-                                    Some(account.label.as_str())
-                                } else {
-                                    None
-                                };
-                                account_usage_from_claude(
-                                    &account,
-                                    &quota,
-                                    WindowTotals::default(),
-                                    email,
-                                    None,
-                                )
-                            }
-                            Err(status) => {
-                                let totals =
-                                    aggregate_local_logs(Provider::Claude).unwrap_or_default();
-                                account_usage_from_logs(&account, totals, status_for_failure(status))
-                            }
-                        }
-                    }
-                    _ => {
-                        let totals = aggregate_local_logs(Provider::Claude).unwrap_or_default();
-                        account_usage_from_logs(&account, totals, "needs_login")
-                    }
-                }
-            }
+            Provider::Codex => poll_codex(store, &client, &account, codex_cli.as_ref()).await,
+            Provider::Claude => poll_claude(store, &client, &account, claude_cli.as_ref()).await,
         };
         out.push(usage);
     }
@@ -594,5 +854,70 @@ mod tests {
         assert_eq!(status_for_failure(Some(429)), "rate_limited");
         assert_eq!(status_for_failure(Some(500)), "error");
         assert_eq!(status_for_failure(None), "error");
+    }
+
+    #[test]
+    fn multi_codex_browser_rows_cli_sync_mutates_only_match() {
+        // Simulates one poll tick: two browser-logged Codex rows, CLI auth for A.
+        // Only A's credentials are eligible for replacement; B stays untouched.
+        use usage_core::account::Credentials;
+
+        let cli = ImportedAccount {
+            label: "a@ex.com".into(),
+            credentials: Credentials {
+                access_token: "a-new".into(),
+                refresh_token: Some("a-rt2".into()),
+                account_id: Some("acct-a".into()),
+                expires_at: None,
+            },
+        };
+        let rows = [
+            (
+                Account {
+                    id: "row-a".into(),
+                    provider: Provider::Codex,
+                    label: "a@ex.com".into(),
+                },
+                Credentials {
+                    access_token: "a-old".into(),
+                    refresh_token: Some("a-rt".into()),
+                    account_id: Some("acct-a".into()),
+                    expires_at: None,
+                },
+            ),
+            (
+                Account {
+                    id: "row-b".into(),
+                    provider: Provider::Codex,
+                    label: "b@ex.com".into(),
+                },
+                Credentials {
+                    access_token: "b-old".into(),
+                    refresh_token: Some("b-rt".into()),
+                    account_id: Some("acct-b".into()),
+                    expires_at: None,
+                },
+            ),
+        ];
+
+        let decisions: Vec<(&str, bool)> = rows
+            .iter()
+            .map(|(account, stored)| {
+                (
+                    account.id.as_str(),
+                    import::codex_cli_creds_are_newer(
+                        stored,
+                        &account.label,
+                        &cli.credentials,
+                        &cli.label,
+                    ),
+                )
+            })
+            .collect();
+
+        assert_eq!(decisions, vec![("row-a", true), ("row-b", false)]);
+        // Non-matching row's stored token is unchanged by the decision.
+        assert_eq!(rows[1].1.access_token, "b-old");
+        assert_eq!(rows[1].1.account_id.as_deref(), Some("acct-b"));
     }
 }

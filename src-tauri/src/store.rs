@@ -169,8 +169,12 @@ impl AccountStore {
     /// app-data directory cannot be written (so the UI can surface it).
     ///
     /// If an existing account for the same provider already has the same
-    /// `account_id` (Codex) or the same non-empty `access_token`, its
+    /// `account_id` (Codex/Claude/Agy) or the same non-empty `access_token`, its
     /// credentials/label are updated in place instead of creating a duplicate.
+    ///
+    /// When exactly one Claude/Agy row exists, an *explicit* re-import /
+    /// browser re-login may replace that slot after an account switch.
+    /// Automatic poller CLI sync never uses sole-row replace.
     pub fn add(
         &self,
         provider: Provider,
@@ -202,6 +206,28 @@ impl AccountStore {
             self.save_index(&accounts)?;
             self.update_credentials(&id, &creds);
             return Ok(account);
+        }
+
+        // Claude / Agy: when exactly one row exists, an explicit re-login /
+        // Import menu action may replace that slot after an account switch.
+        // Poller CLI sync must NOT use this path — it only updates matching
+        // identities so multi-account browser rows survive a terminal login.
+        if matches!(provider, Provider::Claude | Provider::Agy) {
+            let idxs: Vec<usize> = accounts
+                .iter()
+                .enumerate()
+                .filter(|(_, a)| a.provider == provider)
+                .map(|(i, _)| i)
+                .collect();
+            if idxs.len() == 1 {
+                let idx = idxs[0];
+                accounts[idx].label = label.clone();
+                let id = accounts[idx].id.clone();
+                let account = accounts[idx].clone();
+                self.save_index(&accounts)?;
+                self.update_credentials(&id, &creds);
+                return Ok(account);
+            }
         }
 
         let account = Account {
@@ -288,5 +314,44 @@ mod tests {
     #[test]
     fn parse_index_empty_on_empty_string() {
         assert_eq!(parse_index(""), Vec::<Account>::new());
+    }
+
+    #[test]
+    fn sole_agy_row_is_replaced_on_identity_change() {
+        // Explicit menu re-login / Import may replace a sole Claude/Agy slot.
+        // Automatic poller CLI sync must NOT use this path (see import::cli_identity_matches).
+        let accounts = vec![Account {
+            id: "agy-1".into(),
+            provider: Provider::Agy,
+            label: "old@example.com".into(),
+        }];
+        let idxs: Vec<usize> = accounts
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| a.provider == Provider::Agy)
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(idxs, vec![0]);
+        // Multi-account: sole-row replace must not apply.
+        let multi = vec![
+            Account {
+                id: "agy-1".into(),
+                provider: Provider::Agy,
+                label: "a@ex.com".into(),
+            },
+            Account {
+                id: "agy-2".into(),
+                provider: Provider::Agy,
+                label: "b@ex.com".into(),
+            },
+        ];
+        let multi_idxs: Vec<usize> = multi
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| a.provider == Provider::Agy)
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(multi_idxs.len(), 2);
+        assert_ne!(multi_idxs.len(), 1);
     }
 }

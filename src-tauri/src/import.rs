@@ -45,16 +45,113 @@ fn default_label(provider: Provider) -> String {
     }
 }
 
-fn claude_email_from_config() -> Option<String> {
+/// Reads `~/.claude.json` `oauthAccount` (email + accountUuid). Pure file I/O
+/// helper used to label imports and give Claude an upsert identity.
+fn claude_oauth_account() -> Option<(Option<String>, Option<String>)> {
     let home = paths::home_dir()?;
     let path = home.join(".claude.json");
     let data = std::fs::read_to_string(path).ok()?;
     let root: serde_json::Value = serde_json::from_str(&data).ok()?;
-    root.get("oauthAccount")?
+    let oauth = root.get("oauthAccount")?;
+    let email = oauth
         .get("emailAddress")
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
-        .map(str::to_string)
+        .map(str::to_string);
+    let account_id = oauth
+        .get("accountUuid")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    if email.is_none() && account_id.is_none() {
+        return None;
+    }
+    Some((email, account_id))
+}
+
+/// Loads Claude credentials from Keychain / `.credentials.json`, attaching
+/// `accountUuid` from `~/.claude.json` when present.
+pub fn load_claude_cli_auth() -> Result<ImportedAccount, String> {
+    // Claude Code stores OAuth in the OS keychain first; the on-disk
+    // `.credentials.json` is only a fallback (often absent on macOS).
+    let mut credentials = if let Some(creds) = read_claude_from_keychain() {
+        creds
+    } else {
+        let files = paths::claude_credential_files();
+        let mut found = None;
+        for path in &files {
+            let Ok(data) = std::fs::read_to_string(path) else {
+                continue;
+            };
+            let Ok(root) = serde_json::from_str::<serde_json::Value>(&data) else {
+                continue;
+            };
+            if let Some(creds) = parse_claude_credentials_json(&root) {
+                found = Some(creds);
+                break;
+            }
+        }
+        found.ok_or_else(|| {
+            "Claude credentials not found — run `claude` login first \
+             (macOS: Keychain item \"Claude Code-credentials\", or ~/.claude/.credentials.json)"
+                .to_string()
+        })?
+    };
+    // Keychain blob has no account id; attach accountUuid from
+    // ~/.claude.json so store upserts survive CLI account switches.
+    let (email, account_id) = claude_oauth_account().unwrap_or((None, None));
+    if credentials.account_id.is_none() {
+        credentials.account_id = account_id;
+    }
+    Ok(ImportedAccount {
+        label: email.unwrap_or_else(|| default_label(Provider::Claude)),
+        credentials,
+    })
+}
+
+/// True when a stored row and a CLI snapshot refer to the same identity.
+///
+/// Match by `account_id` when both sides have one. Otherwise fall back to
+/// email-shaped labels (case-insensitive). Never matches "any row" — missing
+/// identity on either side without a shared email means no match.
+pub fn cli_identity_matches(
+    stored: &Credentials,
+    stored_label: &str,
+    cli: &Credentials,
+    cli_label: &str,
+) -> bool {
+    match (
+        stored.account_id.as_deref().filter(|s| !s.is_empty()),
+        cli.account_id.as_deref().filter(|s| !s.is_empty()),
+    ) {
+        (Some(stored_id), Some(cli_id)) => stored_id == cli_id,
+        _ => {
+            let stored_email = stored_label.trim();
+            let cli_email = cli_label.trim();
+            !stored_email.is_empty()
+                && stored_email.contains('@')
+                && !cli_email.is_empty()
+                && cli_email.contains('@')
+                && stored_email.eq_ignore_ascii_case(cli_email)
+        }
+    }
+}
+
+/// True when stored Claude credentials should be replaced by a fresh CLI
+/// Keychain / credentials snapshot (same rules as Codex).
+///
+/// Only the matching identity is eligible — never siblings, never a blind
+/// overwrite of legacy rows that lack `account_id` / email.
+pub fn claude_cli_creds_are_newer(
+    stored: &Credentials,
+    stored_label: &str,
+    cli: &Credentials,
+    cli_label: &str,
+) -> bool {
+    if cli.access_token.is_empty() || cli.access_token == stored.access_token {
+        return false;
+    }
+    cli_identity_matches(stored, stored_label, cli, cli_label)
 }
 
 /// Pure parser for Codex `auth.json` body. Returns `None` when no usable
@@ -146,6 +243,7 @@ pub fn parse_claude_credentials_json(root: &serde_json::Value) -> Option<Credent
     Some(Credentials {
         access_token: access,
         refresh_token,
+        // Filled by `import_from_cli` from `~/.claude.json` when available.
         account_id: None,
         expires_at,
     })
@@ -243,6 +341,46 @@ fn parse_expires_at(v: &serde_json::Value) -> Option<chrono::DateTime<Utc>> {
     None
 }
 
+/// True when stored Codex credentials should be replaced by a fresh CLI
+/// `auth.json` snapshot.
+///
+/// - Same identity (`account_id` or email label), new access token → yes.
+/// - Different / unknown identity → never (siblings stay intact).
+///
+/// Used after `codex login` updates `~/.codex/auth.json` while UsageCheck
+/// still holds a stale file-backed copy for the *matching* account only.
+pub fn codex_cli_creds_are_newer(
+    stored: &Credentials,
+    stored_label: &str,
+    cli: &Credentials,
+    cli_label: &str,
+) -> bool {
+    if cli.access_token.is_empty() || cli.access_token == stored.access_token {
+        return false;
+    }
+    cli_identity_matches(stored, stored_label, cli, cli_label)
+}
+
+/// Loads Codex credentials from `~/.codex/auth.json` (or `$CODEX_HOME`).
+pub fn load_codex_cli_auth() -> Result<ImportedAccount, String> {
+    let path = paths::codex_auth_file()
+        .ok_or_else(|| "could not resolve home directory".to_string())?;
+    let data = std::fs::read_to_string(&path).map_err(|_| {
+        format!(
+            "Codex auth not found at {} — run `codex login` first",
+            path.display()
+        )
+    })?;
+    let root: serde_json::Value = serde_json::from_str(&data)
+        .map_err(|_| "Codex auth.json is not valid JSON".to_string())?;
+    let (credentials, email) = parse_codex_auth_json(&root)
+        .ok_or_else(|| "Codex auth.json has no usable access_token".to_string())?;
+    Ok(ImportedAccount {
+        label: email.unwrap_or_else(|| default_label(Provider::Codex)),
+        credentials,
+    })
+}
+
 /// Loads credentials for `provider` from the local CLI config.
 /// Agy has no CLI auth import — use browser OAuth (`add-agy-oauth`).
 pub fn import_from_cli(provider: Provider) -> Result<ImportedAccount, String> {
@@ -251,56 +389,8 @@ pub fn import_from_cli(provider: Provider) -> Result<ImportedAccount, String> {
             "Antigravity is not imported from local CLI token DBs — use Login Antigravity (browser)"
                 .into(),
         ),
-        Provider::Codex => {
-            let path = paths::codex_auth_file()
-                .ok_or_else(|| "could not resolve home directory".to_string())?;
-            let data = std::fs::read_to_string(&path).map_err(|_| {
-                format!(
-                    "Codex auth not found at {} — run `codex login` first",
-                    path.display()
-                )
-            })?;
-            let root: serde_json::Value = serde_json::from_str(&data)
-                .map_err(|_| "Codex auth.json is not valid JSON".to_string())?;
-            let (credentials, email) = parse_codex_auth_json(&root)
-                .ok_or_else(|| "Codex auth.json has no usable access_token".to_string())?;
-            Ok(ImportedAccount {
-                label: email.unwrap_or_else(|| default_label(Provider::Codex)),
-                credentials,
-            })
-        }
-        Provider::Claude => {
-            // Claude Code stores OAuth in the OS keychain first; the on-disk
-            // `.credentials.json` is only a fallback (often absent on macOS).
-            let credentials = if let Some(creds) = read_claude_from_keychain() {
-                creds
-            } else {
-                let files = paths::claude_credential_files();
-                let mut found = None;
-                for path in &files {
-                    let Ok(data) = std::fs::read_to_string(path) else {
-                        continue;
-                    };
-                    let Ok(root) = serde_json::from_str::<serde_json::Value>(&data) else {
-                        continue;
-                    };
-                    if let Some(creds) = parse_claude_credentials_json(&root) {
-                        found = Some(creds);
-                        break;
-                    }
-                }
-                found.ok_or_else(|| {
-                    "Claude credentials not found — run `claude` login first \
-                     (macOS: Keychain item \"Claude Code-credentials\", or ~/.claude/.credentials.json)"
-                        .to_string()
-                })?
-            };
-            Ok(ImportedAccount {
-                label: claude_email_from_config()
-                    .unwrap_or_else(|| default_label(Provider::Claude)),
-                credentials,
-            })
-        }
+        Provider::Codex => load_codex_cli_auth(),
+        Provider::Claude => load_claude_cli_auth(),
     }
 }
 
@@ -336,6 +426,181 @@ mod tests {
     fn rejects_empty_codex_token() {
         let root = json!({ "tokens": { "access_token": "" } });
         assert!(parse_codex_auth_json(&root).is_none());
+    }
+
+    #[test]
+    fn codex_cli_newer_when_same_account_new_token() {
+        let stored = Credentials {
+            access_token: "old-at".into(),
+            refresh_token: Some("old-rt".into()),
+            account_id: Some("acct-1".into()),
+            expires_at: None,
+        };
+        let cli = Credentials {
+            access_token: "new-at".into(),
+            refresh_token: Some("new-rt".into()),
+            account_id: Some("acct-1".into()),
+            expires_at: None,
+        };
+        assert!(codex_cli_creds_are_newer(&stored, "a@b.com", &cli, "a@b.com"));
+    }
+
+    #[test]
+    fn codex_cli_not_newer_for_different_account() {
+        let stored = Credentials {
+            access_token: "old-at".into(),
+            refresh_token: Some("old-rt".into()),
+            account_id: Some("acct-1".into()),
+            expires_at: None,
+        };
+        let cli = Credentials {
+            access_token: "new-at".into(),
+            refresh_token: Some("new-rt".into()),
+            account_id: Some("acct-2".into()),
+            expires_at: None,
+        };
+        // Different account_id must never overwrite — even for a sole row.
+        assert!(!codex_cli_creds_are_newer(&stored, "a@b.com", &cli, "c@d.com"));
+    }
+
+    #[test]
+    fn codex_cli_not_newer_when_token_unchanged() {
+        let stored = Credentials {
+            access_token: "same".into(),
+            refresh_token: Some("rt".into()),
+            account_id: Some("acct-1".into()),
+            expires_at: None,
+        };
+        let cli = stored.clone();
+        assert!(!codex_cli_creds_are_newer(&stored, "a@b.com", &cli, "a@b.com"));
+    }
+
+    #[test]
+    fn claude_cli_newer_when_same_account_new_token() {
+        let stored = Credentials {
+            access_token: "old-at".into(),
+            refresh_token: Some("old-rt".into()),
+            account_id: Some("uuid-1".into()),
+            expires_at: None,
+        };
+        let cli = Credentials {
+            access_token: "new-at".into(),
+            refresh_token: Some("new-rt".into()),
+            account_id: Some("uuid-1".into()),
+            expires_at: None,
+        };
+        assert!(claude_cli_creds_are_newer(&stored, "a@b.com", &cli, "a@b.com"));
+    }
+
+    #[test]
+    fn claude_cli_never_overwrites_different_account() {
+        let stored = Credentials {
+            access_token: "old-at".into(),
+            refresh_token: Some("old-rt".into()),
+            account_id: Some("uuid-1".into()),
+            expires_at: None,
+        };
+        let cli = Credentials {
+            access_token: "new-at".into(),
+            refresh_token: Some("new-rt".into()),
+            account_id: Some("uuid-2".into()),
+            expires_at: None,
+        };
+        assert!(!claude_cli_creds_are_newer(&stored, "a@b.com", &cli, "c@d.com"));
+    }
+
+    #[test]
+    fn legacy_row_without_account_id_matches_by_email_only() {
+        let stored = Credentials {
+            access_token: "old-at".into(),
+            refresh_token: Some("old-rt".into()),
+            account_id: None,
+            expires_at: None,
+        };
+        let cli = Credentials {
+            access_token: "new-at".into(),
+            refresh_token: Some("new-rt".into()),
+            account_id: Some("uuid-2".into()),
+            expires_at: None,
+        };
+        // No shared identity → leave the browser row alone.
+        assert!(!claude_cli_creds_are_newer(&stored, "Claude", &cli, "c@d.com"));
+        // Same email label → allow token refresh for that row only.
+        assert!(claude_cli_creds_are_newer(&stored, "c@d.com", &cli, "c@d.com"));
+    }
+
+    #[test]
+    fn multi_account_cli_login_updates_only_matching_row() {
+        // N browser accounts → CLI login for A → only A is eligible.
+        let a = Credentials {
+            access_token: "a-old".into(),
+            refresh_token: Some("a-rt".into()),
+            account_id: Some("acct-a".into()),
+            expires_at: None,
+        };
+        let b = Credentials {
+            access_token: "b-old".into(),
+            refresh_token: Some("b-rt".into()),
+            account_id: Some("acct-b".into()),
+            expires_at: None,
+        };
+        let cli = Credentials {
+            access_token: "a-new".into(),
+            refresh_token: Some("a-rt2".into()),
+            account_id: Some("acct-a".into()),
+            expires_at: None,
+        };
+        assert!(codex_cli_creds_are_newer(&a, "a@ex.com", &cli, "a@ex.com"));
+        assert!(!codex_cli_creds_are_newer(&b, "b@ex.com", &cli, "a@ex.com"));
+        // B's token must remain the eligibility gate's "no" — siblings stay intact.
+        assert_eq!(b.access_token, "b-old");
+    }
+
+    #[test]
+    fn unknown_cli_account_does_not_touch_browser_rows() {
+        // Terminal login to account C (not in the store) must not mutate A or B.
+        let a = Credentials {
+            access_token: "a-old".into(),
+            refresh_token: Some("a-rt".into()),
+            account_id: Some("acct-a".into()),
+            expires_at: None,
+        };
+        let b = Credentials {
+            access_token: "b-old".into(),
+            refresh_token: Some("b-rt".into()),
+            account_id: Some("acct-b".into()),
+            expires_at: None,
+        };
+        let cli = Credentials {
+            access_token: "c-new".into(),
+            refresh_token: Some("c-rt".into()),
+            account_id: Some("acct-c".into()),
+            expires_at: None,
+        };
+        assert!(!codex_cli_creds_are_newer(&a, "a@ex.com", &cli, "c@ex.com"));
+        assert!(!codex_cli_creds_are_newer(&b, "b@ex.com", &cli, "c@ex.com"));
+        assert!(!cli_identity_matches(&a, "a@ex.com", &cli, "c@ex.com"));
+        assert!(!cli_identity_matches(&b, "b@ex.com", &cli, "c@ex.com"));
+    }
+
+    #[test]
+    fn legacy_codex_rows_without_identity_are_not_blindly_overwritten() {
+        // Prior bug: `(None, _) => true` let CLI auth replace every identity-less
+        // browser row (then dedupe collapsed them). Must stay false.
+        let legacy = Credentials {
+            access_token: "browser-at".into(),
+            refresh_token: Some("browser-rt".into()),
+            account_id: None,
+            expires_at: None,
+        };
+        let cli = Credentials {
+            access_token: "cli-at".into(),
+            refresh_token: Some("cli-rt".into()),
+            account_id: Some("acct-cli".into()),
+            expires_at: None,
+        };
+        assert!(!codex_cli_creds_are_newer(&legacy, "Codex", &cli, "cli@ex.com"));
+        assert!(!cli_identity_matches(&legacy, "Codex", &cli, "cli@ex.com"));
     }
 
     #[test]

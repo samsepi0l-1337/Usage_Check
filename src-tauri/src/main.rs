@@ -108,7 +108,11 @@ fn oauth_provider(app: &AppHandle, provider: Provider) {
                 let label = match provider {
                     Provider::Codex => "Codex".to_string(),
                     Provider::Claude => "Claude".to_string(),
-                    Provider::Agy => "agy".to_string(),
+                    // Resolve Google email so a terminal account switch shows
+                    // the new identity immediately (not a stale "agy" label).
+                    Provider::Agy => oauth::agy_email_from_access_token(&creds.access_token)
+                        .await
+                        .unwrap_or_else(|| "agy".to_string()),
                 };
                 if let Err(e) = store.add(provider, label, creds) {
                     eprintln!("oauth: failed to save account: {e}");

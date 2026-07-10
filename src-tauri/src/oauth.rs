@@ -317,12 +317,15 @@ pub fn config(provider: Provider) -> Result<ProviderOAuth, String> {
         }),
         // Claude Code CLI login uses a public PKCE client against Anthropic's
         // console OAuth endpoints. Ephemeral localhost ports are accepted.
+        // Scopes must include `user:sessions:claude_code` (same as Claude Code
+        // Keychain tokens) or the oauth/usage endpoint rejects the token.
         Provider::Claude => Ok(ProviderOAuth {
             client_id: "9d1c250a-e61b-44d9-88ed-5944d1962f5e".to_string(),
             client_secret: None,
             auth_url: "https://console.anthropic.com/oauth/authorize".to_string(),
             token_url: "https://console.anthropic.com/v1/oauth/token".to_string(),
-            scopes: "org:create_api_key user:profile user:inference".to_string(),
+            scopes: "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload"
+                .to_string(),
             fixed_redirect: None,
             extra_authorize_params: Vec::new(),
             use_pkce: true,
@@ -447,16 +450,105 @@ struct TokenResponse {
     account_id: Option<String>,
 }
 
+/// Decodes a JWT payload object without verifying the signature. Pure — never
+/// logs the token. Used only to read non-secret identity claims (`sub`, email,
+/// ChatGPT account id).
+fn jwt_payload_json(jwt: &str) -> Option<serde_json::Value> {
+    let payload_b64 = jwt.split('.').nth(1)?;
+    let bytes = URL_SAFE_NO_PAD.decode(payload_b64).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
 /// Extracts `chatgpt_account_id` from a ChatGPT id_token JWT payload
 /// (`https://api.openai.com/auth` claim). Pure — no I/O, never logs the token.
 pub fn chatgpt_account_id_from_id_token(id_token: &str) -> Option<String> {
-    let payload_b64 = id_token.split('.').nth(1)?;
-    let bytes = URL_SAFE_NO_PAD.decode(payload_b64).ok()?;
-    let root: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
-    root.get("https://api.openai.com/auth")?
+    jwt_payload_json(id_token)?
+        .get("https://api.openai.com/auth")?
         .get("chatgpt_account_id")?
         .as_str()
+        .filter(|s| !s.is_empty())
         .map(str::to_string)
+}
+
+/// Extracts Google account `sub` from an OpenID `id_token`. Pure — never logs.
+pub fn google_sub_from_id_token(id_token: &str) -> Option<String> {
+    jwt_payload_json(id_token)?
+        .get("sub")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+/// Extracts `email` from an OpenID `id_token` JWT payload. Pure — never logs.
+pub fn email_from_id_token(id_token: &str) -> Option<String> {
+    jwt_payload_json(id_token)?
+        .get("email")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+/// Resolves a stable provider account id from a token response: ChatGPT
+/// account id when present, otherwise Google `sub` (Antigravity).
+fn account_id_from_token_response(body: &TokenResponse) -> Option<String> {
+    body.account_id
+        .clone()
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            body.id_token
+                .as_deref()
+                .and_then(chatgpt_account_id_from_id_token)
+        })
+        .or_else(|| body.id_token.as_deref().and_then(google_sub_from_id_token))
+}
+
+/// Google account identity from `userinfo` (email + numeric `id` / `sub`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgyGoogleIdentity {
+    pub email: Option<String>,
+    pub account_id: Option<String>,
+}
+
+/// Fetches Google identity for an Antigravity access token via `userinfo`.
+/// Best-effort — returns `None` on any failure. Never logs the token.
+pub async fn agy_identity_from_access_token(access_token: &str) -> Option<AgyGoogleIdentity> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .ok()?;
+    let resp = client
+        .get("https://www.googleapis.com/oauth2/v2/userinfo")
+        .bearer_auth(access_token)
+        .send()
+        .await
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let body: serde_json::Value = resp.json().await.ok()?;
+    let email = body
+        .get("email")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let account_id = body
+        .get("id")
+        .or_else(|| body.get("sub"))
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    if email.is_none() && account_id.is_none() {
+        return None;
+    }
+    Some(AgyGoogleIdentity { email, account_id })
+}
+
+/// Fetches the Google account email for an Antigravity access token via
+/// `userinfo`. Best-effort — returns `None` on any failure. Never logs the token.
+pub async fn agy_email_from_access_token(access_token: &str) -> Option<String> {
+    agy_identity_from_access_token(access_token)
+        .await
+        .and_then(|id| id.email)
 }
 
 fn bind_callback_server(cfg: &ProviderOAuth) -> Result<(Server, String), String> {
@@ -465,7 +557,7 @@ fn bind_callback_server(cfg: &ProviderOAuth) -> Result<(Server, String), String>
             let server = Server::http(format!("127.0.0.1:{port}")).map_err(|e| {
                 format!(
                     "failed to bind OAuth callback on 127.0.0.1:{port}{path}: {e} \
-                     (is another Codex login already using this port?)"
+                     (is another login already using this port?)"
                 )
             })?;
             // OpenAI registers `localhost`, not `127.0.0.1` — must match exactly.
@@ -557,11 +649,15 @@ pub async fn begin_login(provider: Provider) -> Result<Credentials, String> {
         .expires_in
         .map(|secs| Utc::now() + chrono::Duration::seconds(secs));
 
-    let account_id = body.account_id.or_else(|| {
-        body.id_token
-            .as_deref()
-            .and_then(chatgpt_account_id_from_id_token)
-    });
+    let mut account_id = account_id_from_token_response(&body);
+    // Google access tokens are opaque (`ya29…`); when `id_token` is absent,
+    // resolve a stable `sub`/`id` via userinfo so re-login can upsert by
+    // identity after a terminal account switch.
+    if account_id.is_none() && provider == Provider::Agy {
+        if let Some(identity) = agy_identity_from_access_token(&body.access_token).await {
+            account_id = identity.account_id;
+        }
+    }
 
     Ok(Credentials {
         access_token: body.access_token,
@@ -631,14 +727,7 @@ pub async fn refresh_access_token(provider: Provider, creds: &Credentials) -> Re
         .expires_in
         .map(|secs| Utc::now() + chrono::Duration::seconds(secs));
 
-    let account_id = body
-        .account_id
-        .or_else(|| {
-            body.id_token
-                .as_deref()
-                .and_then(chatgpt_account_id_from_id_token)
-        })
-        .or_else(|| creds.account_id.clone());
+    let account_id = account_id_from_token_response(&body).or_else(|| creds.account_id.clone());
 
     Ok(Credentials {
         access_token: body.access_token,
@@ -803,6 +892,15 @@ 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PX-SECONDSECRETVALUEHERE00https://x";
     }
 
     #[test]
+    fn claude_scopes_match_cli_keychain_contract() {
+        let cfg = config(Provider::Claude).unwrap();
+        assert!(cfg.scopes.contains("user:sessions:claude_code"));
+        assert!(cfg.scopes.contains("user:inference"));
+        assert!(!cfg.scopes.contains("org:create_api_key"));
+        assert!(cfg.use_pkce);
+    }
+
+    #[test]
     fn parse_callback_query_extracts_code_and_state() {
         let params = parse_callback_query("/auth/callback?code=abc123&state=xyz").unwrap();
         assert_eq!(params.code, "abc123");
@@ -824,6 +922,56 @@ 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PX-SECONDSECRETVALUEHERE00https://x";
         assert_eq!(
             chatgpt_account_id_from_id_token(&jwt).as_deref(),
             Some("acct-test-9")
+        );
+    }
+
+    #[test]
+    fn google_sub_and_email_from_id_token() {
+        let payload = URL_SAFE_NO_PAD.encode(
+            br#"{"sub":"116950757786684882215","email":"a@b.com","email_verified":true}"#,
+        );
+        let jwt = format!("e30.{payload}.sig");
+        assert_eq!(
+            google_sub_from_id_token(&jwt).as_deref(),
+            Some("116950757786684882215")
+        );
+        assert_eq!(email_from_id_token(&jwt).as_deref(), Some("a@b.com"));
+        // ChatGPT claim must not be invented from a Google id_token.
+        assert!(chatgpt_account_id_from_id_token(&jwt).is_none());
+    }
+
+    #[test]
+    fn account_id_prefers_chatgpt_then_google_sub() {
+        let google = TokenResponse {
+            access_token: "ya29.x".into(),
+            refresh_token: None,
+            id_token: {
+                let payload = URL_SAFE_NO_PAD.encode(br#"{"sub":"google-sub-1"}"#);
+                Some(format!("e30.{payload}.sig"))
+            },
+            expires_in: None,
+            account_id: None,
+        };
+        assert_eq!(
+            account_id_from_token_response(&google).as_deref(),
+            Some("google-sub-1")
+        );
+
+        let chatgpt = TokenResponse {
+            access_token: "at".into(),
+            refresh_token: None,
+            id_token: {
+                let payload = URL_SAFE_NO_PAD.encode(
+                    br#"{"https://api.openai.com/auth":{"chatgpt_account_id":"acct-1"},"sub":"ignored"}"#,
+                );
+                Some(format!("e30.{payload}.sig"))
+            },
+            expires_in: None,
+            account_id: None,
+        };
+        assert_eq!(
+            account_id_from_token_response(&chatgpt).as_deref(),
+            Some("acct-1")
         );
     }
 
