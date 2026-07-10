@@ -147,6 +147,50 @@ from the OS keychain.
   scanning of `~/.gemini/**/transcript*.jsonl` (including Antigravity CLI
   transcripts) for token totals.
 
+## Local API (for other agents / MCP / skills)
+
+While the tray app is running it also serves a read-only **local HTTP API** so
+other coding agents (Codex, Claude Code, agy, Cursor, ...) can consume the same
+usage data — no tray-UI scraping. It is published from the same 60-second poll
+snapshot the tray renders, so it never makes extra provider calls per request.
+
+- Binds **`127.0.0.1` only** (never exposed off-host); read-only (GET only).
+- **Never** returns access tokens, refresh tokens, or other credentials.
+- Enabled by default. Disable with `USAGECHECK_API_DISABLE=1`.
+- Default port `5178`; override with `USAGECHECK_API_PORT=<port>`.
+
+Endpoints:
+
+| Method & path             | Description                                   |
+| ------------------------- | --------------------------------------------- |
+| `GET /health`             | Service status, version, last-updated, count  |
+| `GET /v1/usage`           | Usage snapshot for all accounts               |
+| `GET /v1/usage/{provider}`| Filtered to `codex` \| `claude` \| `agy`      |
+| `GET /openapi.yaml`       | The OpenAPI 3.1 spec for this API             |
+
+All quota figures are **used percent** (`0` = unused, `100` = exhausted),
+matching the tray (agy `remainingFraction` is already converted). The full
+contract — schemas, examples, error shapes — lives in
+[`docs/openapi.yaml`](docs/openapi.yaml) and is served live at `/openapi.yaml`.
+
+Try it:
+
+```sh
+curl -s http://127.0.0.1:5178/health
+curl -s http://127.0.0.1:5178/v1/usage | jq
+curl -s http://127.0.0.1:5178/v1/usage/codex | jq
+```
+
+An MCP server or agent skill can wrap this by fetching `/v1/usage` (or a
+per-provider path) and surfacing `accounts[].five_hour.used_percent`,
+`week.used_percent`, and agy `pools[]`. Generate a typed client straight from
+the served spec, e.g.:
+
+```sh
+curl -s http://127.0.0.1:5178/openapi.yaml -o usagecheck-openapi.yaml
+# feed usagecheck-openapi.yaml to your OpenAPI client/codegen of choice
+```
+
 ## Credential Storage
 
 All OAuth credentials (access token, refresh token, expiry) are stored in the

@@ -18,6 +18,7 @@ use tauri::{
 use usage_core::account::Provider;
 
 mod agy_local;
+mod api;
 mod import;
 mod oauth;
 mod paths;
@@ -72,6 +73,10 @@ fn tray_icon_image() -> tauri::image::Image<'static> {
 async fn refresh_tray(app: &AppHandle) {
     let store = AccountStore::new();
     let snapshot = poller::poll_all(&store).await;
+    // Publish to the local HTTP API so agents see the same data as the tray.
+    // Synchronous (no `.await`), so the managed-state guard never crosses a
+    // suspension point.
+    app.state::<api::ApiState>().publish(&snapshot);
     let app2 = app.clone();
     let _ = app.run_on_main_thread(move || {
         tray_menu::apply_menu(&app2, &snapshot);
@@ -147,6 +152,7 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
 fn main() {
     tauri::Builder::default()
         .manage(AccountStore::new())
+        .manage(api::ApiState::new())
         .setup(|app| {
             #[cfg(target_os = "macos")]
             {
@@ -184,6 +190,10 @@ fn main() {
             {
                 tray.build(app)?;
             }
+
+            // Local HTTP API (localhost-only) for other agents / MCP / skills.
+            // Disabled via USAGECHECK_API_DISABLE=1; port via USAGECHECK_API_PORT.
+            api::spawn(app.state::<api::ApiState>().inner().clone());
 
             // Initial poll + periodic refresh.
             let app_handle = app.handle().clone();

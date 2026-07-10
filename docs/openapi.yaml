@@ -1,0 +1,298 @@
+openapi: 3.1.0
+info:
+  title: UsageCheck Local API
+  version: "1.0.0"
+  description: |
+    Read-only local HTTP API exposing the same Codex, Claude Code, and
+    Antigravity (agy) usage that the UsageCheck tray menu displays.
+
+    Designed so other coding agents (Codex, Claude Code, agy, Cursor, ...) can
+    build MCP servers or skills on top of a stable JSON contract instead of
+    scraping the tray UI.
+
+    ## Semantics
+    - All quota figures are **used percent** (`0` = unused, `100` = exhausted),
+      matching the tray. Agy `remainingFraction` is already converted to used %.
+    - Data is served from the latest background poll snapshot (refreshed every
+      ~60s). The `updated_at` field reports when that snapshot was produced;
+      it is `null` until the first poll completes.
+
+    ## Security
+    - The server binds to `127.0.0.1` only and is never exposed off-host.
+    - No credentials, access tokens, or refresh tokens are ever returned.
+    - The API is read-only (GET only).
+
+    ## Enabling / configuring
+    - Enabled by default when the tray app runs.
+    - `USAGECHECK_API_DISABLE=1` disables the server.
+    - `USAGECHECK_API_PORT=<port>` overrides the default port (`5178`).
+servers:
+  - url: http://127.0.0.1:5178
+    description: Default local bind (override with USAGECHECK_API_PORT)
+tags:
+  - name: meta
+    description: Service metadata and discovery
+  - name: usage
+    description: Usage snapshots
+paths:
+  /:
+    get:
+      tags: [meta]
+      summary: API index
+      description: Lists the available endpoints and the service version.
+      operationId: getIndex
+      responses:
+        "200":
+          description: Service index
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Index"
+  /health:
+    get:
+      tags: [meta]
+      summary: Health check
+      operationId: getHealth
+      responses:
+        "200":
+          description: Service is up
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+              example:
+                status: ok
+                version: "0.1.1"
+                updated_at: "2026-07-10T03:41:00Z"
+                account_count: 3
+  /v1/usage:
+    get:
+      tags: [usage]
+      summary: All accounts' usage
+      description: Returns the latest usage snapshot for every configured account.
+      operationId: getUsage
+      responses:
+        "200":
+          description: Usage snapshot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UsageResponse"
+  /v1/usage/{provider}:
+    get:
+      tags: [usage]
+      summary: One provider's usage
+      description: Returns the usage snapshot filtered to a single provider.
+      operationId: getUsageByProvider
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          description: Provider identifier.
+          schema:
+            $ref: "#/components/schemas/Provider"
+      responses:
+        "200":
+          description: Usage snapshot for the requested provider
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UsageResponse"
+        "404":
+          description: Unknown provider
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: unknown_provider
+                message: "unknown provider 'foo' (expected codex, claude, or agy)"
+  /openapi.yaml:
+    get:
+      tags: [meta]
+      summary: This OpenAPI document
+      operationId: getOpenapi
+      responses:
+        "200":
+          description: The OpenAPI 3.1 specification for this API
+          content:
+            application/yaml:
+              schema:
+                type: string
+components:
+  schemas:
+    Provider:
+      type: string
+      enum: [codex, claude, agy]
+      description: Usage provider category.
+    Status:
+      type: string
+      enum: [ok, needs_login, rate_limited, error]
+      description: |
+        Freshness/auth status for an account's most recent poll.
+        - `ok`: live data fetched successfully.
+        - `needs_login`: token missing/expired (401/403); may fall back to local logs.
+        - `rate_limited`: provider returned 429.
+        - `error`: network/other failure.
+    Quota:
+      type: object
+      description: A single usage window (used percent).
+      required: [used_percent]
+      properties:
+        used_percent:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 100
+          description: Percent of the window consumed (0-100).
+          example: 38.0
+        window_label:
+          type: string
+          description: Human label derived from window_seconds (e.g. "5h", "7d").
+          example: "5h"
+        window_seconds:
+          type: [integer, "null"]
+          format: int64
+          description: Length of the quota window in seconds, when known.
+          example: 18000
+        resets_at:
+          type: [string, "null"]
+          format: date-time
+          description: RFC3339 timestamp when the window resets, when known.
+          example: "2026-07-10T08:41:00Z"
+    Pool:
+      type: object
+      description: |
+        An Antigravity (agy) Model Quota pool. Agy exposes two shared pools:
+        "Gemini Models" and "Claude and GPT models".
+      required: [name]
+      properties:
+        name:
+          type: string
+          example: "Gemini Models"
+        five_hour:
+          oneOf:
+            - $ref: "#/components/schemas/Quota"
+            - type: "null"
+        week:
+          oneOf:
+            - $ref: "#/components/schemas/Quota"
+            - type: "null"
+    TokenTotals:
+      type: object
+      description: |
+        Local-log token totals (Codex/Claude fallback only, when the live quota
+        API is unavailable). Zero for accounts served from the live quota API.
+      required: [five_hours, week, month]
+      properties:
+        five_hours:
+          type: integer
+          format: int64
+          example: 0
+        week:
+          type: integer
+          format: int64
+          example: 0
+        month:
+          type: integer
+          format: int64
+          example: 0
+    AccountUsage:
+      type: object
+      required: [id, provider, display_name, status, pools, token_totals]
+      properties:
+        id:
+          type: string
+          description: Stable account identifier (UUID).
+          example: "6f1c2b8e-0a1d-4c33-9f6e-2b7c9d0e1a22"
+        provider:
+          $ref: "#/components/schemas/Provider"
+        display_name:
+          type: string
+          description: Email or plan-aware account name.
+          example: "user@example.com"
+        plan:
+          type: [string, "null"]
+          description: Provider plan name, when known.
+          example: "pro"
+        status:
+          $ref: "#/components/schemas/Status"
+        five_hour:
+          oneOf:
+            - $ref: "#/components/schemas/Quota"
+            - type: "null"
+          description: Account-level 5-hour window (most constrained pool for agy).
+        week:
+          oneOf:
+            - $ref: "#/components/schemas/Quota"
+            - type: "null"
+          description: Account-level 7-day window (most constrained pool for agy).
+        pools:
+          type: array
+          description: Per-pool breakdown (agy only; empty for Codex/Claude).
+          items:
+            $ref: "#/components/schemas/Pool"
+        token_totals:
+          $ref: "#/components/schemas/TokenTotals"
+    UsageResponse:
+      type: object
+      required: [updated_at, count, accounts]
+      properties:
+        updated_at:
+          type: [string, "null"]
+          format: date-time
+          description: When the served snapshot was produced (null before first poll).
+          example: "2026-07-10T03:41:00Z"
+        count:
+          type: integer
+          description: Number of accounts in `accounts`.
+          example: 3
+        accounts:
+          type: array
+          items:
+            $ref: "#/components/schemas/AccountUsage"
+    Index:
+      type: object
+      required: [service, version, endpoints]
+      properties:
+        service:
+          type: string
+          example: usagecheck-local-api
+        version:
+          type: string
+          example: "0.1.1"
+        endpoints:
+          type: array
+          items:
+            type: string
+          example:
+            - "GET /health"
+            - "GET /v1/usage"
+            - "GET /v1/usage/{provider}"
+            - "GET /openapi.yaml"
+    Health:
+      type: object
+      required: [status, version, updated_at, account_count]
+      properties:
+        status:
+          type: string
+          example: ok
+        version:
+          type: string
+          example: "0.1.1"
+        updated_at:
+          type: [string, "null"]
+          format: date-time
+        account_count:
+          type: integer
+          example: 3
+    Error:
+      type: object
+      required: [error, message]
+      properties:
+        error:
+          type: string
+          example: unknown_provider
+        message:
+          type: string
+          example: "unknown provider 'foo' (expected codex, claude, or agy)"
