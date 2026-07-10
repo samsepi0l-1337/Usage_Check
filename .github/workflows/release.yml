@@ -80,6 +80,26 @@ jobs:
           fi
           ls -lah "$(grep '^dir=' "$GITHUB_OUTPUT" | cut -d= -f2)" || true
 
+      # Without an Apple Developer ID, Tauri must still ad-hoc sign the .app bundle
+      # (signingIdentity "-"). Linker-only signatures look "damaged" under Gatekeeper.
+      - name: Verify macOS ad-hoc code signature
+        if: matrix.artifact == 'macos'
+        shell: bash
+        run: |
+          set -euo pipefail
+          BUNDLE_DIR="${{ steps.bundles.outputs.dir }}"
+          APP="$BUNDLE_DIR/macos/UsageCheck.app"
+          test -d "$APP"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          codesign -dv --verbose=4 "$APP" 2>&1 | tee /tmp/usagecheck-codesign.txt
+          grep -q 'Signature=adhoc' /tmp/usagecheck-codesign.txt
+          grep -q 'Sealed Resources version=2' /tmp/usagecheck-codesign.txt
+          # Reject linker-only signatures that Gatekeeper treats as damaged.
+          if grep -q 'linker-signed' /tmp/usagecheck-codesign.txt; then
+            echo "ERROR: app is still linker-signed only; bundle was not sealed" >&2
+            exit 1
+          fi
+
       - name: Upload macOS artifacts
         if: matrix.artifact == 'macos'
         uses: actions/upload-artifact@v6

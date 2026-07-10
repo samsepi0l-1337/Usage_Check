@@ -65,6 +65,15 @@ cargo tauri build --bundles dmg,app
 # → target/release/bundle/macos/UsageCheck.app
 ```
 
+macOS builds use an ad-hoc code signature (`bundle.macOS.signingIdentity = "-"`)
+so Gatekeeper does not treat the downloaded app as damaged. Without an Apple
+Developer ID / notarization, the first open may still show “Apple could not
+verify…”. Use **System Settings → Privacy & Security → Open Anyway**, or:
+
+```sh
+xattr -cr /Applications/UsageCheck.app
+```
+
 **Windows EXE / MSI** must be built on Windows (or via CI). From this repo:
 
 ```sh
