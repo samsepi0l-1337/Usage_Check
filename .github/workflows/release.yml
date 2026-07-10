@@ -85,17 +85,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          extra_args=()
           if [ "${{ matrix.edition }}" = "pro" ]; then
-            # Tauri CLI owns --features; pass --no-default-features to cargo so
-            # edition-free (default) is not enabled alongside edition-pro.
-            extra_args+=(-- --no-default-features)
+            cargo tauri build \
+              --features "${{ matrix.cargo_features }}" \
+              ${{ matrix.tauri_config }} \
+              ${{ matrix.args }} \
+              -- --no-default-features
+          else
+            cargo tauri build \
+              --features "${{ matrix.cargo_features }}" \
+              ${{ matrix.tauri_config }} \
+              ${{ matrix.args }}
           fi
-          cargo tauri build \
-            --features "${{ matrix.cargo_features }}" \
-            ${{ matrix.tauri_config }} \
-            ${{ matrix.args }} \
-            "${extra_args[@]}"
 
       - name: Collect bundle paths
         id: bundles
