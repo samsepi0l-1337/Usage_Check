@@ -5,8 +5,6 @@ use chrono::{DateTime, Utc};
 use std::cmp::Ordering;
 use std::path::{Component, Path, PathBuf};
 
-/// Identity proof for a local profile root (auth/email).
-
 /// Reference to an account's credentials and profile roots.
 #[derive(Clone, Debug)]
 pub struct AccountRef<'a> {

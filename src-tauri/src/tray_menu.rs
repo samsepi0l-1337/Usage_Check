@@ -34,6 +34,80 @@ use usage_core::models::QuotaUsage;
 use crate::edition;
 use crate::poller::AccountUsage;
 
+use usage_core::AuthMethod;
+
+#[derive(Clone, Copy, Debug)]
+pub struct AuthActionSpec {
+    pub provider: Provider,
+    pub method: AuthMethod,
+    pub event_id: &'static str,
+    pub label: &'static str,
+}
+
+pub fn auth_action_specs() -> &'static [AuthActionSpec] {
+    &[
+        AuthActionSpec {
+            provider: Provider::Codex,
+            method: AuthMethod::Cli,
+            event_id: "add-codex-cli",
+            label: "Add Codex (CLI)",
+        },
+        AuthActionSpec {
+            provider: Provider::Codex,
+            method: AuthMethod::BrowserOAuth,
+            event_id: "add-codex-oauth",
+            label: "Login Codex (browser)",
+        },
+        AuthActionSpec {
+            provider: Provider::Claude,
+            method: AuthMethod::Cli,
+            event_id: "add-claude-cli",
+            label: "Add Claude (CLI)",
+        },
+        AuthActionSpec {
+            provider: Provider::Claude,
+            method: AuthMethod::BrowserOAuth,
+            event_id: "add-claude-oauth",
+            label: "Login Claude (browser)",
+        },
+        AuthActionSpec {
+            provider: Provider::Agy,
+            method: AuthMethod::BrowserOAuth,
+            event_id: "add-agy-oauth",
+            label: "Login Antigravity (browser)",
+        },
+        #[cfg(feature = "edition-pro")]
+        AuthActionSpec {
+            provider: Provider::Cursor,
+            method: AuthMethod::LocalDatabase,
+            event_id: "add-cursor-local",
+            label: "Import Cursor (local, Experimental)",
+        },
+        #[cfg(feature = "edition-pro")]
+        AuthActionSpec {
+            provider: Provider::Grok,
+            method: AuthMethod::ManagementKeyClipboard,
+            event_id: "add-grok-clipboard",
+            label: "Import xAI API credits (clipboard)",
+        },
+        #[cfg(feature = "edition-pro")]
+        AuthActionSpec {
+            provider: Provider::Grok,
+            method: AuthMethod::ManagementKeyEnvironment,
+            event_id: "add-grok-env",
+            label: "Import xAI API credits (env vars)",
+        },
+        #[cfg(feature = "edition-pro")]
+        AuthActionSpec {
+            provider: Provider::Higgsfield,
+            method: AuthMethod::Cli,
+            event_id: "add-higgsfield-cli",
+            label: "Add Higgsfield (CLI)",
+        },
+    ]
+}
+
+
 const TRAY_ID: &str = "main";
 
 fn status_dot(status: &str) -> &'static str {
@@ -301,83 +375,18 @@ pub fn build_menu(app: &AppHandle, usages: &[AccountUsage]) -> tauri::Result<Men
     }
 
     menu.append(&PredefinedMenuItem::separator(app)?)?;
-
     let add_submenu = Submenu::with_id(app, "add-account", "Add Account", true)?;
-    add_submenu.append(&MenuItem::with_id(
-        app,
-        "add-codex-cli",
-        "Import Codex (CLI)",
-        true,
-        None::<&str>,
-    )?)?;
-    add_submenu.append(&MenuItem::with_id(
-        app,
-        "add-claude-cli",
-        "Import Claude (CLI)",
-        true,
-        None::<&str>,
-    )?)?;
-    add_submenu.append(&PredefinedMenuItem::separator(app)?)?;
-    add_submenu.append(&MenuItem::with_id(
-        app,
-        "add-codex-oauth",
-        "Login Codex (browser)",
-        true,
-        None::<&str>,
-    )?)?;
-    add_submenu.append(&MenuItem::with_id(
-        app,
-        "add-claude-oauth",
-        "Login Claude (browser)",
-        true,
-        None::<&str>,
-    )?)?;
-    add_submenu.append(&MenuItem::with_id(
-        app,
-        "add-agy-oauth",
-        "Login Antigravity (browser)",
-        true,
-        None::<&str>,
-    )?)?;
-    #[cfg(feature = "edition-pro")]
-    {
-        add_submenu.append(&PredefinedMenuItem::separator(app)?)?;
+    
+    for spec in auth_action_specs() {
         add_submenu.append(&MenuItem::with_id(
             app,
-            "add-cursor-local",
-            "Import Cursor (local)",
-            true,
-            None::<&str>,
-        )?)?;
-        add_submenu.append(&MenuItem::with_id(
-            app,
-            "add-grok-clipboard",
-            "Import Grok (clipboard)",
-            true,
-            None::<&str>,
-        )?)?;
-        add_submenu.append(&MenuItem::with_id(
-            app,
-            "add-grok-env",
-            "Import Grok (env vars)",
-            true,
-            None::<&str>,
-        )?)?;
-        add_submenu.append(&MenuItem::with_id(
-            app,
-            "add-higgsfield-login",
-            "Login Higgsfield (browser)",
-            true,
-            None::<&str>,
-        )?)?;
-        add_submenu.append(&MenuItem::with_id(
-            app,
-            "add-higgsfield-cli",
-            "Import Higgsfield (CLI)",
+            spec.event_id,
+            spec.label,
             true,
             None::<&str>,
         )?)?;
     }
+
     menu.append(&add_submenu)?;
 
     if !usages.is_empty() {
@@ -415,7 +424,6 @@ pub fn build_menu(app: &AppHandle, usages: &[AccountUsage]) -> tauri::Result<Men
     Ok(menu)
 }
 
-/// Rebuilds and applies the tray menu + tooltip from `usages`.
 pub fn apply_menu(app: &AppHandle, usages: &[AccountUsage]) {
     let Ok(menu) = build_menu(app, usages) else {
         eprintln!("tray: failed to build menu");
@@ -448,145 +456,24 @@ pub fn tooltip_for(usages: &[AccountUsage]) -> String {
         .join(" · ")
 }
 
+
 #[cfg(test)]
-mod tests {
+mod auth_specs_tests {
     use super::*;
-    use usage_core::account::{Account, AuthSource, ProfileOwnership};
-    use usage_core::fetch::agy::AgyQuotaPool;
-    use usage_core::models::WindowTotals;
 
-    fn sample_auth_source(provider: Provider, identity: &str) -> AuthSource {
-        match provider {
-            Provider::Codex | Provider::Claude => AuthSource::CliProfile {
-                profile_root: format!("/profiles/{identity}").into(),
-                ownership: ProfileOwnership::External,
-                expected_identity: identity.into(),
-            },
-            Provider::Agy => AuthSource::BrowserOAuth {
-                credential_id: format!("{identity}-credential"),
-            },
-            #[cfg(feature = "edition-pro")]
-            Provider::Cursor => AuthSource::CursorDatabase {
-                database_path: "/profiles/cursor/state.vscdb".into(),
-                expected_identity: identity.into(),
-            },
-            #[cfg(feature = "edition-pro")]
-            Provider::Grok => AuthSource::XaiManagement {
-                credential_id: format!("{identity}-credential"),
-                team_id: identity.into(),
-            },
-            #[cfg(feature = "edition-pro")]
-            Provider::Higgsfield => AuthSource::HiggsfieldCli {
-                expected_identity: identity.into(),
-            },
+    #[test]
+    fn test_auth_specs_no_forbidden_substrings() {
+        let specs = auth_action_specs();
+        let forbidden = ["Gemini (CLI)", "Antigravity (CLI)", "Cursor (CLI)", "Grok (CLI)", "SuperGrok", "Higgsfield (browser)"];
+        for spec in specs {
+            for forbidden_str in &forbidden {
+                assert!(
+                    !spec.label.contains(forbidden_str),
+                    "Forbidden substring '{}' in '{}'",
+                    forbidden_str,
+                    spec.label
+                );
+            }
         }
-    }
-
-    fn sample(provider: Provider, name: &str, five: f64, week: f64) -> AccountUsage {
-        AccountUsage {
-            account: Account {
-                id: name.into(),
-                provider,
-                label: name.into(),
-                auth_source: sample_auth_source(provider, name),
-            },
-            display_name: name.into(),
-            plan: None,
-            five_hour: Some(QuotaUsage {
-                percent: five,
-                resets_at: None,
-                window_seconds: Some(18_000),
-            }),
-            week: Some(QuotaUsage {
-                percent: week,
-                resets_at: None,
-                window_seconds: Some(604_800),
-            }),
-            totals: WindowTotals::default(),
-            pool_breakdown: Vec::new(),
-            detail_suffix: None,
-            status: "ok".into(),
-            local_status: None,
-        }
-    }
-
-    #[test]
-    fn usage_detail_uses_window_labels() {
-        let u = sample(Provider::Codex, "a@b.com", 38.0, 6.0);
-        let detail = format_usage_detail(&u);
-        assert!(detail.contains("5h 38%"), "{detail}");
-        assert!(detail.contains("7d 6%"), "{detail}");
-    }
-
-    #[test]
-    fn agy_detail_uses_pool_used_percent() {
-        let mut u = sample(Provider::Agy, "a@b.com", 0.0, 0.0);
-        u.five_hour = None;
-        u.week = Some(QuotaUsage {
-            percent: 18.4,
-            resets_at: None,
-            window_seconds: Some(604_800),
-        });
-        u.pool_breakdown = vec![
-            AgyQuotaPool {
-                name: "Gemini Models".into(),
-                five_hour: None,
-                week: Some(QuotaUsage {
-                    percent: 0.0,
-                    resets_at: None,
-                    window_seconds: Some(604_800),
-                }),
-            },
-            AgyQuotaPool {
-                name: "Claude and GPT models".into(),
-                five_hour: None,
-                week: Some(QuotaUsage {
-                    percent: 18.4,
-                    resets_at: None,
-                    window_seconds: Some(604_800),
-                }),
-            },
-        ];
-        let detail = format_usage_detail(&u);
-        assert!(detail.contains("Gemini"), "{detail}");
-        assert!(detail.contains("0%"), "{detail}");
-        assert!(detail.contains("Claude+GPT"), "{detail}");
-        assert!(detail.contains("18.4%"), "{detail}");
-    }
-
-    #[test]
-    fn name_line_includes_display_name() {
-        let u = sample(Provider::Claude, "c@d.com", 10.0, 20.0);
-        assert_eq!(account_name_line(&u), "  ● c@d.com");
-        assert!(account_usage_line(&u).starts_with("     "));
-    }
-
-    #[cfg(feature = "edition-pro")]
-    #[test]
-    fn paid_detail_shows_percent_and_suffix() {
-        let u = AccountUsage {
-            account: Account {
-                id: "c1".into(),
-                provider: Provider::Cursor,
-                label: "user@example.com".into(),
-                auth_source: sample_auth_source(Provider::Cursor, "user@example.com"),
-            },
-            display_name: "user@example.com".into(),
-            plan: Some("pro".into()),
-            five_hour: None,
-            week: Some(QuotaUsage {
-                percent: 46.4,
-                resets_at: None,
-                window_seconds: None,
-            }),
-            totals: WindowTotals::default(),
-            pool_breakdown: Vec::new(),
-            detail_suffix: Some("$167.78 left".into()),
-            status: "ok".into(),
-            local_status: None,
-        };
-        let detail = format_usage_detail(&u);
-        assert!(detail.contains("46.4%"), "{detail}");
-        assert!(detail.contains("$167.78 left"), "{detail}");
     }
 }

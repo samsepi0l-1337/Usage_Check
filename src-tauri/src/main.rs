@@ -28,6 +28,8 @@ mod paths;
 mod poller;
 mod store;
 mod tray_menu;
+mod terminal;
+mod cli_auth;
 
 use store::AccountStore;
 
