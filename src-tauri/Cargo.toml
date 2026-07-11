@@ -1,6 +1,6 @@
 [package]
 name = "usage-app"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 
 [build-dependencies]
@@ -35,3 +35,7 @@ default = ["custom-protocol", "edition-free"]
 custom-protocol = ["tauri/custom-protocol"]
 edition-free = ["usage-core/edition-free"]
 edition-pro = ["usage-core/edition-pro"]
+
+[dev-dependencies]
+tempfile = "3"
+filetime = "0.2"

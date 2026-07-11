@@ -188,6 +188,11 @@ pub fn format_usage_detail(usage: &AccountUsage) -> String {
     };
 
     if has_five || has_week {
+        if usage.totals.five_hours > 0 || usage.totals.week > 0 || usage.totals.month > 0 {
+            line.push_str(" · ⟨");
+            line.push_str(&format_token_windows(&usage.totals));
+            line.push('⟩');
+        }
         if let Some(reset) = usage
             .five_hour
             .as_ref()
@@ -201,6 +206,11 @@ pub fn format_usage_detail(usage: &AccountUsage) -> String {
     if usage.status != "ok" {
         line.push_str(" (");
         line.push_str(&usage.status);
+        line.push(')');
+    }
+    if let Some(local_status) = usage.local_status.as_deref() {
+        line.push_str(" (local: ");
+        line.push_str(local_status);
         line.push(')');
     }
     line
@@ -380,13 +390,7 @@ pub fn build_menu(app: &AppHandle, usages: &[AccountUsage]) -> tauri::Result<Men
                     vendor_title(usage.account.provider),
                     usage.display_name
                 );
-                remove_submenu.append(&MenuItem::with_id(
-                    app,
-                    &id,
-                    label,
-                    true,
-                    None::<&str>,
-                )?)?;
+                remove_submenu.append(&MenuItem::with_id(app, &id, label, true, None::<&str>)?)?;
             }
         }
         menu.append(&remove_submenu)?;
@@ -502,6 +506,7 @@ mod tests {
             pool_breakdown: Vec::new(),
             detail_suffix: None,
             status: "ok".into(),
+            local_status: None,
         }
     }
 
@@ -578,6 +583,7 @@ mod tests {
             pool_breakdown: Vec::new(),
             detail_suffix: Some("$167.78 left".into()),
             status: "ok".into(),
+            local_status: None,
         };
         let detail = format_usage_detail(&u);
         assert!(detail.contains("46.4%"), "{detail}");

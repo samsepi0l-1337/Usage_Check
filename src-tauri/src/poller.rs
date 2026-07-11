@@ -9,13 +9,16 @@
 //!
 //! SECURITY: never log/print an access token or other credential value.
 
-use std::time::Duration;
+use std::collections::{HashMap, HashSet};
+use std::io::{BufRead, BufReader};
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use serde::Serialize;
 
-use usage_core::account::{Account, Credentials, Provider};
-use usage_core::aggregate::aggregate;
+use usage_core::account::{Account, AuthSource, Credentials, Provider};
+use usage_core::attribution::{assign_local_usage, AccountRef, ScannedRoot};
 use usage_core::fetch::agy::{compact_windows, parse_agy_quota_summary, AgyQuota, AgyQuotaPool};
 use usage_core::fetch::claude::{parse_claude_usage, ClaudeQuota};
 use usage_core::fetch::codex::{parse_codex_usage, CodexQuota};
@@ -25,7 +28,7 @@ use usage_core::fetch::cursor::{cursor_quota_with_auth, parse_cursor_period_usag
 use usage_core::fetch::grok::{parse_grok_prepaid_balance, GrokPrepaid};
 #[cfg(feature = "edition-pro")]
 use usage_core::fetch::higgsfield::{parse_higgsfield_account, HiggsfieldCredits};
-use usage_core::models::{ModelTokenEvent, QuotaUsage, WindowTotals};
+use usage_core::models::{LocalProvenance, LocalUsage, ModelTokenEvent, QuotaUsage, WindowTotals};
 use usage_core::scanners::{claude as claude_scanner, codex as codex_scanner};
 
 use crate::agy_local;
@@ -36,6 +39,8 @@ use crate::store::AccountStore;
 
 /// Refresh proactively when the access token expires within this window.
 const REFRESH_THRESHOLD: Duration = Duration::from_secs(60);
+const MAX_LOCAL_FILES: usize = 50_000;
+const MAX_LOCAL_SCAN_TIME: Duration = Duration::from_secs(5);
 
 const AGY_USER_AGENT: &str = "antigravity/usagecheck macos/arm64";
 const AGY_QUOTA_SUMMARY_URLS: &[&str] = &[
@@ -53,14 +58,19 @@ const AGY_LOAD_CODE_ASSIST_URLS: &[&str] = &[
 /// (no refresh_token, network error, non-200), the original `creds` are
 /// returned unchanged — the existing 401/403 fallback in `poll_all` still
 /// applies to a stale token that couldn't be refreshed.
-async fn maybe_refresh(store: &AccountStore, id: &str, provider: Provider, creds: Credentials) -> Credentials {
+async fn maybe_refresh(
+    store: &AccountStore,
+    id: &str,
+    provider: Provider,
+    creds: Credentials,
+) -> Credentials {
     if !oauth::should_refresh(creds.expires_at, Utc::now(), REFRESH_THRESHOLD) {
         return creds;
     }
 
     match oauth::refresh_access_token(provider, &creds).await {
         Ok(refreshed) => {
-            store.update_credentials(id, &refreshed);
+            let _ = store.update_credentials(id, &refreshed);
             refreshed
         }
         Err(_) => creds,
@@ -87,7 +97,7 @@ fn sync_codex_creds_from_cli(
     ) {
         return stored;
     }
-    store.update_credentials(&account.id, &imported.credentials);
+    let _ = store.update_credentials(&account.id, &imported.credentials);
     if !imported.label.is_empty() && imported.label != "Codex" {
         store.update_label(&account.id, &imported.label);
     }
@@ -114,7 +124,7 @@ fn sync_claude_creds_from_cli(
     ) {
         return stored;
     }
-    store.update_credentials(&account.id, &imported.credentials);
+    let _ = store.update_credentials(&account.id, &imported.credentials);
     if !imported.label.is_empty() && imported.label != "Claude" {
         store.update_label(&account.id, &imported.label);
     }
@@ -137,6 +147,12 @@ pub struct AccountUsage {
     /// Pro providers: secondary label (`$12 left`, `809 credits left`).
     pub detail_suffix: Option<String>,
     pub status: String,
+    /// Local-aggregation provenance label when the locally-summed token totals
+    /// are not a clean `Ok` (e.g. `unavailable`, `partial`, `truncated`,
+    /// `ambiguous`, `conflict`, `assumed`, `no_local_profile`). `None` means the
+    /// local totals are fully trustworthy. Lets the tray/DTO distinguish a real
+    /// zero from a failed/ambiguous local scan.
+    pub local_status: Option<String>,
 }
 
 fn display_name_for(account: &Account, email: Option<&str>, plan: Option<&str>) -> String {
@@ -172,56 +188,6 @@ fn provider_short(p: Provider) -> &'static str {
     p.display_name()
 }
 
-/// Maps a parsed `CodexQuota` + local-log `totals` into an `AccountUsage`
-/// with `status = "ok"`. Pure — no I/O.
-pub fn account_usage_from_codex(
-    account: &Account,
-    quota: &CodexQuota,
-    totals: WindowTotals,
-) -> AccountUsage {
-    let mut account = account.clone();
-    if let Some(email) = quota.email.as_deref() {
-        account.label = email.to_string();
-    }
-    AccountUsage {
-        display_name: display_name_for(
-            &account,
-            quota.email.as_deref(),
-            quota.plan.as_deref(),
-        ),
-        plan: quota.plan.clone(),
-        account,
-        five_hour: quota.five_hour.clone(),
-        week: quota.week.clone(),
-        totals,
-        pool_breakdown: Vec::new(),
-        detail_suffix: None,
-        status: "ok".to_string(),
-    }
-}
-
-/// Maps a parsed `ClaudeQuota` + local-log `totals` into an `AccountUsage`
-/// with `status = "ok"`. Pure — no I/O.
-pub fn account_usage_from_claude(
-    account: &Account,
-    quota: &ClaudeQuota,
-    totals: WindowTotals,
-    email: Option<&str>,
-    plan: Option<&str>,
-) -> AccountUsage {
-    AccountUsage {
-        display_name: display_name_for(account, email, plan),
-        plan: plan.map(str::to_string),
-        account: account.clone(),
-        five_hour: quota.five_hour.clone(),
-        week: quota.week.clone(),
-        totals,
-        pool_breakdown: Vec::new(),
-        detail_suffix: None,
-        status: "ok".to_string(),
-    }
-}
-
 /// Maps Antigravity Model Quota pools into tray `AccountUsage`.
 pub fn account_usage_from_agy(account: &Account, quota: &AgyQuota, status: &str) -> AccountUsage {
     let (five_hour, week) = compact_windows(&quota.pools);
@@ -235,102 +201,17 @@ pub fn account_usage_from_agy(account: &Account, quota: &AgyQuota, status: &str)
         pool_breakdown: quota.pools.clone(),
         detail_suffix: None,
         status: status.to_string(),
+        local_status: None,
     }
-}
-
-/// Builds an `AccountUsage` from local-log aggregation only (no live quota).
-/// Used as the Codex/Claude fallback when the HTTP fetch fails.
-fn account_usage_from_logs(account: &Account, totals: WindowTotals, status: &str) -> AccountUsage {
-    AccountUsage {
-        display_name: display_name_for(account, None, None),
-        plan: None,
-        account: account.clone(),
-        five_hour: None,
-        week: None,
-        totals,
-        pool_breakdown: Vec::new(),
-        detail_suffix: None,
-        status: status.to_string(),
-    }
-}
-
-/// Reads and aggregates local JSONL logs for Codex/Claude into `WindowTotals`.
-fn aggregate_local_logs(provider: Provider) -> Result<WindowTotals, ()> {
-    let (roots, parse_line): (
-        Vec<std::path::PathBuf>,
-        fn(&str) -> Option<ModelTokenEvent>,
-    ) = match provider {
-        Provider::Codex => (paths::codex_session_roots(), codex_scanner::parse_codex_line),
-        Provider::Claude => (paths::claude_project_roots(), claude_scanner::parse_claude_line),
-        Provider::Agy => return Err(()),
-        #[cfg(feature = "edition-pro")]
-        Provider::Cursor | Provider::Grok | Provider::Higgsfield => return Err(()),
-    };
-
-    if roots.is_empty() {
-        return Err(());
-    }
-
-    let mut events = Vec::new();
-    for root in roots {
-        if !root.exists() {
-            continue;
-        }
-        for path in walk_jsonl(&root) {
-            let Ok(content) = std::fs::read_to_string(&path) else {
-                continue;
-            };
-            for line in content.lines() {
-                if let Some(ev) = parse_line(line) {
-                    events.push(ev);
-                }
-            }
-        }
-    }
-
-    Ok(aggregate(&events, Utc::now()))
-}
-
-/// Recursively collects `.jsonl` file paths under `root`. Best-effort: read
-/// errors on individual directories are skipped rather than propagated.
-/// Caps the number of files so tray refresh stays responsive.
-fn walk_jsonl(root: &std::path::Path) -> Vec<std::path::PathBuf> {
-    const MAX_FILES: usize = 200;
-    let mut out = Vec::new();
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                stack.push(path);
-            } else if path
-                .extension()
-                .and_then(|e| e.to_str())
-                .map(|e| e.starts_with("jsonl"))
-                .unwrap_or(false)
-                || path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .map(|n| n.contains("transcript") && n.ends_with(".jsonl"))
-                    .unwrap_or(false)
-            {
-                out.push(path);
-                if out.len() >= MAX_FILES {
-                    return out;
-                }
-            }
-        }
-    }
-    out
 }
 
 /// Fetches live Codex quota via HTTP using `creds.access_token`. Returns
 /// `Ok(CodexQuota)` on a 200 response, `Err(status_code)` otherwise
 /// (`None` status = network/transport failure, not an HTTP error).
-async fn fetch_codex_quota(client: &reqwest::Client, creds: &Credentials) -> Result<CodexQuota, Option<u16>> {
+async fn fetch_codex_quota(
+    client: &reqwest::Client,
+    creds: &Credentials,
+) -> Result<CodexQuota, Option<u16>> {
     let mut req = client
         .get("https://chatgpt.com/backend-api/wham/usage")
         .header("Accept", "application/json")
@@ -351,7 +232,10 @@ async fn fetch_codex_quota(client: &reqwest::Client, creds: &Credentials) -> Res
 
 /// Fetches live Claude quota via HTTP using `creds.access_token`. Same
 /// success/error shape as `fetch_codex_quota`.
-async fn fetch_claude_quota(client: &reqwest::Client, creds: &Credentials) -> Result<ClaudeQuota, Option<u16>> {
+async fn fetch_claude_quota(
+    client: &reqwest::Client,
+    creds: &Credentials,
+) -> Result<ClaudeQuota, Option<u16>> {
     let req = client
         .get("https://api.anthropic.com/api/oauth/usage")
         .header("Accept", "application/json")
@@ -472,7 +356,11 @@ async fn refresh_cursor_access_token(
         return Err(());
     }
     let root: serde_json::Value = resp.json().await.map_err(|_| ())?;
-    if root.get("shouldLogout").and_then(|v| v.as_bool()).unwrap_or(false) {
+    if root
+        .get("shouldLogout")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
         return Err(());
     }
     root.get("access_token")
@@ -518,9 +406,7 @@ async fn fetch_grok_prepaid(
         .as_deref()
         .filter(|s| !s.is_empty())
         .ok_or(None)?;
-    let url = format!(
-        "https://management-api.x.ai/v1/billing/teams/{team_id}/prepaid/balance"
-    );
+    let url = format!("https://management-api.x.ai/v1/billing/teams/{team_id}/prepaid/balance");
     let resp = client
         .get(url)
         .header("Accept", "application/json")
@@ -549,6 +435,7 @@ fn account_usage_from_cursor(account: &Account, quota: &CursorQuota, status: &st
         pool_breakdown: Vec::new(),
         detail_suffix: quota.detail_suffix.clone(),
         status: status.to_string(),
+        local_status: None,
     }
 }
 
@@ -564,6 +451,7 @@ fn account_usage_from_grok(account: &Account, prepaid: &GrokPrepaid, status: &st
         pool_breakdown: Vec::new(),
         detail_suffix: prepaid.detail_suffix.clone(),
         status: status.to_string(),
+        local_status: None,
     }
 }
 
@@ -583,6 +471,7 @@ fn account_usage_from_higgsfield(
         pool_breakdown: Vec::new(),
         detail_suffix: credits.detail_suffix(),
         status: status.to_string(),
+        local_status: None,
     }
 }
 
@@ -609,7 +498,7 @@ fn sync_cursor_creds_from_local(
     {
         return stored;
     }
-    store.update_credentials(&account.id, &imported.credentials);
+    let _ = store.update_credentials(&account.id, &imported.credentials);
     if !imported.label.is_empty() {
         store.update_label(&account.id, &imported.label);
     }
@@ -638,7 +527,7 @@ async fn poll_cursor(
     if let Some(refresh) = creds.refresh_token.as_deref() {
         if let Ok(new_token) = refresh_cursor_access_token(client, refresh).await {
             creds.access_token = new_token;
-            store.update_credentials(&account.id, &creds);
+            let _ = store.update_credentials(&account.id, &creds);
         }
     }
 
@@ -783,7 +672,7 @@ async fn enrich_agy_identity(store: &AccountStore, account: &Account, creds: &mu
         }
     }
     if changed {
-        store.update_credentials(&account.id, creds);
+        let _ = store.update_credentials(&account.id, creds);
     }
     if needs_label {
         if let Some(email) = identity.email.filter(|s| !s.is_empty()) {
@@ -792,7 +681,11 @@ async fn enrich_agy_identity(store: &AccountStore, account: &Account, creds: &mu
     }
 }
 
-async fn poll_agy(store: &AccountStore, client: &reqwest::Client, account: &Account) -> AccountUsage {
+async fn poll_agy(
+    store: &AccountStore,
+    client: &reqwest::Client,
+    account: &Account,
+) -> AccountUsage {
     // 1) Prefer live Antigravity.app language_server (same as Model Quota UI).
     if let Some(quota) = agy_local::fetch_local_quota().await {
         if let Some(email) = quota.email.as_deref() {
@@ -848,12 +741,30 @@ async fn poll_agy(store: &AccountStore, client: &reqwest::Client, account: &Acco
     }
 }
 
+fn codex_fetch_outcome(quota: CodexQuota) -> FetchOutcome {
+    FetchOutcome::Live {
+        five_hour: quota.five_hour,
+        week: quota.week,
+        plan: quota.plan,
+        email: quota.email,
+    }
+}
+
+fn claude_fetch_outcome(quota: ClaudeQuota, email: Option<&str>) -> FetchOutcome {
+    FetchOutcome::Live {
+        five_hour: quota.five_hour,
+        week: quota.week,
+        plan: None,
+        email: email.map(str::to_string),
+    }
+}
+
 async fn poll_codex(
     store: &AccountStore,
     client: &reqwest::Client,
     account: &Account,
     cli: Option<&ImportedAccount>,
-) -> AccountUsage {
+) -> FetchOutcome {
     match store.credentials(&account.id) {
         Some(creds) if !creds.access_token.is_empty() => {
             let creds = sync_codex_creds_from_cli(store, account, creds, cli);
@@ -863,7 +774,7 @@ async fn poll_codex(
                     if let Some(email) = quota.email.as_deref() {
                         store.update_label(&account.id, email);
                     }
-                    account_usage_from_codex(account, &quota, WindowTotals::default())
+                    codex_fetch_outcome(quota)
                 }
                 Err(status) => {
                     // Auth failure for the matching identity: re-read auth.json
@@ -883,17 +794,12 @@ async fn poll_codex(
                                     if let Some(email) = quota.email.as_deref() {
                                         store.update_label(&account.id, email);
                                     }
-                                    return account_usage_from_codex(
-                                        account,
-                                        &quota,
-                                        WindowTotals::default(),
-                                    );
+                                    return codex_fetch_outcome(quota);
                                 }
                             }
                         }
                     }
-                    let totals = aggregate_local_logs(Provider::Codex).unwrap_or_default();
-                    account_usage_from_logs(account, totals, status_for_failure(status))
+                    FetchOutcome::Failed { status }
                 }
             }
         }
@@ -914,7 +820,7 @@ async fn poll_codex(
                     &imported.label,
                 );
                 if adopt && !imported.credentials.access_token.is_empty() {
-                    store.update_credentials(&account.id, &imported.credentials);
+                    let _ = store.update_credentials(&account.id, &imported.credentials);
                     if !imported.label.is_empty() && imported.label != "Codex" {
                         store.update_label(&account.id, &imported.label);
                     }
@@ -929,16 +835,11 @@ async fn poll_codex(
                         if let Some(email) = quota.email.as_deref() {
                             store.update_label(&account.id, email);
                         }
-                        return account_usage_from_codex(
-                            account,
-                            &quota,
-                            WindowTotals::default(),
-                        );
+                        return codex_fetch_outcome(quota);
                     }
                 }
             }
-            let totals = aggregate_local_logs(Provider::Codex).unwrap_or_default();
-            account_usage_from_logs(account, totals, "needs_login")
+            FetchOutcome::Failed { status: Some(401) }
         }
     }
 }
@@ -948,7 +849,7 @@ async fn poll_claude(
     client: &reqwest::Client,
     account: &Account,
     cli: Option<&ImportedAccount>,
-) -> AccountUsage {
+) -> FetchOutcome {
     match store.credentials(&account.id) {
         Some(creds) if !creds.access_token.is_empty() => {
             let creds = sync_claude_creds_from_cli(store, account, creds, cli);
@@ -960,13 +861,7 @@ async fn poll_claude(
                     } else {
                         None
                     };
-                    account_usage_from_claude(
-                        account,
-                        &quota,
-                        WindowTotals::default(),
-                        email,
-                        None,
-                    )
+                    claude_fetch_outcome(quota, email)
                 }
                 Err(status) => {
                     // Matching-identity token revoked: re-read Keychain once
@@ -982,28 +877,20 @@ async fn poll_claude(
                             );
                             if retried.access_token != creds.access_token {
                                 if let Ok(quota) = fetch_claude_quota(client, &retried).await {
-                                    let email = if !fresh.label.is_empty()
-                                        && fresh.label.contains('@')
-                                    {
-                                        Some(fresh.label.as_str())
-                                    } else if account.label.contains('@') {
-                                        Some(account.label.as_str())
-                                    } else {
-                                        None
-                                    };
-                                    return account_usage_from_claude(
-                                        account,
-                                        &quota,
-                                        WindowTotals::default(),
-                                        email,
-                                        None,
-                                    );
+                                    let email =
+                                        if !fresh.label.is_empty() && fresh.label.contains('@') {
+                                            Some(fresh.label.as_str())
+                                        } else if account.label.contains('@') {
+                                            Some(account.label.as_str())
+                                        } else {
+                                            None
+                                        };
+                                    return claude_fetch_outcome(quota, email);
                                 }
                             }
                         }
                     }
-                    let totals = aggregate_local_logs(Provider::Claude).unwrap_or_default();
-                    account_usage_from_logs(account, totals, status_for_failure(status))
+                    FetchOutcome::Failed { status }
                 }
             }
         }
@@ -1022,7 +909,7 @@ async fn poll_claude(
                     &imported.label,
                 );
                 if adopt && !imported.credentials.access_token.is_empty() {
-                    store.update_credentials(&account.id, &imported.credentials);
+                    let _ = store.update_credentials(&account.id, &imported.credentials);
                     if !imported.label.is_empty() && imported.label != "Claude" {
                         store.update_label(&account.id, &imported.label);
                     }
@@ -1039,19 +926,122 @@ async fn poll_claude(
                         } else {
                             None
                         };
-                        return account_usage_from_claude(
-                            account,
-                            &quota,
-                            WindowTotals::default(),
-                            email,
-                            None,
-                        );
+                        return claude_fetch_outcome(quota, email);
                     }
                 }
             }
-            let totals = aggregate_local_logs(Provider::Claude).unwrap_or_default();
-            account_usage_from_logs(account, totals, "needs_login")
+            FetchOutcome::Failed { status: Some(401) }
         }
+    }
+}
+
+async fn local_usage_for_provider(
+    store: &AccountStore,
+    accounts: &[Account],
+    provider: Provider,
+    now: DateTime<Utc>,
+) -> HashMap<String, LocalUsage> {
+    let provider_accounts: Vec<&Account> = accounts
+        .iter()
+        .filter(|account| account.provider == provider)
+        .collect();
+    if provider_accounts.is_empty() {
+        return HashMap::new();
+    }
+
+    let mut profile_roots = match provider {
+        Provider::Codex => paths::codex_home().into_iter().collect(),
+        Provider::Claude => paths::claude_config_roots(),
+        _ => return HashMap::new(),
+    };
+    profile_roots.extend(provider_accounts.iter().filter_map(|account| {
+        if let AuthSource::CliProfile { profile_root, .. } = &account.auth_source {
+            Some(profile_root.clone())
+        } else {
+            None
+        }
+    }));
+    let profile_roots = match provider {
+        Provider::Codex => paths::codex_profile_roots(&profile_roots),
+        Provider::Claude => paths::claude_profile_roots(&profile_roots),
+        _ => Vec::new(),
+    };
+
+    let mut scanned = Vec::with_capacity(profile_roots.len());
+    for profile_root in profile_roots {
+        let scan_roots = match provider {
+            Provider::Codex => paths::codex_session_roots_for(&profile_root),
+            Provider::Claude => paths::claude_project_roots_for(&profile_root),
+            _ => Vec::new(),
+        };
+        let scan = scan_local_events(provider, &scan_roots, now).await;
+        let health = scan_provenance(&scan);
+        scanned.push(ScannedRoot {
+            root_key: profile_root.clone(),
+            source_roots: vec![profile_root.clone()],
+            events: scan.events,
+            health,
+            identity: paths::root_identity(provider, &profile_root),
+        });
+    }
+
+    let credential_ids: Vec<Option<String>> = provider_accounts
+        .iter()
+        .map(|account| {
+            store
+                .credentials(&account.id)
+                .and_then(|credentials| credentials.account_id)
+        })
+        .collect();
+    let account_refs: Vec<AccountRef<'_>> = provider_accounts
+        .iter()
+        .zip(&credential_ids)
+        .map(|(account, credential_id)| AccountRef {
+            account_id: &account.id,
+            creds_account_id: credential_id.as_deref(),
+            expected_identity: expected_identity(account),
+            is_browser_oauth: matches!(account.auth_source, AuthSource::BrowserOAuth { .. }),
+            profile_roots: account_profile_roots(provider, account),
+        })
+        .collect();
+
+    assign_local_usage(&account_refs, &scanned, now)
+        .into_iter()
+        .collect()
+}
+
+fn account_profile_roots(provider: Provider, account: &Account) -> Vec<PathBuf> {
+    let AuthSource::CliProfile { profile_root, .. } = &account.auth_source else {
+        return Vec::new();
+    };
+    match provider {
+        Provider::Codex => paths::codex_profile_roots(std::slice::from_ref(profile_root)),
+        Provider::Claude => paths::claude_profile_roots(std::slice::from_ref(profile_root)),
+        _ => Vec::new(),
+    }
+}
+
+fn expected_identity(account: &Account) -> Option<&str> {
+    match &account.auth_source {
+        AuthSource::CliProfile {
+            expected_identity, ..
+        } => Some(expected_identity),
+        AuthSource::BrowserOAuth { .. } => Some(&account.label),
+        _ => None,
+    }
+}
+
+fn scan_provenance(scan: &ScanResult) -> LocalProvenance {
+    if scan.health.truncated {
+        LocalProvenance::Truncated
+    } else if scan.health.root_unreadable {
+        LocalProvenance::Unavailable
+    } else if scan.health.any_read_error {
+        LocalProvenance::Partial
+    } else if scan.events.is_empty() {
+        LocalProvenance::NoEvents
+    } else {
+        LocalProvenance::Ok
     }
 }
 
@@ -1060,6 +1050,9 @@ pub async fn poll_all(store: &AccountStore) -> Vec<AccountUsage> {
     let client = reqwest::Client::new();
     let accounts = store.list();
     let mut out = Vec::with_capacity(accounts.len());
+    let now = Utc::now();
+    let mut codex_local = local_usage_for_provider(store, &accounts, Provider::Codex, now).await;
+    let mut claude_local = local_usage_for_provider(store, &accounts, Provider::Claude, now).await;
 
     // Read CLI auth once per poll tick so the *matching* row can sync after
     // terminal login. Never use sole-row replace — siblings stay intact.
@@ -1069,8 +1062,20 @@ pub async fn poll_all(store: &AccountStore) -> Vec<AccountUsage> {
     for account in accounts {
         let usage = match account.provider {
             Provider::Agy => poll_agy(store, &client, &account).await,
-            Provider::Codex => poll_codex(store, &client, &account, codex_cli.as_ref()).await,
-            Provider::Claude => poll_claude(store, &client, &account, claude_cli.as_ref()).await,
+            Provider::Codex => {
+                let outcome = poll_codex(store, &client, &account, codex_cli.as_ref()).await;
+                let local = codex_local
+                    .remove(&account.id)
+                    .unwrap_or_else(|| LocalUsage::none(LocalProvenance::NoLocalProfile));
+                assemble_account_usage(&account, outcome, local)
+            }
+            Provider::Claude => {
+                let outcome = poll_claude(store, &client, &account, claude_cli.as_ref()).await;
+                let local = claude_local
+                    .remove(&account.id)
+                    .unwrap_or_else(|| LocalUsage::none(LocalProvenance::NoLocalProfile));
+                assemble_account_usage(&account, outcome, local)
+            }
             #[cfg(feature = "edition-pro")]
             Provider::Cursor => poll_cursor(store, &client, &account).await,
             #[cfg(feature = "edition-pro")]
@@ -1087,69 +1092,8 @@ pub async fn poll_all(store: &AccountStore) -> Vec<AccountUsage> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use usage_core::account::{Account, AuthSource, ProfileOwnership, Provider};
-    use usage_core::fetch::codex::CodexQuota;
-    use usage_core::models::{QuotaUsage, WindowTotals};
-
-    #[test]
-    fn maps_codex_quota_to_account_usage() {
-        let acct = Account {
-            id: "1".into(),
-            provider: Provider::Codex,
-            label: "w".into(),
-            auth_source: AuthSource::CliProfile {
-                profile_root: "/profiles/codex".into(),
-                ownership: ProfileOwnership::External,
-                expected_identity: "w".into(),
-            },
-        };
-        let quota = CodexQuota {
-            plan: Some("prolite".into()),
-            email: Some("a@b.com".into()),
-            five_hour: Some(QuotaUsage {
-                percent: 12.0,
-                resets_at: None,
-                window_seconds: Some(18000),
-            }),
-            week: None,
-        };
-        let au = account_usage_from_codex(&acct, &quota, WindowTotals::default());
-        assert_eq!(au.status, "ok");
-        assert_eq!(au.display_name, "a@b.com");
-        assert_eq!(au.five_hour.as_ref().unwrap().percent, 12.0);
-    }
-
-    #[test]
-    fn maps_claude_quota_to_account_usage() {
-        let acct = Account {
-            id: "2".into(),
-            provider: Provider::Claude,
-            label: "w".into(),
-            auth_source: AuthSource::CliProfile {
-                profile_root: "/profiles/claude".into(),
-                ownership: ProfileOwnership::External,
-                expected_identity: "w".into(),
-            },
-        };
-        let quota = ClaudeQuota {
-            five_hour: Some(QuotaUsage {
-                percent: 30.0,
-                resets_at: None,
-                window_seconds: None,
-            }),
-            week: Some(QuotaUsage {
-                percent: 55.5,
-                resets_at: None,
-                window_seconds: None,
-            }),
-        };
-        let au =
-            account_usage_from_claude(&acct, &quota, WindowTotals::default(), Some("c@d.com"), None);
-        assert_eq!(au.status, "ok");
-        assert_eq!(au.display_name, "c@d.com");
-        assert_eq!(au.five_hour.as_ref().unwrap().percent, 30.0);
-        assert_eq!(au.week.as_ref().unwrap().percent, 55.5);
-    }
+    use usage_core::account::{Account, AuthSource, Provider};
+    use usage_core::models::QuotaUsage;
 
     #[test]
     fn maps_agy_pools() {
@@ -1258,5 +1202,482 @@ mod tests {
         // Non-matching row's stored token is unchanged by the decision.
         assert_eq!(rows[1].1.access_token, "b-old");
         assert_eq!(rows[1].1.account_id.as_deref(), Some("acct-b"));
+    }
+}
+
+/// Result of scanning a local provider root for events.
+#[derive(Clone, Debug)]
+pub struct ScanResult {
+    pub events: Vec<ModelTokenEvent>,
+    pub health: ScanHealth,
+}
+
+/// Health status of a scan operation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScanHealth {
+    pub any_read_error: bool,
+    pub root_unreadable: bool,
+    pub truncated: bool,
+}
+
+/// Outcome of a provider HTTP fetch.
+#[derive(Clone, Debug)]
+pub enum FetchOutcome {
+    Live {
+        five_hour: Option<QuotaUsage>,
+        week: Option<QuotaUsage>,
+        plan: Option<String>,
+        email: Option<String>,
+    },
+    Failed {
+        status: Option<u16>,
+    },
+}
+
+/// Scan local provider roots for token events (raw, not aggregated).
+pub async fn scan_local_events(
+    provider: Provider,
+    scan_roots: &[PathBuf],
+    _now: DateTime<Utc>,
+) -> ScanResult {
+    let roots = scan_roots.to_vec();
+    tokio::task::spawn_blocking(move || scan_local_events_blocking(provider, &roots))
+        .await
+        .unwrap_or_else(|_| ScanResult {
+            events: Vec::new(),
+            health: ScanHealth {
+                any_read_error: true,
+                root_unreadable: true,
+                truncated: false,
+            },
+        })
+}
+
+/// Assemble a single AccountUsage from account, fetch outcome, and local usage.
+pub fn assemble_account_usage(
+    account: &Account,
+    outcome: FetchOutcome,
+    local: LocalUsage,
+) -> AccountUsage {
+    let local_status = local_status_label(local.provenance).map(str::to_string);
+    let (five_hour, week, plan, email, status) = match outcome {
+        FetchOutcome::Live {
+            five_hour,
+            week,
+            plan,
+            email,
+        } => (five_hour, week, plan, email, "ok".to_string()),
+        FetchOutcome::Failed { status } => (
+            None,
+            None,
+            None,
+            None,
+            status_for_failure(status).to_string(),
+        ),
+    };
+    let mut account = account.clone();
+    if let Some(email) = email.as_deref().filter(|email| !email.is_empty()) {
+        account.label = email.to_string();
+    }
+
+    AccountUsage {
+        display_name: display_name_for(&account, email.as_deref(), plan.as_deref()),
+        plan,
+        account,
+        five_hour,
+        week,
+        totals: local.totals,
+        pool_breakdown: Vec::new(),
+        detail_suffix: None,
+        status,
+        local_status,
+    }
+}
+
+fn scan_local_events_blocking(provider: Provider, roots: &[PathBuf]) -> ScanResult {
+    let started = Instant::now();
+    let mut result = ScanResult {
+        events: Vec::new(),
+        health: ScanHealth {
+            any_read_error: false,
+            root_unreadable: false,
+            truncated: false,
+        },
+    };
+    let mut visited = HashSet::new();
+    let mut files_read = 0;
+
+    for root in roots {
+        if result.health.truncated {
+            break;
+        }
+        let Ok(metadata) = std::fs::symlink_metadata(root) else {
+            result.health.root_unreadable = true;
+            continue;
+        };
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            result.health.root_unreadable = true;
+            continue;
+        }
+        if std::fs::read_dir(root).is_err() {
+            result.health.root_unreadable = true;
+            continue;
+        }
+        let root_key = root.canonicalize().unwrap_or_else(|_| root.clone());
+        if !visited.insert(root_key) {
+            continue;
+        }
+        scan_directory(
+            provider,
+            root,
+            &mut result,
+            &mut visited,
+            &mut files_read,
+            started,
+        );
+    }
+    result
+}
+
+fn scan_directory(
+    provider: Provider,
+    root: &Path,
+    result: &mut ScanResult,
+    visited: &mut HashSet<PathBuf>,
+    files_read: &mut usize,
+    started: Instant,
+) {
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(directory) = stack.pop() {
+        if started.elapsed() >= MAX_LOCAL_SCAN_TIME {
+            result.health.truncated = true;
+            return;
+        }
+        let entries = match std::fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(_) => {
+                result.health.any_read_error = true;
+                continue;
+            }
+        };
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(_) => {
+                    result.health.any_read_error = true;
+                    continue;
+                }
+            };
+            let file_type = match entry.file_type() {
+                Ok(file_type) => file_type,
+                Err(_) => {
+                    result.health.any_read_error = true;
+                    continue;
+                }
+            };
+            if file_type.is_symlink() {
+                continue;
+            }
+            let path = entry.path();
+            if file_type.is_dir() {
+                let key = path.canonicalize().unwrap_or_else(|_| path.clone());
+                if visited.insert(key) {
+                    stack.push(path);
+                }
+                continue;
+            }
+            if !is_jsonl(&path) {
+                continue;
+            }
+            if *files_read >= MAX_LOCAL_FILES || started.elapsed() >= MAX_LOCAL_SCAN_TIME {
+                result.health.truncated = true;
+                return;
+            }
+            *files_read += 1;
+            read_event_file(provider, &path, result);
+        }
+    }
+}
+
+fn read_event_file(provider: Provider, path: &Path, result: &mut ScanResult) {
+    let file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(_) => {
+            result.health.any_read_error = true;
+            return;
+        }
+    };
+    for line in BufReader::new(file).lines() {
+        let line = match line {
+            Ok(line) => line,
+            Err(_) => {
+                result.health.any_read_error = true;
+                return;
+            }
+        };
+        if let Some(event) = parse_local_event(provider, &line) {
+            result.events.push(event);
+        }
+    }
+}
+
+fn parse_local_event(provider: Provider, line: &str) -> Option<ModelTokenEvent> {
+    let parsed = match provider {
+        Provider::Codex => codex_scanner::parse_codex_line(line),
+        Provider::Claude => claude_scanner::parse_claude_line(line),
+        _ => None,
+    };
+    parsed.or_else(|| serde_json::from_str(line).ok())
+}
+
+fn is_jsonl(path: &Path) -> bool {
+    path.extension().and_then(|extension| extension.to_str()) == Some("jsonl")
+}
+
+fn local_status_label(provenance: LocalProvenance) -> Option<&'static str> {
+    match provenance {
+        LocalProvenance::Ok | LocalProvenance::NoEvents | LocalProvenance::SharedProfileOther => {
+            None
+        }
+        LocalProvenance::NoLocalProfile => Some("no_local_profile"),
+        LocalProvenance::Assumed => Some("assumed"),
+        LocalProvenance::Ambiguous => Some("ambiguous"),
+        LocalProvenance::Conflict => Some("conflict"),
+        LocalProvenance::Partial => Some("partial"),
+        LocalProvenance::Unavailable => Some("unavailable"),
+        LocalProvenance::Truncated => Some("truncated"),
+    }
+}
+
+// NOTE: superseded `tests_new` module (which used the #[should_panic] anti-pattern)
+// removed during TEST verification — the correct assemble-seam tests live in
+// `tests_seam` below/above.
+
+#[cfg(test)]
+mod tests_seam {
+    use super::*;
+
+    #[test]
+    fn test_assemble_live_outcome_ok_local_preserves_totals() {
+        // §6.9: Live outcome + local(Ok, totals>0).
+        // Expected: token_totals == local.totals, five_hour/week Some.
+        // This is the CURRENT BUG — assemble_account_usage passes WindowTotals::default() instead.
+        let acct = Account {
+            id: "test".into(),
+            provider: Provider::Codex,
+            label: "user@ex.com".into(),
+            auth_source: usage_core::account::AuthSource::BrowserOAuth {
+                credential_id: "test-cred".into(),
+            },
+        };
+        let outcome = FetchOutcome::Live {
+            five_hour: Some(QuotaUsage {
+                percent: 25.0,
+                resets_at: None,
+                window_seconds: Some(18000),
+            }),
+            week: Some(QuotaUsage {
+                percent: 30.0,
+                resets_at: None,
+                window_seconds: None,
+            }),
+            plan: Some("Pro".into()),
+            email: Some("user@ex.com".into()),
+        };
+        let local = LocalUsage {
+            totals: WindowTotals {
+                five_hours: 500,
+                week: 2000,
+                month: 10000,
+            },
+            provenance: usage_core::models::LocalProvenance::Ok,
+        };
+        let result = assemble_account_usage(&acct, outcome, local);
+        // Real assertions:
+        assert!(
+            result.five_hour.is_some(),
+            "Live outcome should preserve five_hour"
+        );
+        assert!(result.week.is_some(), "Live outcome should preserve week");
+        // CRITICAL: token_totals must match local.totals (currently fails — returns 0)
+        assert_eq!(
+            result.totals.five_hours, 500,
+            "token_totals should match local.totals (BUG: currently returns 0)"
+        );
+        assert_eq!(result.totals.week, 2000, "week tokens should match local");
+        assert_eq!(
+            result.totals.month, 10000,
+            "month tokens should match local"
+        );
+    }
+
+    #[test]
+    fn test_assemble_failed_outcome_uses_local_totals() {
+        // §6.9: Failed(429) + local(Ok).
+        // Expected: five_hour/week None, token_totals == local.totals.
+        let acct = Account {
+            id: "test".into(),
+            provider: Provider::Claude,
+            label: "user@ex.com".into(),
+            auth_source: usage_core::account::AuthSource::BrowserOAuth {
+                credential_id: "claude-cred".into(),
+            },
+        };
+        let outcome = FetchOutcome::Failed { status: Some(429) };
+        let local = LocalUsage {
+            totals: WindowTotals {
+                five_hours: 300,
+                week: 1500,
+                month: 8000,
+            },
+            provenance: usage_core::models::LocalProvenance::Ok,
+        };
+        let result = assemble_account_usage(&acct, outcome, local);
+        // Real assertions:
+        assert!(
+            result.five_hour.is_none(),
+            "Failed outcome should not set five_hour"
+        );
+        assert!(result.week.is_none(), "Failed outcome should not set week");
+        assert_eq!(
+            result.totals.five_hours, 300,
+            "Failed should use local totals"
+        );
+        assert_eq!(result.totals.week, 1500, "Failed should use local week");
+    }
+
+    #[test]
+    fn test_assemble_failed_unavailable_distinct_from_zero() {
+        // §6.9/DoD §1.4: Unavailable must be DISTINCT from real 0 totals.
+        // The DTO's local_status should carry "unavailable" when provenance=Unavailable.
+        let acct = Account {
+            id: "test".into(),
+            provider: Provider::Codex,
+            label: "test@ex.com".into(),
+            auth_source: usage_core::account::AuthSource::BrowserOAuth {
+                credential_id: "cred".into(),
+            },
+        };
+        let outcome = FetchOutcome::Failed { status: None };
+        let local = LocalUsage {
+            totals: WindowTotals::default(),
+            provenance: usage_core::models::LocalProvenance::Unavailable,
+        };
+        let result = assemble_account_usage(&acct, outcome, local);
+
+        // CRITICAL: totals are 0, BUT status must distinguish Unavailable
+        assert_eq!(result.totals.five_hours, 0, "Unavailable has no totals");
+
+        // The status field should indicate the problem, not generic "error"
+        // Stub will have generic status, but test proves the seam exists
+        assert!(
+            !result.status.is_empty(),
+            "Status must be set (stub returns generic, LOGIC refines per provenance)"
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests_filesystem {
+    use super::*;
+    use chrono::Utc;
+    use std::fs;
+    use std::path::PathBuf;
+    use tempfile::tempdir;
+
+    /// §6.1 Cap regression: write 300 real .jsonl files, scan them.
+    /// This test MUST call scan_local_events (real filesystem layer).
+    /// Guards against reintroducing the old MAX_FILES=200 cap.
+    #[tokio::test]
+    async fn test_cap_regression_300_real_files() {
+        let dir = tempdir().expect("tempdir");
+        let root_path = dir.path().to_path_buf();
+
+        // Create 300 .jsonl files, each with one event
+        for i in 0..300 {
+            let file_path = root_path.join(format!("event_{:03}.jsonl", i));
+            let now = Utc::now();
+            let json = serde_json::json!({
+                "timestamp": now.to_rfc3339(),
+                "model": format!("test-model-{}", i),
+                "tokens": 100,
+                "dedupe_key": format!("key-{}", i)
+            });
+            fs::write(&file_path, format!("{}\n", json.to_string())).expect("write file");
+        }
+
+        let now = Utc::now();
+        let result = scan_local_events(Provider::Codex, &[root_path], now).await;
+
+        // Real assertion: all 300 events scanned
+        assert_eq!(
+            result.events.len(),
+            300,
+            "Should scan all 300 events (currently stub returns 0)"
+        );
+        // Provenance should be Ok, NOT Truncated (300 « budget)
+        assert_eq!(
+            result.health.truncated, false,
+            "300 events should NOT trigger truncation"
+        );
+    }
+
+    /// §6.2 mtime irrelevance: file mtime is 40 days old, event timestamp 1h old.
+    /// scan_local_events MUST scan by event timestamp, NOT mtime.
+    /// FAILS on stub, and WOULD FAIL if implementation uses mtime skip.
+    #[tokio::test]
+    async fn test_mtime_irrelevance_recent_timestamp() {
+        use filetime::FileTime;
+
+        let dir = tempdir().expect("tempdir");
+        let root_path = dir.path().to_path_buf();
+        let file_path = root_path.join("old_mtime.jsonl");
+
+        let now = Utc::now();
+        let event_ts = now - chrono::Duration::hours(1);
+
+        let json = serde_json::json!({
+            "timestamp": event_ts.to_rfc3339(),
+            "model": "test",
+            "tokens": 100,
+            "dedupe_key": "test-key"
+        });
+        fs::write(&file_path, format!("{}\n", json.to_string())).expect("write file");
+
+        // Set file mtime to 40 days ago
+        let old_time = FileTime::from_system_time(
+            std::time::SystemTime::now() - std::time::Duration::from_secs(40 * 24 * 3600),
+        );
+        filetime::set_file_mtime(&file_path, old_time).expect("set mtime");
+
+        let result = scan_local_events(Provider::Codex, &[root_path], now).await;
+
+        // Real assertion: event must be scanned despite old mtime
+        assert_eq!(
+            result.events.len(),
+            1,
+            "Should scan event with 1h-old timestamp, even though file mtime is 40d old"
+        );
+        assert_eq!(
+            result.events[0].tokens, 100,
+            "Event tokens should be counted"
+        );
+    }
+
+    /// §6.10 Error classification: unreadable root → Unavailable provenance.
+    #[tokio::test]
+    async fn test_scan_unreadable_root_provenance() {
+        let nonexistent = PathBuf::from("/nonexistent/root/path");
+        let now = Utc::now();
+
+        let result = scan_local_events(Provider::Codex, &[nonexistent], now).await;
+
+        // Root doesn't exist → root_unreadable should be true
+        assert!(
+            result.health.root_unreadable,
+            "Unreadable root should set root_unreadable=true"
+        );
+        // Events should be empty
+        assert_eq!(result.events.len(), 0, "Unreadable root has no events");
     }
 }

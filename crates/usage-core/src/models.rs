@@ -89,3 +89,72 @@ mod tests {
         assert_eq!(t.get(UsageWindow::Month), 0);
     }
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LocalProvenance {
+    Ok,
+    NoEvents,
+    NoLocalProfile,
+    SharedProfileOther,
+    Assumed,
+    Ambiguous,
+    Conflict,
+    Partial,
+    Unavailable,
+    Truncated,
+}
+
+impl LocalProvenance {
+    /// Strict total order for deterministic merging. Higher rank = more severe.
+    pub fn severity_rank(&self) -> u8 {
+        match self {
+            LocalProvenance::Truncated => 9,
+            LocalProvenance::Unavailable => 8,
+            LocalProvenance::Partial => 7,
+            LocalProvenance::Conflict => 6,
+            LocalProvenance::Ambiguous => 5,
+            LocalProvenance::SharedProfileOther => 4,
+            LocalProvenance::NoLocalProfile => 3,
+            LocalProvenance::Assumed => 2,
+            LocalProvenance::NoEvents => 1,
+            LocalProvenance::Ok => 0,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalUsage {
+    pub totals: WindowTotals,
+    pub provenance: LocalProvenance,
+}
+
+impl LocalUsage {
+    pub fn none(p: LocalProvenance) -> Self {
+        LocalUsage {
+            totals: WindowTotals::default(),
+            provenance: p,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RootIdentity {
+    /// Codex auth.json identity (account_id and/or email).
+    CodexAuth { account_id: Option<String>, email: Option<String> },
+    /// Claude config identity (email).
+    ClaudeEmail { email: Option<String> },
+    /// No identity evidence available.
+    None,
+}
+
+impl RootIdentity {
+    /// Returns true if both account_id and email are absent (no identity proof).
+    pub fn is_absent(&self) -> bool {
+        matches!(
+            self,
+            RootIdentity::CodexAuth { account_id: None, email: None }
+                | RootIdentity::ClaudeEmail { email: None }
+                | RootIdentity::None
+        )
+    }
+}

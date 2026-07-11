@@ -234,6 +234,15 @@ components:
             $ref: "#/components/schemas/Pool"
         token_totals:
           $ref: "#/components/schemas/TokenTotals"
+        local_status:
+          type: [string, "null"]
+          description: >-
+            Provenance of the locally-aggregated token usage when it is not a
+            clean `ok` (e.g. `unavailable`, `partial`, `truncated`, `ambiguous`,
+            `conflict`, `assumed`, `no_local_profile`). Absent/null means the
+            local totals are fully trustworthy. Lets clients distinguish a real
+            zero from a failed/ambiguous local scan.
+          example: "assumed"
     UsageResponse:
       type: object
       required: [updated_at, count, accounts]

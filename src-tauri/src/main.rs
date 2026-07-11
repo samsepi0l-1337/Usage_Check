@@ -194,7 +194,7 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
         "add-higgsfield-cli" => import_provider(app, Provider::Higgsfield),
         other if other.starts_with("remove-") => {
             let account_id = &other["remove-".len()..];
-            app.state::<AccountStore>().remove(account_id);
+            let _ = app.state::<AccountStore>().remove(account_id);
             let app2 = app.clone();
             tauri::async_runtime::spawn(async move {
                 refresh_tray(&app2).await;

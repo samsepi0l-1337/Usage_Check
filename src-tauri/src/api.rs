@@ -65,7 +65,10 @@ impl PoolDto {
     fn from_pool(pool: &AgyQuotaPool) -> PoolDto {
         PoolDto {
             name: pool.name.clone(),
-            five_hour: pool.five_hour.as_ref().map(|q| QuotaDto::from_quota(q, "5h")),
+            five_hour: pool
+                .five_hour
+                .as_ref()
+                .map(|q| QuotaDto::from_quota(q, "5h")),
             week: pool.week.as_ref().map(|q| QuotaDto::from_quota(q, "7d")),
         }
     }
@@ -99,6 +102,7 @@ pub struct AccountUsageDto {
     pub week: Option<QuotaDto>,
     pub pools: Vec<PoolDto>,
     pub token_totals: TokenTotalsDto,
+    pub local_status: Option<String>,
 }
 
 impl AccountUsageDto {
@@ -114,6 +118,7 @@ impl AccountUsageDto {
             week: u.week.as_ref().map(|q| QuotaDto::from_quota(q, "7d")),
             pools: u.pool_breakdown.iter().map(PoolDto::from_pool).collect(),
             token_totals: TokenTotalsDto::from_totals(&u.totals),
+            local_status: u.local_status.clone(),
         }
     }
 }
@@ -326,8 +331,9 @@ pub fn spawn(state: ApiState) {
                 let path = request.url().split('?').next().unwrap_or("/").to_string();
                 let method = request.method().as_str().to_string();
                 let reply = route(&state, &method, &path);
-                let header = Header::from_bytes(&b"Content-Type"[..], reply.content_type.as_bytes())
-                    .expect("static content-type header is valid");
+                let header =
+                    Header::from_bytes(&b"Content-Type"[..], reply.content_type.as_bytes())
+                        .expect("static content-type header is valid");
                 let response = Response::from_string(reply.body)
                     .with_status_code(reply.status)
                     .with_header(header);
@@ -394,6 +400,7 @@ mod tests {
             pool_breakdown: Vec::new(),
             detail_suffix: None,
             status: "ok".into(),
+            local_status: None,
         }
     }
 
@@ -511,7 +518,9 @@ mod tests {
 
         let mut stream = TcpStream::connect("127.0.0.1:5199").unwrap();
         stream
-            .write_all(b"GET /v1/usage/codex HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+            .write_all(
+                b"GET /v1/usage/codex HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+            )
             .unwrap();
         let mut raw = String::new();
         stream.read_to_string(&mut raw).unwrap();
@@ -539,5 +548,30 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&reply.body).unwrap();
         assert_eq!(v["accounts"][0]["pools"][0]["name"], "Gemini Models");
         assert_eq!(v["accounts"][0]["pools"][0]["week"]["used_percent"], 0.0);
+    }
+
+    #[test]
+
+    fn dto_maps_local_status_from_provenance() {
+        // §6.12: AccountUsageDto.local_status must carry the AccountUsage's local
+        // provenance label so clients distinguish a failed/ambiguous local scan
+        // from a real zero. RED until LOGIC maps it through in `from_usage`
+        // (the stub hardcodes `local_status: None`).
+        let mut degraded = sample(Provider::Codex, "a", Some(38.0), Some(6.0));
+        degraded.local_status = Some("unavailable".into());
+        let dto = AccountUsageDto::from_usage(&degraded);
+        assert_eq!(
+            dto.local_status.as_deref(),
+            Some("unavailable"),
+            "from_usage must pass AccountUsage.local_status through to the DTO"
+        );
+
+        // A clean account (local_status None) must map to None, not a label.
+        let clean = sample(Provider::Codex, "b", Some(1.0), Some(1.0));
+        assert_eq!(
+            AccountUsageDto::from_usage(&clean).local_status,
+            None,
+            "clean local totals must not carry a provenance label"
+        );
     }
 }
