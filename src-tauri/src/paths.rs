@@ -9,7 +9,7 @@ use std::path::{Component, Path, PathBuf};
 const APP_DIR: &str = "UsageCheck";
 
 #[path = "paths_profiles.rs"]
-mod paths_profiles;
+pub mod paths_profiles;
 pub use paths_profiles::{claude_managed_root, claude_settings_json, claude_statusline_snapshot};
 
 /// User home directory. Prefers `HOME` (Unix) then `USERPROFILE` (Windows).

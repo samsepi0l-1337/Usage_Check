@@ -23,6 +23,23 @@ pub fn claude_managed_root(account_id: &str) -> Result<PathBuf, std::io::Error> 
     Ok(root)
 }
 
+pub fn login_script_dir() -> Result<PathBuf, std::io::Error> {
+    use super::usagecheck_app_data_dir;
+    let script_dir = usagecheck_app_data_dir()
+        .ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::NotFound, "app data directory not found")
+        })?
+        .join("tmp");
+    std::fs::create_dir_all(&script_dir)?;
+    #[cfg(unix)]
+    {
+        use std::fs::Permissions;
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script_dir, Permissions::from_mode(0o700))?;
+    }
+    Ok(script_dir)
+}
+
 pub fn claude_statusline_snapshot(account_id: &str) -> PathBuf {
     claude_profile_root(account_id)
         .map(|root| root.join("statusline_snapshot.json"))

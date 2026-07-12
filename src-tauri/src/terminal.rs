@@ -1,5 +1,5 @@
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 #[derive(Clone, Debug)]
@@ -25,7 +25,7 @@ pub trait TerminalLauncher: Send + Sync {
 pub struct MacosTerminalLauncher;
 
 #[cfg(target_os = "macos")]
-fn render_macos_script(command: &TerminalCommand) -> String {
+fn render_macos_script(command: &TerminalCommand, script_path: &Path) -> String {
     let mut script = String::from("#!/bin/bash\nset -e\n");
 
     for var in &command.env_remove {
@@ -51,7 +51,7 @@ fn render_macos_script(command: &TerminalCommand) -> String {
         script.push_str(&format!(" '{}'\n", arg_str));
     }
 
-    let rm_path = format!("/tmp/login_{}.sh", Uuid::new_v4()).replace("'", "'\\''");
+    let rm_path = script_path.display().to_string().replace("'", "'\\''");
     script.push_str(&format!("rm -f '{}'\n", rm_path));
 
     script
@@ -60,19 +60,25 @@ fn render_macos_script(command: &TerminalCommand) -> String {
 #[cfg(target_os = "macos")]
 impl TerminalLauncher for MacosTerminalLauncher {
     fn launch(&self, command: &TerminalCommand) -> Result<(), TerminalError> {
-        use std::fs;
-        use std::os::unix::fs::PermissionsExt;
+        use crate::paths::paths_profiles::login_script_dir;
+        use std::fs::OpenOptions;
+        use std::os::unix::fs::OpenOptionsExt;
         use std::process::Command;
 
-        let script_id = Uuid::new_v4().to_string();
-        let script_path = std::env::temp_dir().join(format!("login_{}.sh", script_id));
+        let script_dir = login_script_dir()
+            .map_err(|e| TerminalError::IoError(e.to_string()))?;
+        let script_path = script_dir.join(format!("login_{}.sh", Uuid::new_v4()));
 
-        let script = render_macos_script(command);
+        let script = render_macos_script(command, &script_path);
 
-        fs::write(&script_path, &script).map_err(|e| TerminalError::IoError(e.to_string()))?;
+        let mut opts = OpenOptions::new();
+        opts.write(true).create_new(true).mode(0o700);
+        let mut file = opts
+            .open(&script_path)
+            .map_err(|e| TerminalError::IoError(e.to_string()))?;
 
-        let perms = fs::Permissions::from_mode(0o755);
-        fs::set_permissions(&script_path, perms)
+        use std::io::Write;
+        file.write_all(script.as_bytes())
             .map_err(|e| TerminalError::IoError(e.to_string()))?;
 
         let script_path_escaped = script_path.display().to_string().replace("'", "'\\''");
@@ -100,7 +106,7 @@ impl TerminalLauncher for MacosTerminalLauncher {
 pub struct WindowsTerminalLauncher;
 
 #[cfg(target_os = "windows")]
-fn render_windows_script(command: &TerminalCommand) -> String {
+fn render_windows_script(command: &TerminalCommand, script_path: &Path) -> String {
     let mut script = String::from("$ErrorActionPreference = 'Stop'\n");
 
     for var in &command.env_remove {
@@ -127,7 +133,7 @@ fn render_windows_script(command: &TerminalCommand) -> String {
     }
     script.push('\n');
 
-    let rm_path = format!("/tmp/login_{}.ps1", Uuid::new_v4()).replace("'", "''");
+    let rm_path = script_path.display().to_string().replace("'", "''");
     script.push_str(&format!("Remove-Item '{}' -Force\n", rm_path));
 
     script
@@ -136,15 +142,25 @@ fn render_windows_script(command: &TerminalCommand) -> String {
 #[cfg(target_os = "windows")]
 impl TerminalLauncher for WindowsTerminalLauncher {
     fn launch(&self, command: &TerminalCommand) -> Result<(), TerminalError> {
-        use std::fs;
+        use crate::paths::paths_profiles::login_script_dir;
+        use std::fs::OpenOptions;
         use std::process::{Command, Stdio};
 
-        let script_id = Uuid::new_v4().to_string();
-        let script_path = std::env::temp_dir().join(format!("login_{}.ps1", script_id));
+        let script_dir = login_script_dir()
+            .map_err(|e| TerminalError::IoError(e.to_string()))?;
+        let script_path = script_dir.join(format!("login_{}.ps1", Uuid::new_v4()));
 
-        let script = render_windows_script(command);
+        let script = render_windows_script(command, &script_path);
 
-        fs::write(&script_path, &script).map_err(|e| TerminalError::IoError(e.to_string()))?;
+        let mut opts = OpenOptions::new();
+        opts.write(true).create_new(true);
+        let mut file = opts
+            .open(&script_path)
+            .map_err(|e| TerminalError::IoError(e.to_string()))?;
+
+        use std::io::Write;
+        file.write_all(script.as_bytes())
+            .map_err(|e| TerminalError::IoError(e.to_string()))?;
 
         let output = Command::new("powershell.exe")
             .arg("-NoProfile")
@@ -230,9 +246,24 @@ mod tests {
             env: vec![],
             env_remove: vec![],
         };
-        let script = render_macos_script(&cmd);
+        let script_path = PathBuf::from("/tmp/test_script.sh");
+        let script = render_macos_script(&cmd, &script_path);
         assert!(script.contains("'\\''")); 
         assert!(!script.contains("'''"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_macos_script_uses_app_private_path() {
+        let cmd = TerminalCommand {
+            executable: PathBuf::from("/usr/bin/test"),
+            args: vec![],
+            env: vec![],
+            env_remove: vec![],
+        };
+        let script_path = PathBuf::from("/var/folders/test/app/tmp/login_abc123.sh");
+        let script = render_macos_script(&cmd, &script_path);
+        assert!(script.contains(&format!("rm -f '{}'", script_path.display())));
     }
 
     #[cfg(target_os = "windows")]
@@ -244,8 +275,23 @@ mod tests {
             env: vec![],
             env_remove: vec![],
         };
-        let script = render_windows_script(&cmd);
+        let script_path = PathBuf::from("C:\\Users\\user\\AppData\\Local\\UsageCheck\\tmp\\login_abc123.ps1");
+        let script = render_windows_script(&cmd, &script_path);
         assert!(script.contains("''"));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn test_windows_script_uses_app_private_path() {
+        let cmd = TerminalCommand {
+            executable: PathBuf::from("C:\\Program Files\\test.exe"),
+            args: vec![],
+            env: vec![],
+            env_remove: vec![],
+        };
+        let script_path = PathBuf::from("C:\\Users\\user\\AppData\\Local\\UsageCheck\\tmp\\login_xyz.ps1");
+        let script = render_windows_script(&cmd, &script_path);
+        assert!(script.contains(&format!("Remove-Item '{}' -Force", script_path.display())));
     }
 
     #[test]
@@ -273,5 +319,24 @@ mod tests {
         let cloned = cmd.clone();
         assert_eq!(cloned.executable, cmd.executable);
         assert_eq!(cloned.args, cmd.args);
+    }
+
+    #[test]
+    fn test_render_script_signature_accepts_path() {
+        let cmd = TerminalCommand {
+            executable: PathBuf::from("/usr/bin/test"),
+            args: vec![],
+            env: vec![],
+            env_remove: vec![],
+        };
+        let path1 = PathBuf::from("/path/to/script1.sh");
+        let path2 = PathBuf::from("/path/to/script2.sh");
+        
+        let script1 = render_macos_script(&cmd, &path1);
+        let script2 = render_macos_script(&cmd, &path2);
+        
+        assert_ne!(script1, script2);
+        assert!(script1.contains("script1"));
+        assert!(script2.contains("script2"));
     }
 }
