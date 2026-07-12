@@ -25,8 +25,8 @@ sha2 = "0.10"
 base64 = "0.22"
 urlencoding = "2"
 rand = "0.8"
-rusqlite = { version = "0.32", features = ["bundled"] }
-arboard = "3"
+rusqlite = { version = "0.32", features = ["bundled"], optional = true }
+arboard = { version = "3", optional = true }
 
 [features]
 # Keep custom-protocol on by default for plain `cargo build --release`.
@@ -34,7 +34,7 @@ arboard = "3"
 default = ["custom-protocol", "edition-free"]
 custom-protocol = ["tauri/custom-protocol"]
 edition-free = ["usage-core/edition-free"]
-edition-pro = ["usage-core/edition-pro"]
+edition-pro = ["usage-core/edition-pro", "dep:rusqlite", "dep:arboard"]
 
 [dev-dependencies]
 tempfile = "3"
