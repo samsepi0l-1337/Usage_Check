@@ -13,7 +13,7 @@ use std::time::Duration;
 use std::{ffi::OsStr, process};
 
 use tauri::{tray::TrayIconBuilder, AppHandle, Manager};
-use usage_core::account::Provider;
+use usage_core::{account::Provider, AuthMethod};
 
 mod agy_local;
 mod api;
@@ -122,23 +122,6 @@ fn import_grok_clipboard(app: &AppHandle) {
     });
 }
 
-#[cfg(feature = "edition-pro")]
-fn higgsfield_browser_login(app: &AppHandle) {
-    let app2 = app.clone();
-    tauri::async_runtime::spawn(async move {
-        match import::run_higgsfield_browser_login().await {
-            Ok(imported) => {
-                let store = app2.state::<AccountStore>();
-                match store.add(Provider::Higgsfield, imported.label, imported.credentials) {
-                    Ok(_) => refresh_tray(&app2).await,
-                    Err(e) => eprintln!("import: failed to save Higgsfield account: {e}"),
-                }
-            }
-            Err(e) => eprintln!("higgsfield login: {e}"),
-        }
-    });
-}
-
 fn oauth_provider(app: &AppHandle, provider: Provider) {
     let app2 = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -169,32 +152,30 @@ fn oauth_provider(app: &AppHandle, provider: Provider) {
     });
 }
 
+fn dispatch_auth_action(app: &AppHandle, provider: Provider, method: AuthMethod) {
+    match method {
+        AuthMethod::BrowserOAuth => oauth_provider(app, provider),
+        AuthMethod::Cli | AuthMethod::LocalDatabase | AuthMethod::ManagementKeyEnvironment => {
+            import_provider(app, provider)
+        }
+        AuthMethod::ManagementKeyClipboard => {
+            #[cfg(feature = "edition-pro")]
+            import_grok_clipboard(app);
+            #[cfg(not(feature = "edition-pro"))]
+            eprintln!("clipboard authentication is unavailable in the Free edition");
+        }
+    }
+}
+
 fn handle_menu_event(app: &AppHandle, id: &str) {
     match id {
-        "quit" => {
-            app.exit(0);
-        }
+        "quit" => app.exit(0),
         "refresh" => {
             let app2 = app.clone();
             tauri::async_runtime::spawn(async move {
                 refresh_tray(&app2).await;
             });
         }
-        "add-codex-cli" => import_provider(app, Provider::Codex),
-        "add-claude-cli" => import_provider(app, Provider::Claude),
-        "add-codex-oauth" => oauth_provider(app, Provider::Codex),
-        "add-claude-oauth" => oauth_provider(app, Provider::Claude),
-        "add-agy-oauth" => oauth_provider(app, Provider::Agy),
-        #[cfg(feature = "edition-pro")]
-        "add-cursor-local" => import_provider(app, Provider::Cursor),
-        #[cfg(feature = "edition-pro")]
-        "add-grok-clipboard" => import_grok_clipboard(app),
-        #[cfg(feature = "edition-pro")]
-        "add-grok-env" => import_provider(app, Provider::Grok),
-        #[cfg(feature = "edition-pro")]
-        "add-higgsfield-login" => higgsfield_browser_login(app),
-        #[cfg(feature = "edition-pro")]
-        "add-higgsfield-cli" => import_provider(app, Provider::Higgsfield),
         other if other.starts_with("remove-") => {
             let account_id = &other["remove-".len()..];
             let _ = app.state::<AccountStore>().remove(account_id);
@@ -203,7 +184,11 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
                 refresh_tray(&app2).await;
             });
         }
-        _ => {}
+        event_id => {
+            if let Some(spec) = tray_menu::spec_for_event(event_id) {
+                dispatch_auth_action(app, spec.provider, spec.method);
+            }
+        }
     }
 }
 

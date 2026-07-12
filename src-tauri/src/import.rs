@@ -504,48 +504,6 @@ pub async fn import_grok_from_clipboard() -> Result<ImportedAccount, String> {
 }
 
 #[cfg(feature = "edition-pro")]
-fn higgsfield_cli_available() -> bool {
-    which_higgsfield_cli().is_some()
-}
-
-#[cfg(feature = "edition-pro")]
-fn which_higgsfield_cli() -> Option<std::path::PathBuf> {
-    if let Ok(path) = std::env::var("PATH") {
-        for dir in std::env::split_paths(&path) {
-            let candidate = dir.join(if cfg!(windows) { "higgsfield.exe" } else { "higgsfield" });
-            if candidate.is_file() {
-                return Some(candidate);
-            }
-        }
-    }
-    None
-}
-
-#[cfg(feature = "edition-pro")]
-/// Runs `higgsfield auth login` (system browser device flow), then imports
-/// `~/.config/higgsfield/credentials.json`.
-pub async fn run_higgsfield_browser_login() -> Result<ImportedAccount, String> {
-    use std::process::Command;
-
-    let cli = which_higgsfield_cli().ok_or_else(|| {
-        "Higgsfield CLI not found on PATH — install higgsfield, then try again".to_string()
-    })?;
-    let status = tokio::task::spawn_blocking(move || {
-        Command::new(cli).args(["auth", "login"]).status()
-    })
-    .await
-    .map_err(|_| "higgsfield login task failed".to_string())?
-    .map_err(|e| format!("failed to run higgsfield auth login: {e}"))?;
-    if !status.success() {
-        return Err(
-            "higgsfield auth login failed or was cancelled — complete browser sign-in, then retry"
-                .into(),
-        );
-    }
-    load_higgsfield_cli_auth()
-}
-
-#[cfg(feature = "edition-pro")]
 fn parse_higgsfield_credentials_json(root: &serde_json::Value) -> Option<Credentials> {
     let access_token = root
         .get("access_token")
