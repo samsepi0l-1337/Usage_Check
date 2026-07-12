@@ -78,33 +78,6 @@ async fn maybe_refresh(
     }
 }
 
-/// When `codex login` rotates tokens in `~/.codex/auth.json`, UsageCheck's
-/// file-backed copy can keep the old access_token (same identity). Prefer the
-/// CLI snapshot for the *matching* account only — never overwrite siblings.
-fn sync_codex_creds_from_cli(
-    store: &AccountStore,
-    account: &Account,
-    stored: Credentials,
-    cli: Option<&ImportedAccount>,
-) -> Credentials {
-    let Some(imported) = cli else {
-        return stored;
-    };
-    if !import::codex_cli_creds_are_newer(
-        &stored,
-        &account.label,
-        &imported.credentials,
-        &imported.label,
-    ) {
-        return stored;
-    }
-    let _ = store.update_credentials(&account.id, &imported.credentials);
-    if !imported.label.is_empty() && imported.label != "Codex" {
-        store.update_label(&account.id, &imported.label);
-    }
-    imported.credentials.clone()
-}
-
 /// When `claude` login rotates Keychain tokens, UsageCheck's file-backed copy
 /// can keep a still-unexpired but revoked access_token. Prefer the CLI
 /// snapshot for the *matching* account only — never overwrite siblings.
@@ -841,15 +814,38 @@ fn claude_fetch_outcome(quota: ClaudeQuota, email: Option<&str>) -> FetchOutcome
     }
 }
 
-async fn poll_codex(
+fn codex_identity_status(probe_identity: &str, expected: &str) -> Option<&'static str> {
+    if probe_identity == expected {
+        None
+    } else {
+        Some("identity_changed")
+    }
+}
+
+async fn poll_codex_cli_profile(profile_root: &std::path::Path, expected_identity: &str) -> FetchOutcome {
+    match crate::codex_cli::probe_codex(profile_root).await {
+        Ok(probe) => {
+            if codex_identity_status(&probe.account.id, expected_identity).is_some() {
+                return FetchOutcome::Failed { status: Some(401) };
+            }
+            FetchOutcome::Live {
+                five_hour: probe.primary,
+                week: probe.secondary,
+                plan: None,
+                email: probe.account.email.clone(),
+            }
+        }
+        Err(_) => FetchOutcome::Failed { status: None },
+    }
+}
+
+async fn poll_codex_oauth(
     store: &AccountStore,
     client: &reqwest::Client,
     account: &Account,
-    cli: Option<&ImportedAccount>,
 ) -> FetchOutcome {
     match store.credentials(&account.id) {
         Some(creds) if !creds.access_token.is_empty() => {
-            let creds = sync_codex_creds_from_cli(store, account, creds, cli);
             let creds = maybe_refresh(store, &account.id, Provider::Codex, creds).await;
             match fetch_codex_quota(client, &creds).await {
                 Ok(quota) => {
@@ -858,73 +854,13 @@ async fn poll_codex(
                     }
                     codex_fetch_outcome(quota)
                 }
-                Err(status) => {
-                    // Auth failure for the matching identity: re-read auth.json
-                    // once more (covers race where CLI wrote mid-poll) and retry
-                    // before falling back to local logs. Never adopts a
-                    // different CLI account onto this row.
-                    if matches!(status, Some(401) | Some(403)) {
-                        if let Ok(fresh) = import::load_codex_cli_auth() {
-                            let retried = sync_codex_creds_from_cli(
-                                store,
-                                account,
-                                creds.clone(),
-                                Some(&fresh),
-                            );
-                            if retried.access_token != creds.access_token {
-                                if let Ok(quota) = fetch_codex_quota(client, &retried).await {
-                                    if let Some(email) = quota.email.as_deref() {
-                                        store.update_label(&account.id, email);
-                                    }
-                                    return codex_fetch_outcome(quota);
-                                }
-                            }
-                        }
-                    }
-                    FetchOutcome::Failed { status }
-                }
+                Err(status) => FetchOutcome::Failed { status },
             }
         }
-        _ => {
-            // No usable stored token: adopt CLI auth only when identity matches
-            // this row. Never wipe/replace siblings or invent a match.
-            if let Some(imported) = cli {
-                let stored = store.credentials(&account.id).unwrap_or(Credentials {
-                    access_token: String::new(),
-                    refresh_token: None,
-                    account_id: None,
-                    expires_at: None,
-                });
-                let adopt = import::cli_identity_matches(
-                    &stored,
-                    &account.label,
-                    &imported.credentials,
-                    &imported.label,
-                );
-                if adopt && !imported.credentials.access_token.is_empty() {
-                    let _ = store.update_credentials(&account.id, &imported.credentials);
-                    if !imported.label.is_empty() && imported.label != "Codex" {
-                        store.update_label(&account.id, &imported.label);
-                    }
-                    let creds = maybe_refresh(
-                        store,
-                        &account.id,
-                        Provider::Codex,
-                        imported.credentials.clone(),
-                    )
-                    .await;
-                    if let Ok(quota) = fetch_codex_quota(client, &creds).await {
-                        if let Some(email) = quota.email.as_deref() {
-                            store.update_label(&account.id, email);
-                        }
-                        return codex_fetch_outcome(quota);
-                    }
-                }
-            }
-            FetchOutcome::Failed { status: Some(401) }
-        }
+        _ => FetchOutcome::Failed { status: Some(401) },
     }
 }
+
 
 async fn poll_claude(
     store: &AccountStore,
@@ -1138,14 +1074,18 @@ pub async fn poll_all(store: &AccountStore) -> Vec<AccountUsage> {
 
     // Read CLI auth once per poll tick so the *matching* row can sync after
     // terminal login. Never use sole-row replace — siblings stay intact.
-    let codex_cli = import::load_codex_cli_auth().ok();
     let claude_cli = import::load_claude_cli_auth().ok();
 
     for account in accounts {
         let usage = match account.provider {
             Provider::Agy => poll_agy(store, &client, &account).await,
             Provider::Codex => {
-                let outcome = poll_codex(store, &client, &account, codex_cli.as_ref()).await;
+                let outcome = match &account.auth_source {
+                    AuthSource::CliProfile { profile_root, expected_identity, .. } => {
+                        poll_codex_cli_profile(profile_root, expected_identity).await
+                    }
+                    _ => poll_codex_oauth(store, &client, &account).await,
+                };
                 let local = codex_local
                     .remove(&account.id)
                     .unwrap_or_else(|| LocalUsage::none(LocalProvenance::NoLocalProfile));
@@ -1214,7 +1154,17 @@ mod tests {
         }
     }
 
+    
     #[test]
+    fn auth_source_codex_identity_mismatch() {
+        assert_eq!(
+            codex_identity_status("id-a", "id-b"),
+            Some("identity_changed")
+        );
+        assert_eq!(codex_identity_status("id", "id"), None);
+    }
+
+#[test]
     fn auth_source_ok_then_transient_error_serves_stale() {
         clear_last_success_cache();
         let mut cache = HashMap::new();
