@@ -151,6 +151,15 @@ fn clear_last_success_cache() {
         .clear();
 }
 
+/// Evict a single account's remembered last success (called on account removal
+/// so a re-added account with the same id never inherits stale quota).
+pub fn evict_last_success(id: &str) {
+    last_success_cache()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .remove(id);
+}
+
 fn display_name_for(account: &Account, email: Option<&str>, plan: Option<&str>) -> String {
     if let Some(email) = email.filter(|s| !s.is_empty()) {
         return email.to_string();
@@ -1199,6 +1208,66 @@ mod tests {
             read_claude_snapshot_outcome(&snapshot, "id"),
             ClaudeCliOutcome::IdentityChanged
         ));
+    }
+
+    #[test]
+    fn auth_source_evict_last_success_drops_stale() {
+        clear_last_success_cache();
+        let quota = auth_source_quota(25.0);
+        {
+            let mut cache = last_success_cache()
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            apply_last_success(&mut cache, "x", auth_source_usage("x", "ok", Some(quota)));
+        }
+
+        evict_last_success("x");
+
+        let result = {
+            let mut cache = last_success_cache()
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            apply_last_success(&mut cache, "x", auth_source_usage("x", "error", None))
+        };
+
+        assert_eq!(result.status, "error");
+        assert_eq!(result.five_hour, None);
+    }
+
+    #[test]
+    fn auth_source_evict_is_isolated() {
+        clear_last_success_cache();
+        let x_quota = auth_source_quota(25.0);
+        let y_quota = auth_source_quota(75.0);
+        {
+            let mut cache = last_success_cache()
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            apply_last_success(&mut cache, "x", auth_source_usage("x", "ok", Some(x_quota)));
+            apply_last_success(
+                &mut cache,
+                "y",
+                auth_source_usage("y", "ok", Some(y_quota.clone())),
+            );
+        }
+
+        evict_last_success("x");
+
+        let (y_result, x_result) = {
+            let mut cache = last_success_cache()
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            let y_result =
+                apply_last_success(&mut cache, "y", auth_source_usage("y", "error", None));
+            let x_result =
+                apply_last_success(&mut cache, "x", auth_source_usage("x", "error", None));
+            (y_result, x_result)
+        };
+
+        assert_eq!(y_result.status, "stale");
+        assert_eq!(y_result.five_hour, Some(y_quota));
+        assert_eq!(x_result.status, "error");
+        assert_eq!(x_result.five_hour, None);
     }
 
     #[test]

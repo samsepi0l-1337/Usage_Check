@@ -13,7 +13,10 @@ use std::time::Duration;
 use std::{ffi::OsStr, process};
 
 use tauri::{tray::TrayIconBuilder, AppHandle, Manager};
-use usage_core::{account::Provider, AuthMethod};
+use usage_core::{
+    account::{AuthSource, Provider},
+    AuthMethod,
+};
 
 mod agy_local;
 mod api;
@@ -177,8 +180,24 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
             });
         }
         other if other.starts_with("remove-") => {
-            let account_id = &other["remove-".len()..];
-            let _ = app.state::<AccountStore>().remove(account_id);
+            let account_id = other["remove-".len()..].to_string();
+            match app.state::<AccountStore>().remove(&account_id) {
+                Ok(Some(removed)) => {
+                    poller::evict_last_success(&removed.id);
+                    if removed.provider == Provider::Claude
+                        && matches!(removed.auth_source, AuthSource::CliProfile { .. })
+                    {
+                        let settings_path = paths::claude_settings_json(&removed.id);
+                        if let Err(error) =
+                            claude_statusline::remove_statusline_bridge(&settings_path)
+                        {
+                            eprintln!("remove: bridge teardown failed: {error}");
+                        }
+                    }
+                }
+                Ok(None) => {}
+                Err(error) => eprintln!("remove: {error}"),
+            }
             let app2 = app.clone();
             tauri::async_runtime::spawn(async move {
                 refresh_tray(&app2).await;
