@@ -492,15 +492,21 @@ impl AccountStore {
                 )
             }
             #[cfg(feature = "edition-pro")]
-            Provider::Cursor => self.add_reference(
-                provider,
-                label.clone(),
-                AuthSource::CursorDatabase {
-                    database_path: crate::paths::cursor_state_vscdb()
-                        .ok_or_else(|| "could not resolve Cursor database path".to_string())?,
-                    expected_identity: label,
-                },
-            ),
+            Provider::Cursor => {
+                // Derive identity from session (JWT sub or email)
+                let db_path = crate::paths::cursor_state_vscdb()
+                    .ok_or_else(|| "could not resolve Cursor database path".to_string())?;
+                let session = crate::cursor_local::read_cursor_session(&db_path)
+                    .map_err(|e| format!("Failed to read Cursor session: {}", e))?;
+                self.add_reference(
+                    provider,
+                    label.clone(),
+                    AuthSource::CursorDatabase {
+                        database_path: db_path,
+                        expected_identity: session.identity.clone(),
+                    },
+                )
+            }
             #[cfg(feature = "edition-pro")]
             Provider::Grok => {
                 let id = uuid::Uuid::new_v4().to_string();
@@ -779,6 +785,26 @@ mod tests {
         };
         assert_eq!(credential_id, &account.id);
         assert_eq!(store.credentials(&account.id), Some(credentials("team-compat")));
+    }
+
+    #[cfg(feature = "edition-pro")]
+    #[test]
+    fn cursor_add_reference_creates_no_secret_file() {
+        let sandbox = TestSandbox::new();
+        let store = sandbox.store();
+        let database_path = sandbox.root.join("state.vscdb");
+        let auth_source = AuthSource::CursorDatabase {
+            database_path,
+            expected_identity: "cursor@example.com".into(),
+        };
+
+        let account = store
+            .add_reference(Provider::Cursor, "cursor".into(), auth_source.clone())
+            .unwrap();
+
+        assert_eq!(account.auth_source, auth_source);
+        assert_eq!(store.account(&account.id), Some(account));
+        assert!(!sandbox.root.join("UsageCheck").join("credentials").exists());
     }
 
     #[cfg(feature = "edition-pro")]

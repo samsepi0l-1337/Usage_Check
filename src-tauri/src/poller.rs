@@ -476,42 +476,68 @@ fn account_usage_from_higgsfield(
 }
 
 #[cfg(feature = "edition-pro")]
-fn sync_cursor_creds_from_local(
-    store: &AccountStore,
-    account: &Account,
-    stored: Credentials,
-) -> Credentials {
-    let Ok(imported) = crate::cursor_local::load_cursor_local_auth() else {
-        return stored;
-    };
-    if imported.credentials.access_token.is_empty()
-        || imported.credentials.access_token == stored.access_token
-    {
-        return stored;
+fn cursor_outcome_status(
+    session_id: &str,
+    expected_id: &str,
+    fetch: Result<(), Option<u16>>,
+) -> &'static str {
+    if session_id != expected_id {
+        "identity_changed"
+    } else if fetch.is_err() {
+        "experimental_error"
+    } else {
+        "ok"
     }
-    if !import::cli_identity_matches(
-        &stored,
-        &account.label,
-        &imported.credentials,
-        &imported.label,
-    ) && !account.label.eq_ignore_ascii_case(&imported.label)
-    {
-        return stored;
-    }
-    let _ = store.update_credentials(&account.id, &imported.credentials);
-    if !imported.label.is_empty() {
-        store.update_label(&account.id, &imported.label);
-    }
-    imported.credentials
 }
 
 #[cfg(feature = "edition-pro")]
 async fn poll_cursor(
-    store: &AccountStore,
+    _store: &AccountStore,
     client: &reqwest::Client,
     account: &Account,
 ) -> AccountUsage {
-    let Some(mut creds) = store.credentials(&account.id) else {
+    use usage_core::account::AuthSource;
+    
+    // Get database path and expected identity from auth_source
+    let (database_path, expected_identity) = match &account.auth_source {
+        AuthSource::CursorDatabase {
+            database_path,
+            expected_identity,
+        } => (database_path.clone(), expected_identity.clone()),
+        _ => {
+            return account_usage_from_cursor(
+                account,
+                &CursorQuota {
+                    email: None,
+                    plan: None,
+                    period: None,
+                    detail_suffix: None,
+                },
+                "needs_login",
+            );
+        }
+    };
+
+    // Open DB read-only and read session (NO store.update_credentials)
+    let session = match crate::cursor_local::read_cursor_session(&database_path) {
+        Ok(s) => s,
+        Err(_) => {
+            return account_usage_from_cursor(
+                account,
+                &CursorQuota {
+                    email: None,
+                    plan: None,
+                    period: None,
+                    detail_suffix: None,
+                },
+                "needs_login",
+            );
+        }
+    };
+
+    // Validate identity
+    let identity_status = cursor_outcome_status(&session.identity, &expected_identity, Ok(()));
+    if identity_status != "ok" {
         return account_usage_from_cursor(
             account,
             &CursorQuota {
@@ -520,43 +546,54 @@ async fn poll_cursor(
                 period: None,
                 detail_suffix: None,
             },
-            "needs_login",
+            identity_status,
         );
-    };
-    creds = sync_cursor_creds_from_local(store, account, creds);
-    if let Some(refresh) = creds.refresh_token.as_deref() {
-        if let Ok(new_token) = refresh_cursor_access_token(client, refresh).await {
-            creds.access_token = new_token;
-            let _ = store.update_credentials(&account.id, &creds);
-        }
     }
 
-    let plan = creds.account_id.clone();
-    match fetch_cursor_quota(client, &creds).await {
+    // Refresh token in memory only
+    let access_token = if let Some(refresh_token) = session.refresh_token.as_deref() {
+        if let Ok(new_token) = refresh_cursor_access_token(client, refresh_token).await {
+            new_token
+        } else {
+            session.access_token.clone()
+        }
+    } else {
+        session.access_token.clone()
+    };
+
+    // Fetch quota with in-memory token
+    let temp_creds = usage_core::account::Credentials {
+        access_token,
+        refresh_token: session.refresh_token.clone(),
+        account_id: session.plan.clone(),
+        expires_at: None,
+    };
+    match fetch_cursor_quota(client, &temp_creds).await {
         Ok(mut quota) => {
             quota = cursor_quota_with_auth(
                 quota,
-                if account.label.contains('@') {
-                    Some(account.label.clone())
-                } else {
-                    None
-                },
-                plan,
+                session.email.clone(),
+                session.plan.clone(),
             );
-            account_usage_from_cursor(account, &quota, "ok")
+            account_usage_from_cursor(
+                account,
+                &quota,
+                cursor_outcome_status(&session.identity, &expected_identity, Ok(())),
+            )
         }
         Err(status) => account_usage_from_cursor(
             account,
             &CursorQuota {
                 email: None,
-                plan: creds.account_id.clone(),
+                plan: session.plan.clone(),
                 period: None,
                 detail_suffix: None,
             },
-            status_for_failure(status),
+            cursor_outcome_status(&session.identity, &expected_identity, Err(status)),
         ),
     }
 }
+
 
 #[cfg(feature = "edition-pro")]
 async fn poll_grok(
@@ -1679,5 +1716,35 @@ mod tests_filesystem {
         );
         // Events should be empty
         assert_eq!(result.events.len(), 0, "Unreadable root has no events");
+    }
+    #[test]
+    #[cfg(feature = "edition-pro")]
+    fn cursor_identity_mismatch_maps_identity_changed() {
+        assert_eq!(
+            cursor_outcome_status("cursor-user-a", "cursor-user-b", Ok(())),
+            "identity_changed"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "edition-pro")]
+    fn cursor_rpc_failure_maps_experimental_error() {
+        assert_eq!(
+            cursor_outcome_status("cursor-user", "cursor-user", Err(Some(500))),
+            "experimental_error"
+        );
+        assert_eq!(
+            cursor_outcome_status("cursor-user", "cursor-user", Err(None)),
+            "experimental_error"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "edition-pro")]
+    fn cursor_success_maps_ok() {
+        assert_eq!(
+            cursor_outcome_status("cursor-user", "cursor-user", Ok(())),
+            "ok"
+        );
     }
 }
