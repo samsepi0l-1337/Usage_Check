@@ -33,8 +33,6 @@ use usage_core::models::{LocalProvenance, LocalUsage, ModelTokenEvent, QuotaUsag
 use usage_core::scanners::{claude as claude_scanner, codex as codex_scanner};
 
 use crate::agy_local;
-use crate::import::{self, ImportedAccount};
-use crate::oauth;
 use crate::paths;
 use crate::store::AccountStore;
 
@@ -65,44 +63,17 @@ async fn maybe_refresh(
     provider: Provider,
     creds: Credentials,
 ) -> Credentials {
-    if !oauth::should_refresh(creds.expires_at, Utc::now(), REFRESH_THRESHOLD) {
+    if !crate::oauth::should_refresh(creds.expires_at, Utc::now(), REFRESH_THRESHOLD) {
         return creds;
     }
 
-    match oauth::refresh_access_token(provider, &creds).await {
+    match crate::oauth::refresh_access_token(provider, &creds).await {
         Ok(refreshed) => {
             let _ = store.update_credentials(id, &refreshed);
             refreshed
         }
         Err(_) => creds,
     }
-}
-
-/// When `claude` login rotates Keychain tokens, UsageCheck's file-backed copy
-/// can keep a still-unexpired but revoked access_token. Prefer the CLI
-/// snapshot for the *matching* account only — never overwrite siblings.
-fn sync_claude_creds_from_cli(
-    store: &AccountStore,
-    account: &Account,
-    stored: Credentials,
-    cli: Option<&ImportedAccount>,
-) -> Credentials {
-    let Some(imported) = cli else {
-        return stored;
-    };
-    if !import::claude_cli_creds_are_newer(
-        &stored,
-        &account.label,
-        &imported.credentials,
-        &imported.label,
-    ) {
-        return stored;
-    }
-    let _ = store.update_credentials(&account.id, &imported.credentials);
-    if !imported.label.is_empty() && imported.label != "Claude" {
-        store.update_label(&account.id, &imported.label);
-    }
-    imported.credentials.clone()
 }
 
 /// A single account's usage snapshot: live quota (when available) plus
@@ -716,7 +687,7 @@ async fn enrich_agy_identity(store: &AccountStore, account: &Account, creds: &mu
     if !needs_id && !needs_label {
         return;
     }
-    let Some(identity) = oauth::agy_identity_from_access_token(&creds.access_token).await else {
+    let Some(identity) = crate::oauth::agy_identity_from_access_token(&creds.access_token).await else {
         return;
     };
     let mut changed = false;
@@ -822,7 +793,54 @@ fn codex_identity_status(probe_identity: &str, expected: &str) -> Option<&'stati
     }
 }
 
-async fn poll_codex_cli_profile(profile_root: &std::path::Path, expected_identity: &str) -> FetchOutcome {
+fn claude_identity_status(snapshot_identity: &str, expected: &str) -> Option<&'static str> {
+    if snapshot_identity != expected {
+        Some("identity_changed")
+    } else {
+        None
+    }
+}
+
+enum ClaudeCliOutcome {
+    Live(FetchOutcome),
+    WaitingForUsage,
+    IdentityChanged,
+}
+
+fn read_claude_snapshot_outcome(snapshot_path: &Path, expected_identity: &str) -> ClaudeCliOutcome {
+    let Ok(bytes) = std::fs::read(snapshot_path) else {
+        return ClaudeCliOutcome::WaitingForUsage;
+    };
+    let Ok(root) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return ClaudeCliOutcome::WaitingForUsage;
+    };
+    let identity = root
+        .get("identity")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    if claude_identity_status(identity, expected_identity).is_some() {
+        return ClaudeCliOutcome::IdentityChanged;
+    }
+    let rate_limits = root
+        .get("rate_limits")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let quota = parse_claude_usage(&rate_limits);
+    if quota.five_hour.is_none() && quota.week.is_none() {
+        return ClaudeCliOutcome::WaitingForUsage;
+    }
+    ClaudeCliOutcome::Live(FetchOutcome::Live {
+        five_hour: quota.five_hour,
+        week: quota.week,
+        plan: None,
+        email: (!identity.is_empty()).then(|| identity.to_string()),
+    })
+}
+
+async fn poll_codex_cli_profile(
+    profile_root: &std::path::Path,
+    expected_identity: &str,
+) -> FetchOutcome {
     match crate::codex_cli::probe_codex(profile_root).await {
         Ok(probe) => {
             if codex_identity_status(&probe.account.id, expected_identity).is_some() {
@@ -861,16 +879,13 @@ async fn poll_codex_oauth(
     }
 }
 
-
-async fn poll_claude(
+async fn poll_claude_oauth(
     store: &AccountStore,
     client: &reqwest::Client,
     account: &Account,
-    cli: Option<&ImportedAccount>,
 ) -> FetchOutcome {
     match store.credentials(&account.id) {
         Some(creds) if !creds.access_token.is_empty() => {
-            let creds = sync_claude_creds_from_cli(store, account, creds, cli);
             let creds = maybe_refresh(store, &account.id, Provider::Claude, creds).await;
             match fetch_claude_quota(client, &creds).await {
                 Ok(quota) => {
@@ -881,75 +896,10 @@ async fn poll_claude(
                     };
                     claude_fetch_outcome(quota, email)
                 }
-                Err(status) => {
-                    // Matching-identity token revoked: re-read Keychain once
-                    // and retry on 401/403. Never adopts a different CLI
-                    // account onto this row.
-                    if matches!(status, Some(401) | Some(403)) {
-                        if let Ok(fresh) = import::load_claude_cli_auth() {
-                            let retried = sync_claude_creds_from_cli(
-                                store,
-                                account,
-                                creds.clone(),
-                                Some(&fresh),
-                            );
-                            if retried.access_token != creds.access_token {
-                                if let Ok(quota) = fetch_claude_quota(client, &retried).await {
-                                    let email =
-                                        if !fresh.label.is_empty() && fresh.label.contains('@') {
-                                            Some(fresh.label.as_str())
-                                        } else if account.label.contains('@') {
-                                            Some(account.label.as_str())
-                                        } else {
-                                            None
-                                        };
-                                    return claude_fetch_outcome(quota, email);
-                                }
-                            }
-                        }
-                    }
-                    FetchOutcome::Failed { status }
-                }
+                Err(status) => FetchOutcome::Failed { status },
             }
         }
-        _ => {
-            if let Some(imported) = cli {
-                let stored = store.credentials(&account.id).unwrap_or(Credentials {
-                    access_token: String::new(),
-                    refresh_token: None,
-                    account_id: None,
-                    expires_at: None,
-                });
-                let adopt = import::cli_identity_matches(
-                    &stored,
-                    &account.label,
-                    &imported.credentials,
-                    &imported.label,
-                );
-                if adopt && !imported.credentials.access_token.is_empty() {
-                    let _ = store.update_credentials(&account.id, &imported.credentials);
-                    if !imported.label.is_empty() && imported.label != "Claude" {
-                        store.update_label(&account.id, &imported.label);
-                    }
-                    let creds = maybe_refresh(
-                        store,
-                        &account.id,
-                        Provider::Claude,
-                        imported.credentials.clone(),
-                    )
-                    .await;
-                    if let Ok(quota) = fetch_claude_quota(client, &creds).await {
-                        let email = if imported.label.contains('@') {
-                            Some(imported.label.as_str())
-                        } else {
-                            None
-                        };
-                        return claude_fetch_outcome(quota, email);
-                    }
-                }
-            }
-            FetchOutcome::Failed { status: Some(401) }
-        }
+        _ => FetchOutcome::Failed { status: Some(401) },
     }
 }
 
@@ -1072,18 +1022,16 @@ pub async fn poll_all(store: &AccountStore) -> Vec<AccountUsage> {
     let mut codex_local = local_usage_for_provider(store, &accounts, Provider::Codex, now).await;
     let mut claude_local = local_usage_for_provider(store, &accounts, Provider::Claude, now).await;
 
-    // Read CLI auth once per poll tick so the *matching* row can sync after
-    // terminal login. Never use sole-row replace — siblings stay intact.
-    let claude_cli = import::load_claude_cli_auth().ok();
-
     for account in accounts {
         let usage = match account.provider {
             Provider::Agy => poll_agy(store, &client, &account).await,
             Provider::Codex => {
                 let outcome = match &account.auth_source {
-                    AuthSource::CliProfile { profile_root, expected_identity, .. } => {
-                        poll_codex_cli_profile(profile_root, expected_identity).await
-                    }
+                    AuthSource::CliProfile {
+                        profile_root,
+                        expected_identity,
+                        ..
+                    } => poll_codex_cli_profile(profile_root, expected_identity).await,
                     _ => poll_codex_oauth(store, &client, &account).await,
                 };
                 let local = codex_local
@@ -1092,11 +1040,43 @@ pub async fn poll_all(store: &AccountStore) -> Vec<AccountUsage> {
                 assemble_account_usage(&account, outcome, local)
             }
             Provider::Claude => {
-                let outcome = poll_claude(store, &client, &account, claude_cli.as_ref()).await;
                 let local = claude_local
                     .remove(&account.id)
                     .unwrap_or_else(|| LocalUsage::none(LocalProvenance::NoLocalProfile));
-                assemble_account_usage(&account, outcome, local)
+                match &account.auth_source {
+                    AuthSource::CliProfile {
+                        expected_identity, ..
+                    } => match read_claude_snapshot_outcome(
+                        &paths::claude_statusline_snapshot(&account.id),
+                        expected_identity,
+                    ) {
+                        ClaudeCliOutcome::Live(outcome) => {
+                            assemble_account_usage(&account, outcome, local)
+                        }
+                        ClaudeCliOutcome::WaitingForUsage => {
+                            let mut usage = assemble_account_usage(
+                                &account,
+                                FetchOutcome::Failed { status: None },
+                                local,
+                            );
+                            usage.status = "waiting_for_usage".to_string();
+                            usage
+                        }
+                        ClaudeCliOutcome::IdentityChanged => {
+                            let mut usage = assemble_account_usage(
+                                &account,
+                                FetchOutcome::Failed { status: None },
+                                local,
+                            );
+                            usage.status = "identity_changed".to_string();
+                            usage
+                        }
+                    },
+                    _ => {
+                        let outcome = poll_claude_oauth(store, &client, &account).await;
+                        assemble_account_usage(&account, outcome, local)
+                    }
+                }
             }
             #[cfg(feature = "edition-pro")]
             Provider::Cursor => poll_cursor(store, &client, &account).await,
@@ -1120,6 +1100,7 @@ pub async fn poll_all(store: &AccountStore) -> Vec<AccountUsage> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
     use usage_core::account::{Account, AuthSource, Provider};
     use usage_core::models::QuotaUsage;
 
@@ -1154,7 +1135,6 @@ mod tests {
         }
     }
 
-    
     #[test]
     fn auth_source_codex_identity_mismatch() {
         assert_eq!(
@@ -1164,7 +1144,64 @@ mod tests {
         assert_eq!(codex_identity_status("id", "id"), None);
     }
 
-#[test]
+    #[test]
+    fn auth_source_claude_identity_mismatch() {
+        assert_eq!(claude_identity_status("a", "b"), Some("identity_changed"));
+        assert_eq!(claude_identity_status("a", "a"), None);
+    }
+
+    #[test]
+    fn auth_source_claude_snapshot_missing_is_waiting() {
+        use std::path::Path;
+        assert!(matches!(
+            read_claude_snapshot_outcome(Path::new("/nonexistent"), "id"),
+            ClaudeCliOutcome::WaitingForUsage
+        ));
+    }
+
+    #[test]
+    fn auth_source_claude_snapshot_live() {
+        let temp = TempDir::new().expect("create temp directory");
+        let snapshot = temp.path().join("snapshot.json");
+        std::fs::write(
+            &snapshot,
+            r#"{"identity":"id","rate_limits":{"five_hour":{"utilization":30.0},"seven_day":{"utilization":55.0}}}"#,
+        )
+        .expect("write snapshot");
+
+        let ClaudeCliOutcome::Live(FetchOutcome::Live {
+            five_hour,
+            week,
+            plan,
+            email,
+        }) = read_claude_snapshot_outcome(&snapshot, "id")
+        else {
+            panic!("expected live Claude snapshot outcome");
+        };
+
+        assert_eq!(five_hour.map(|quota| quota.percent), Some(30.0));
+        assert_eq!(week.map(|quota| quota.percent), Some(55.0));
+        assert_eq!(plan, None);
+        assert_eq!(email.as_deref(), Some("id"));
+    }
+
+    #[test]
+    fn auth_source_claude_snapshot_identity_mismatch() {
+        let temp = TempDir::new().expect("create temp directory");
+        let snapshot = temp.path().join("snapshot.json");
+        std::fs::write(
+            &snapshot,
+            r#"{"identity":"other","rate_limits":{"five_hour":{"utilization":30.0}}}"#,
+        )
+        .expect("write snapshot");
+
+        assert!(matches!(
+            read_claude_snapshot_outcome(&snapshot, "id"),
+            ClaudeCliOutcome::IdentityChanged
+        ));
+    }
+
+    #[test]
     fn auth_source_ok_then_transient_error_serves_stale() {
         clear_last_success_cache();
         let mut cache = HashMap::new();
@@ -1292,7 +1329,7 @@ mod tests {
         // Only A's credentials are eligible for replacement; B stays untouched.
         use usage_core::account::Credentials;
 
-        let cli = ImportedAccount {
+        let cli = crate::import::ImportedAccount {
             label: "a@ex.com".into(),
             credentials: Credentials {
                 access_token: "a-new".into(),
@@ -1341,7 +1378,7 @@ mod tests {
             .map(|(account, stored)| {
                 (
                     account.id.as_str(),
-                    import::codex_cli_creds_are_newer(
+                    crate::import::codex_cli_creds_are_newer(
                         stored,
                         &account.label,
                         &cli.credentials,
