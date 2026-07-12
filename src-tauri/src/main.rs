@@ -10,15 +10,17 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::time::Duration;
+use std::{ffi::OsStr, process};
 
-use tauri::{
-    tray::TrayIconBuilder,
-    AppHandle, Manager,
-};
+use tauri::{tray::TrayIconBuilder, AppHandle, Manager};
 use usage_core::account::Provider;
 
 mod agy_local;
 mod api;
+mod claude_cli;
+mod claude_statusline;
+mod cli_auth;
+mod codex_cli;
 #[cfg(feature = "edition-pro")]
 mod cursor_local;
 mod edition;
@@ -27,10 +29,8 @@ mod oauth;
 mod paths;
 mod poller;
 mod store;
-mod tray_menu;
 mod terminal;
-mod cli_auth;
-mod codex_cli;
+mod tray_menu;
 
 use store::AccountStore;
 
@@ -207,7 +207,42 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
     }
 }
 
+fn statusline_bridge_account_id() -> Result<Option<String>, String> {
+    let mut args = std::env::args_os().skip(1);
+    if args.next().as_deref() != Some(OsStr::new("--claude-statusline-bridge")) {
+        return Ok(None);
+    }
+    let account_id = args
+        .next()
+        .ok_or_else(|| "--claude-statusline-bridge requires an account id".to_string())?
+        .into_string()
+        .map_err(|_| "Claude account id must be valid UTF-8".to_string())?;
+    if args.next().is_some() {
+        return Err("--claude-statusline-bridge accepts exactly one account id".to_string());
+    }
+    claude_statusline::validate_account_id(&account_id)?;
+    Ok(Some(account_id))
+}
+
 fn main() {
+    match statusline_bridge_account_id() {
+        Ok(Some(account_id)) => {
+            let settings_path = paths::claude_settings_json(&account_id);
+            match claude_statusline::handle_statusline_bridge(&account_id, &settings_path) {
+                Ok(()) => process::exit(0),
+                Err(error) => {
+                    eprintln!("status-line bridge error: {error}");
+                    process::exit(1);
+                }
+            }
+        }
+        Ok(None) => {}
+        Err(error) => {
+            eprintln!("status-line bridge argument error: {error}");
+            process::exit(2);
+        }
+    }
+
     tauri::Builder::default()
         .manage(AccountStore::new())
         .manage(api::ApiState::new())

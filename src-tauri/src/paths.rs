@@ -8,6 +8,10 @@ use std::path::{Component, Path, PathBuf};
 
 const APP_DIR: &str = "UsageCheck";
 
+#[path = "paths_profiles.rs"]
+mod paths_profiles;
+pub use paths_profiles::{claude_managed_root, claude_settings_json, claude_statusline_snapshot};
+
 /// User home directory. Prefers `HOME` (Unix) then `USERPROFILE` (Windows).
 pub fn home_dir() -> Option<PathBuf> {
     std::env::var_os("HOME")
@@ -371,4 +375,22 @@ mod tests_codex_managed {
         let output = codex_home_for_profile(&input);
         assert_eq!(output, input);
     }
+}
+
+/// Get the default CLAUDE_CONFIG_DIR if it exists
+pub fn default_claude_config_dir_checked() -> Option<PathBuf> {
+    if let Ok(dir) = std::env::var("CLAUDE_CONFIG_DIR") {
+        let path = PathBuf::from(dir);
+        if path.exists() {
+            return Some(path);
+        }
+    }
+    home_dir().and_then(|h| {
+        let default = h.join(".claude");
+        if default.exists() {
+            Some(default)
+        } else {
+            None
+        }
+    })
 }
