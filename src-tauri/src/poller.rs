@@ -12,6 +12,7 @@
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
@@ -153,6 +154,57 @@ pub struct AccountUsage {
     /// local totals are fully trustworthy. Lets the tray/DTO distinguish a real
     /// zero from a failed/ambiguous local scan.
     pub local_status: Option<String>,
+}
+
+#[derive(Clone)]
+struct LastSuccess {
+    display_name: String,
+    plan: Option<String>,
+    five_hour: Option<QuotaUsage>,
+    week: Option<QuotaUsage>,
+}
+
+fn last_success_cache() -> &'static Mutex<HashMap<String, LastSuccess>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, LastSuccess>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Post-step applied to every assembled usage. On success, remember the good
+/// windows. On a transient failure (`error`) with a remembered success, serve
+/// the cached windows as `stale`. Other statuses are never masked.
+fn apply_last_success(
+    cache: &mut HashMap<String, LastSuccess>,
+    id: &str,
+    mut usage: AccountUsage,
+) -> AccountUsage {
+    if usage.status == "ok" {
+        cache.insert(
+            id.to_string(),
+            LastSuccess {
+                display_name: usage.display_name.clone(),
+                plan: usage.plan.clone(),
+                five_hour: usage.five_hour.clone(),
+                week: usage.week.clone(),
+            },
+        );
+    } else if usage.status == "error" {
+        if let Some(previous) = cache.get(id) {
+            usage.display_name = previous.display_name.clone();
+            usage.plan = previous.plan.clone();
+            usage.five_hour = previous.five_hour.clone();
+            usage.week = previous.week.clone();
+            usage.status = "stale".to_string();
+        }
+    }
+    usage
+}
+
+#[cfg(test)]
+fn clear_last_success_cache() {
+    last_success_cache()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .clear();
 }
 
 fn display_name_for(account: &Account, email: Option<&str>, plan: Option<&str>) -> String {
@@ -497,7 +549,7 @@ async fn poll_cursor(
     account: &Account,
 ) -> AccountUsage {
     use usage_core::account::AuthSource;
-    
+
     // Get database path and expected identity from auth_source
     let (database_path, expected_identity) = match &account.auth_source {
         AuthSource::CursorDatabase {
@@ -570,11 +622,7 @@ async fn poll_cursor(
     };
     match fetch_cursor_quota(client, &temp_creds).await {
         Ok(mut quota) => {
-            quota = cursor_quota_with_auth(
-                quota,
-                session.email.clone(),
-                session.plan.clone(),
-            );
+            quota = cursor_quota_with_auth(quota, session.email.clone(), session.plan.clone());
             account_usage_from_cursor(
                 account,
                 &quota,
@@ -593,7 +641,6 @@ async fn poll_cursor(
         ),
     }
 }
-
 
 #[cfg(feature = "edition-pro")]
 async fn poll_grok(
@@ -1118,6 +1165,12 @@ pub async fn poll_all(store: &AccountStore) -> Vec<AccountUsage> {
             #[cfg(feature = "edition-pro")]
             Provider::Higgsfield => poll_higgsfield(store, &account).await,
         };
+        let usage = {
+            let mut cache = last_success_cache()
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            apply_last_success(&mut cache, &account.id, usage)
+        };
         out.push(usage);
     }
 
@@ -1129,6 +1182,121 @@ mod tests {
     use super::*;
     use usage_core::account::{Account, AuthSource, Provider};
     use usage_core::models::QuotaUsage;
+
+    fn auth_source_usage(id: &str, status: &str, five_hour: Option<QuotaUsage>) -> AccountUsage {
+        let account = Account {
+            id: id.to_string(),
+            provider: Provider::Codex,
+            label: "user@example.com".into(),
+            auth_source: AuthSource::BrowserOAuth {
+                credential_id: format!("credential-{id}"),
+            },
+        };
+        AccountUsage {
+            account,
+            display_name: "user@example.com".into(),
+            plan: Some("Pro".into()),
+            five_hour,
+            week: None,
+            totals: WindowTotals::default(),
+            pool_breakdown: Vec::new(),
+            detail_suffix: None,
+            status: status.to_string(),
+            local_status: None,
+        }
+    }
+
+    fn auth_source_quota(percent: f64) -> QuotaUsage {
+        QuotaUsage {
+            percent,
+            resets_at: None,
+            window_seconds: Some(18_000),
+        }
+    }
+
+    #[test]
+    fn auth_source_ok_then_transient_error_serves_stale() {
+        clear_last_success_cache();
+        let mut cache = HashMap::new();
+        let quota = auth_source_quota(25.0);
+        apply_last_success(
+            &mut cache,
+            "account-1",
+            auth_source_usage("account-1", "ok", Some(quota.clone())),
+        );
+
+        let result = apply_last_success(
+            &mut cache,
+            "account-1",
+            auth_source_usage("account-1", "error", None),
+        );
+
+        assert_eq!(result.status, "stale");
+        assert_eq!(result.five_hour, Some(quota));
+    }
+
+    #[test]
+    fn auth_source_transient_error_without_prior_success_stays_error() {
+        clear_last_success_cache();
+        let mut cache = HashMap::new();
+
+        let result = apply_last_success(
+            &mut cache,
+            "account-1",
+            auth_source_usage("account-1", "error", None),
+        );
+
+        assert_eq!(result.status, "error");
+        assert_eq!(result.five_hour, None);
+    }
+
+    #[test]
+    fn auth_source_needs_login_never_stale() {
+        clear_last_success_cache();
+        let mut cache = HashMap::new();
+        apply_last_success(
+            &mut cache,
+            "account-1",
+            auth_source_usage("account-1", "ok", Some(auth_source_quota(25.0))),
+        );
+
+        for status in ["needs_login", "rate_limited", "identity_changed"] {
+            let result = apply_last_success(
+                &mut cache,
+                "account-1",
+                auth_source_usage("account-1", status, None),
+            );
+            assert_eq!(result.status, status);
+            assert_eq!(result.five_hour, None);
+        }
+    }
+
+    #[test]
+    fn auth_source_stale_uses_latest_success() {
+        clear_last_success_cache();
+        let mut cache = HashMap::new();
+        let first = auth_source_quota(25.0);
+        let latest = auth_source_quota(75.0);
+        apply_last_success(
+            &mut cache,
+            "account-1",
+            auth_source_usage("account-1", "ok", Some(first)),
+        );
+        apply_last_success(
+            &mut cache,
+            "account-1",
+            auth_source_usage("account-1", "ok", Some(latest.clone())),
+        );
+
+        let result = apply_last_success(
+            &mut cache,
+            "account-1",
+            auth_source_usage("account-1", "error", None),
+        );
+
+        assert_eq!(result.status, "stale");
+        assert_eq!(result.five_hour, Some(latest));
+    }
 
     #[test]
     fn maps_agy_pools() {
