@@ -103,6 +103,7 @@ pub struct AccountUsageDto {
     pub pools: Vec<PoolDto>,
     pub token_totals: TokenTotalsDto,
     pub local_status: Option<String>,
+    pub detail_suffix: Option<String>,
 }
 
 impl AccountUsageDto {
@@ -119,6 +120,7 @@ impl AccountUsageDto {
             pools: u.pool_breakdown.iter().map(PoolDto::from_pool).collect(),
             token_totals: TokenTotalsDto::from_totals(&u.totals),
             local_status: u.local_status.clone(),
+            detail_suffix: u.detail_suffix.clone(),
         }
     }
 }
@@ -242,8 +244,13 @@ fn route(state: &ApiState, method: &str, path: &str) -> Reply {
                     None => json(
                         404,
                         format!(
-                            r#"{{"error":"unknown_provider","message":"unknown provider '{}' (expected codex, claude, or agy)"}}"#,
-                            name.replace('"', "")
+                            r#"{{"error":"unknown_provider","message":"unknown provider '{}' (expected {})"}}"#,
+                            name.replace('"', ""),
+                            if cfg!(feature = "edition-pro") {
+                                "codex, claude, agy, cursor, grok, or higgsfield"
+                            } else {
+                                "codex, claude, or agy"
+                            }
                         ),
                     ),
                 };
@@ -348,7 +355,6 @@ mod tests {
     use super::*;
     use usage_core::account::{Account, AuthSource, ProfileOwnership};
     use usage_core::models::QuotaUsage;
-
     fn sample_auth_source(provider: Provider, identity: &str) -> AuthSource {
         match provider {
             Provider::Codex | Provider::Claude => AuthSource::CliProfile {
@@ -375,7 +381,6 @@ mod tests {
             },
         }
     }
-
     fn sample(provider: Provider, id: &str, five: Option<f64>, week: Option<f64>) -> AccountUsage {
         AccountUsage {
             account: Account {
@@ -403,13 +408,11 @@ mod tests {
             local_status: None,
         }
     }
-
     fn state_with(usages: &[AccountUsage]) -> ApiState {
         let state = ApiState::new();
         state.publish(usages);
         state
     }
-
     #[test]
     fn dto_renames_percent_and_labels_windows() {
         let dto = AccountUsageDto::from_usage(&sample(Provider::Codex, "a", Some(38.0), Some(6.0)));
@@ -418,7 +421,6 @@ mod tests {
         assert_eq!(five.window_label, "5h");
         assert_eq!(dto.week.unwrap().window_label, "7d");
     }
-
     #[test]
     fn usage_endpoint_serializes_all_accounts() {
         let state = state_with(&[
@@ -431,11 +433,9 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&reply.body).unwrap();
         assert_eq!(v["count"], 2);
         assert_eq!(v["accounts"][0]["provider"], "codex");
-        // Never leak internal credential-ish fields.
         assert!(reply.body.contains("used_percent"));
         assert!(!reply.body.contains("access_token"));
     }
-
     #[test]
     fn provider_filter_returns_only_matching() {
         let state = state_with(&[
@@ -448,7 +448,6 @@ mod tests {
         assert_eq!(v["count"], 1);
         assert_eq!(v["accounts"][0]["provider"], "claude");
     }
-
     #[test]
     fn unknown_provider_is_404() {
         let state = state_with(&[]);
@@ -456,7 +455,6 @@ mod tests {
         assert_eq!(reply.status, 404);
         assert!(reply.body.contains("unknown_provider"));
     }
-
     #[test]
     fn trailing_slash_provider_is_accepted() {
         let state = state_with(&[sample(Provider::Agy, "c", None, Some(5.0))]);
@@ -465,7 +463,6 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&reply.body).unwrap();
         assert_eq!(v["count"], 1);
     }
-
     #[test]
     fn health_reports_account_count() {
         let state = state_with(&[sample(Provider::Codex, "a", Some(1.0), None)]);
@@ -476,14 +473,12 @@ mod tests {
         assert_eq!(v["account_count"], 1);
         assert!(v["updated_at"].is_string());
     }
-
     #[test]
     fn non_get_is_405() {
         let state = state_with(&[]);
         let reply = route(&state, "POST", "/v1/usage");
         assert_eq!(reply.status, 405);
     }
-
     #[test]
     fn openapi_is_served_as_yaml() {
         let state = state_with(&[]);
@@ -492,7 +487,6 @@ mod tests {
         assert_eq!(reply.content_type, "application/yaml");
         assert!(reply.body.contains("openapi: 3.1.0"));
     }
-
     #[test]
     fn index_lists_endpoints() {
         let state = state_with(&[]);
@@ -501,21 +495,16 @@ mod tests {
         assert_eq!(v["service"], "usagecheck-local-api");
         assert!(v["endpoints"].as_array().unwrap().len() >= 3);
     }
-
-    /// Live end-to-end bind + HTTP round-trip. `#[ignore]`d because it binds a
-    /// real socket; run explicitly with `cargo test -p usage-app -- --ignored`.
     #[test]
     #[ignore]
     fn live_server_round_trip() {
         use std::io::{Read, Write};
         use std::net::TcpStream;
-
         std::env::set_var("USAGECHECK_API_PORT", "5199");
         std::env::remove_var("USAGECHECK_API_DISABLE");
         let state = state_with(&[sample(Provider::Codex, "a", Some(42.0), None)]);
         spawn(state);
         std::thread::sleep(std::time::Duration::from_millis(300));
-
         let mut stream = TcpStream::connect("127.0.0.1:5199").unwrap();
         stream
             .write_all(
@@ -524,13 +513,11 @@ mod tests {
             .unwrap();
         let mut raw = String::new();
         stream.read_to_string(&mut raw).unwrap();
-
         let body = raw.split("\r\n\r\n").nth(1).unwrap();
         let v: serde_json::Value = serde_json::from_str(body).unwrap();
         assert_eq!(v["count"], 1);
         assert_eq!(v["accounts"][0]["five_hour"]["used_percent"], 42.0);
     }
-
     #[test]
     fn agy_pools_are_exposed() {
         let mut agy = sample(Provider::Agy, "c", None, Some(18.4));
@@ -549,29 +536,65 @@ mod tests {
         assert_eq!(v["accounts"][0]["pools"][0]["name"], "Gemini Models");
         assert_eq!(v["accounts"][0]["pools"][0]["week"]["used_percent"], 0.0);
     }
-
     #[test]
-
     fn dto_maps_local_status_from_provenance() {
-        // §6.12: AccountUsageDto.local_status must carry the AccountUsage's local
-        // provenance label so clients distinguish a failed/ambiguous local scan
-        // from a real zero. RED until LOGIC maps it through in `from_usage`
-        // (the stub hardcodes `local_status: None`).
         let mut degraded = sample(Provider::Codex, "a", Some(38.0), Some(6.0));
         degraded.local_status = Some("unavailable".into());
         let dto = AccountUsageDto::from_usage(&degraded);
-        assert_eq!(
-            dto.local_status.as_deref(),
-            Some("unavailable"),
-            "from_usage must pass AccountUsage.local_status through to the DTO"
-        );
-
-        // A clean account (local_status None) must map to None, not a label.
+        assert_eq!(dto.local_status.as_deref(), Some("unavailable"));
         let clean = sample(Provider::Codex, "b", Some(1.0), Some(1.0));
-        assert_eq!(
-            AccountUsageDto::from_usage(&clean).local_status,
-            None,
-            "clean local totals must not carry a provenance label"
-        );
+        assert_eq!(AccountUsageDto::from_usage(&clean).local_status, None);
+    }
+    #[test]
+    fn dto_includes_detail_suffix() {
+        let mut usage = sample(Provider::Codex, "a", None, None);
+        usage.detail_suffix = Some("809 credits".into());
+        let dto = AccountUsageDto::from_usage(&usage);
+        assert_eq!(dto.detail_suffix, Some("809 credits".to_string()));
+        assert!(serde_json::to_string(&dto).unwrap().contains("detail_suffix"));
+    }
+    #[test]
+    fn dto_never_serializes_auth_metadata() {
+        let usages = std::iter::once(sample(Provider::Codex, "cli", None, None));
+        #[cfg(feature = "edition-pro")]
+        let usages = usages.chain([
+            sample(Provider::Cursor, "cursor", None, None),
+            sample(Provider::Grok, "grok", None, None),
+        ]);
+        for usage in usages {
+            let json = serde_json::to_string(&AccountUsageDto::from_usage(&usage)).unwrap();
+            for private in [
+                "auth_source", "profile_root", "credential_id", "team_id", "database_path",
+                "access_token", "management",
+            ] {
+                assert!(!json.contains(private), "DTO leaked {private}: {json}");
+            }
+        }
+    }
+    #[test]
+    fn status_stale_serializes() {
+        let mut usage = sample(Provider::Codex, "a", None, None);
+        usage.status = "stale".to_string();
+        assert!(serde_json::to_string(&AccountUsageDto::from_usage(&usage)).unwrap().contains("\"stale\""));
+    }
+    #[test]
+    fn openapi_declares_detail_suffix_and_stale() {
+        assert!(["detail_suffix", "stale", "higgsfield"].into_iter().all(|v| OPENAPI_YAML.contains(v)));
+    }
+    #[cfg(feature = "edition-pro")]
+    #[test]
+    fn provider_filter_accepts_pro_providers() {
+        let state = state_with(&[
+            sample(Provider::Cursor, "cursor", None, None),
+            sample(Provider::Grok, "grok", None, None),
+            sample(Provider::Higgsfield, "higgsfield", None, None),
+        ]);
+        for provider in ["cursor", "grok", "higgsfield"] {
+            let reply = route(&state, "GET", &format!("/v1/usage/{provider}"));
+            assert_eq!(reply.status, 200);
+            let body: serde_json::Value = serde_json::from_str(&reply.body).unwrap();
+            assert_eq!(body["count"], 1);
+            assert_eq!(body["accounts"][0]["provider"], provider);
+        }
     }
 }

@@ -123,17 +123,18 @@ components:
   schemas:
     Provider:
       type: string
-      enum: [codex, claude, agy]
+      enum: [codex, claude, agy, cursor, grok, higgsfield]
       description: Usage provider category.
     Status:
       type: string
-      enum: [ok, needs_login, rate_limited, error]
+      enum: [ok, needs_login, rate_limited, error, stale]
       description: |
         Freshness/auth status for an account's most recent poll.
         - `ok`: live data fetched successfully.
         - `needs_login`: token missing/expired (401/403); may fall back to local logs.
         - `rate_limited`: provider returned 429.
         - `error`: network/other failure.
+        - `stale`: transient failure; serving the last successful in-memory result.
     Quota:
       type: object
       description: A single usage window (used percent).
@@ -243,6 +244,9 @@ components:
             local totals are fully trustworthy. Lets clients distinguish a real
             zero from a failed/ambiguous local scan.
           example: "assumed"
+        detail_suffix:
+          type: [string, "null"]
+          description: Provider-specific trailing detail, e.g. remaining API credits.
     UsageResponse:
       type: object
       required: [updated_at, count, accounts]
