@@ -876,4 +876,86 @@ mod tests {
                 || imported.credentials.access_token.len() > 20
         );
     }
+
+    #[test]
+    #[cfg(feature = "edition-pro")]
+    fn xai_env_parse_reads_mgmt_key_and_team() {
+        use std::env;
+        
+        // Set env vars
+        env::set_var("XAI_MGMT_KEY", "test-mgmt-key-123");
+        env::set_var("XAI_TEAM_ID", "test-team-456");
+        
+        // Load should succeed
+        let result = load_grok_env_auth();
+        assert!(result.is_ok(), "load_grok_env_auth should succeed with env vars set");
+        
+        let imported = result.unwrap();
+        assert_eq!(imported.credentials.access_token, "test-mgmt-key-123");
+        assert_eq!(imported.credentials.account_id, Some("test-team-456".to_string()));
+        
+        // Clean up
+        env::remove_var("XAI_MGMT_KEY");
+        env::remove_var("XAI_TEAM_ID");
+        
+        // Test with empty/missing env
+        let result_empty = load_grok_env_auth();
+        assert!(result_empty.is_err(), "load_grok_env_auth should fail without env vars");
+    }
+
+    #[test]
+    #[cfg(feature = "edition-pro")]
+    fn xai_paste_dedupes_team_line() {
+        use usage_core::fetch::grok::parse_grok_paste;
+        
+        // Test with key + team on separate lines
+        let (key, team) = parse_grok_paste("KEY123\nTEAM456");
+        assert_eq!(key, "KEY123");
+        assert_eq!(team, Some("TEAM456".to_string()));
+        
+        // Test with single line (key only)
+        let (key_only, team_none) = parse_grok_paste("KEY789");
+        assert_eq!(key_only, "KEY789");
+        assert!(team_none.is_none());
+    }
+
+    #[test]
+    #[cfg(feature = "edition-pro")]
+    fn xai_stored_as_management_reference() {
+        use crate::store::AccountStore;
+        use usage_core::account::{Provider, Credentials, AuthSource};
+        use tempfile::TempDir;
+        
+        let root = TempDir::new().unwrap();
+        let store = AccountStore::new_at(root.path().to_path_buf());
+        
+        let raw_key = "xai-management-key-test-value";
+        let account = store
+            .add(
+                Provider::Grok,
+                "xAI API credits".into(),
+                Credentials {
+                    access_token: raw_key.into(),
+                    refresh_token: None,
+                    account_id: Some("test-team".into()),
+                    expires_at: None,
+                },
+            )
+            .expect("store xAI account");
+        
+        // Verify the account was stored with XaiManagement auth source
+        assert!(matches!(
+            account.auth_source,
+            AuthSource::XaiManagement { ref team_id, .. } if team_id == "test-team"
+        ));
+        
+        // Verify the raw key is NOT in the serialized account index
+        let index_path = root.path().join("accounts-v2.json");
+        if index_path.exists() {
+            let index = std::fs::read_to_string(&index_path)
+                .expect("read account index");
+            assert!(!index.contains(raw_key), "raw key must not leak into account index");
+        }
+    }
+
 }

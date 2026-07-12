@@ -629,7 +629,7 @@ fn fetch_higgsfield_account_json() -> Result<serde_json::Value, ()> {
     use std::process::Command;
 
     let output = Command::new("higgsfield")
-        .args(["account", "--json"])
+        .args(["account", "status", "--json"])
         .output()
         .map_err(|_| ())?;
     if !output.status.success() {
@@ -647,7 +647,6 @@ async fn poll_higgsfield(store: &AccountStore, account: &Account) -> AccountUsag
                 email: None,
                 plan: None,
                 credits_remaining: None,
-                credits_total: None,
             },
             "needs_login",
         );
@@ -669,7 +668,6 @@ async fn poll_higgsfield(store: &AccountStore, account: &Account) -> AccountUsag
                 email: None,
                 plan: None,
                 credits_remaining: None,
-                credits_total: None,
             },
             "needs_setup",
         ),

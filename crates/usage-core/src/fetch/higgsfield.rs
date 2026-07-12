@@ -1,60 +1,56 @@
 use serde_json::Value;
-
 use crate::models::QuotaUsage;
 
-/// Parsed Higgsfield account credits (CLI `account --json` shape).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct HiggsfieldCredits {
     pub email: Option<String>,
     pub plan: Option<String>,
-    pub credits_remaining: Option<i64>,
-    pub credits_total: Option<i64>,
+    pub credits_remaining: Option<f64>,
 }
 
 impl HiggsfieldCredits {
-    /// Used % when both total and remaining credits are known.
-    pub fn used_percent(&self) -> Option<f64> {
-        let total = self.credits_total?;
-        let remaining = self.credits_remaining?;
-        if total <= 0 {
-            return None;
-        }
-        let used = (total - remaining).max(0);
-        Some((used as f64 / total as f64) * 100.0)
+    pub fn to_quota(&self) -> Option<QuotaUsage> {
+        // Higgsfield exposes only a raw balance with no window/percent model
+        // Do not fabricate usage percentages
+        None
     }
 
     pub fn detail_suffix(&self) -> Option<String> {
-        self.credits_remaining
-            .map(|n| format!("{n} credits left"))
-    }
-
-    pub fn to_quota(&self) -> Option<QuotaUsage> {
-        let percent = self.used_percent()?;
-        Some(QuotaUsage {
-            percent,
-            resets_at: None,
-            window_seconds: None,
+        self.credits_remaining.map(|credits| {
+            // Format f64 smartly: 100.0 → "100", 12.75 → "12.75"
+            let formatted = if credits.fract() == 0.0 {
+                format!("{:.0}", credits)
+            } else {
+                format!("{}", credits)
+            };
+            format!("{} credits remaining", formatted)
         })
     }
 }
 
-fn nested_i64(v: &Value, keys: &[&str]) -> Option<i64> {
-    let mut cur = v;
-    for key in keys {
-        cur = cur.get(*key)?;
+fn first_f64(root: &Value, paths: &[&[&str]]) -> Option<f64> {
+    for path in paths {
+        let mut current = root;
+        for key in *path {
+            current = &current[key];
+            if current.is_null() {
+                break;
+            }
+        }
+
+        if let Some(n) = current.as_f64() {
+            return Some(n);
+        } else if let Some(s) = current.as_str() {
+            if let Ok(f) = s.trim().parse::<f64>() {
+                return Some(f);
+            }
+        }
     }
-    cur.as_i64()
-        .or_else(|| cur.as_f64().map(|f| f as i64))
-        .or_else(|| cur.as_str().and_then(|s| s.parse().ok()))
+    None
 }
 
-fn first_i64(v: &Value, paths: &[&[&str]]) -> Option<i64> {
-    paths.iter().find_map(|path| nested_i64(v, path))
-}
-
-/// Parses `higgsfield account --json` (or similar) into credit balances.
 pub fn parse_higgsfield_account(root: &Value) -> HiggsfieldCredits {
-    let remaining = first_i64(
+    let remaining = first_f64(
         root,
         &[
             &["credits"],
@@ -62,15 +58,6 @@ pub fn parse_higgsfield_account(root: &Value) -> HiggsfieldCredits {
             &["balance", "credits"],
             &["account", "credits"],
             &["data", "credits"],
-        ],
-    );
-    let total = first_i64(
-        root,
-        &[
-            &["credits_total"],
-            &["total_credits"],
-            &["balance", "total"],
-            &["account", "credits_total"],
         ],
     );
 
@@ -81,8 +68,10 @@ pub fn parse_higgsfield_account(root: &Value) -> HiggsfieldCredits {
         .filter(|s| !s.is_empty())
         .map(str::to_string);
 
+    // Parse plan from subscription_plan_type first, then fallback to plan/subscription
     let plan = root
-        .get("plan")
+        .get("subscription_plan_type")
+        .or_else(|| root.get("plan"))
         .or_else(|| root.get("subscription"))
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
@@ -92,7 +81,6 @@ pub fn parse_higgsfield_account(root: &Value) -> HiggsfieldCredits {
         email,
         plan,
         credits_remaining: remaining,
-        credits_total: total,
     }
 }
 
@@ -102,25 +90,52 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn parses_flat_credits_fields() {
+    fn parses_creator_account_f64() {
         let v = json!({
-            "email": "user@example.com",
-            "credits": 809,
-            "credits_total": 1000,
-            "plan": "pro"
+            "email": "person@example.com",
+            "credits": 12.75,
+            "subscription_plan_type": "Creator"
         });
         let h = parse_higgsfield_account(&v);
-        assert_eq!(h.credits_remaining, Some(809));
-        assert_eq!(h.credits_total, Some(1000));
-        assert!((h.used_percent().unwrap() - 19.1).abs() < 0.2);
-        assert_eq!(h.detail_suffix().as_deref(), Some("809 credits left"));
+        assert_eq!(h.credits_remaining, Some(12.75));
+        assert_eq!(h.plan, Some("Creator".to_string()));
+        assert_eq!(h.detail_suffix(), Some("12.75 credits remaining".to_string()));
+        assert!(h.to_quota().is_none());
     }
 
     #[test]
-    fn parses_nested_balance() {
-        let v = json!({ "balance": { "credits": 42 } });
+    fn parses_numeric_string_credits() {
+        let v = json!({ "credits": "12.75" });
         let h = parse_higgsfield_account(&v);
-        assert_eq!(h.credits_remaining, Some(42));
-        assert!(h.used_percent().is_none());
+        assert_eq!(h.credits_remaining, Some(12.75));
+    }
+
+    #[test]
+    fn nonnumeric_credits_is_none() {
+        let v1 = json!({ "credits": "abc" });
+        let h1 = parse_higgsfield_account(&v1);
+        assert!(h1.credits_remaining.is_none());
+
+        let v2 = json!({ "credits": serde_json::Value::Null });
+        let h2 = parse_higgsfield_account(&v2);
+        assert!(h2.credits_remaining.is_none());
+    }
+
+    #[test]
+    fn missing_or_empty_email_is_none() {
+        let v1 = json!({});
+        let h1 = parse_higgsfield_account(&v1);
+        assert!(h1.email.is_none());
+
+        let v2 = json!({ "email": "" });
+        let h2 = parse_higgsfield_account(&v2);
+        assert!(h2.email.is_none());
+    }
+
+    #[test]
+    fn whole_number_detail_has_no_trailing_zero() {
+        let v = json!({ "credits": 100 });
+        let h = parse_higgsfield_account(&v);
+        assert_eq!(h.detail_suffix(), Some("100 credits remaining".to_string()));
     }
 }
