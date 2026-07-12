@@ -85,7 +85,7 @@ fn discover_servers() -> Vec<LocalServer> {
 
 fn listen_ports(pid: u32) -> Vec<u16> {
     let Ok(output) = Command::new("lsof")
-        .args(["-nP", &format!("-iTCP"), "-sTCP:LISTEN", "-a", "-p", &pid.to_string()])
+        .args(["-nP", "-iTCP", "-sTCP:LISTEN", "-a", "-p", &pid.to_string()])
         .output()
     else {
         return Vec::new();

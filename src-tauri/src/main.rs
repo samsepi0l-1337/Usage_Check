@@ -30,6 +30,7 @@ mod store;
 mod tray_menu;
 mod terminal;
 mod cli_auth;
+mod codex_cli;
 
 use store::AccountStore;
 

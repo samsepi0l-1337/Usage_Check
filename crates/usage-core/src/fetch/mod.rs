@@ -8,3 +8,7 @@ pub mod cursor;
 pub mod grok;
 #[cfg(feature = "edition-pro")]
 pub mod higgsfield;
+
+#[cfg(test)]
+mod app_server {
+}

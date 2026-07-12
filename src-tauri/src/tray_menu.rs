@@ -142,7 +142,7 @@ fn format_percent(p: f64) -> String {
 
 fn relative_reset(q: &QuotaUsage) -> Option<String> {
     let resets_at = q.resets_at?;
-    let secs = (resets_at - Utc::now()).num_seconds().max(0) as i64;
+    let secs = (resets_at - Utc::now()).num_seconds().max(0);
     let days = secs / 86_400;
     let hours = (secs % 86_400) / 3_600;
     let minutes = (secs % 3_600) / 60;
@@ -446,7 +446,7 @@ pub fn tray_id() -> &'static str {
 /// Tooltip summarizing the first few accounts.
 pub fn tooltip_for(usages: &[AccountUsage]) -> String {
     if usages.is_empty() {
-        return format!("{} — no accounts", edition::product_name()).into();
+        return format!("{} — no accounts", edition::product_name());
     }
     usages
         .iter()

@@ -19,11 +19,11 @@ pub fn home_dir() -> Option<PathBuf> {
 pub fn usagecheck_app_data_dir() -> Option<PathBuf> {
     #[cfg(target_os = "macos")]
     {
-        return home_dir().map(|home| {
+        home_dir().map(|home| {
             home.join("Library")
                 .join("Application Support")
                 .join(APP_DIR)
-        });
+        })
     }
     #[cfg(target_os = "windows")]
     {
@@ -93,7 +93,7 @@ pub fn claude_keychain_service_name() -> String {
     match std::env::var("CLAUDE_CONFIG_DIR") {
         Ok(dir) if !dir.trim().is_empty() => {
             let hash = Sha256::digest(dir.as_bytes());
-            let short = hex_prefix(&hash, 8);
+            let short = hex_prefix(hash, 8);
             format!("Claude Code-credentials-{short}")
         }
         _ => "Claude Code-credentials".to_string(),
@@ -116,14 +116,14 @@ fn hex_prefix(bytes: impl AsRef<[u8]>, n: usize) -> String {
 pub fn cursor_state_vscdb() -> Option<PathBuf> {
     #[cfg(target_os = "macos")]
     {
-        return home_dir().map(|h| {
+        home_dir().map(|h| {
             h.join("Library")
                 .join("Application Support")
                 .join("Cursor")
                 .join("User")
                 .join("globalStorage")
                 .join("state.vscdb")
-        });
+        })
     }
     #[cfg(target_os = "windows")]
     {
@@ -327,5 +327,48 @@ mod tests_paths {
             result.to_string_lossy().contains("auth.json"),
             "Auth file path should include auth.json"
         );
+    }
+}
+
+/// Codex managed root for app-isolated profiles: profiles/codex/<uuid> under app data dir.
+pub fn codex_managed_root() -> Option<PathBuf> {
+    usagecheck_app_data_dir().map(|d| {
+        d.join("profiles")
+            .join("codex")
+            .join(uuid::Uuid::new_v4().to_string())
+    })
+}
+
+/// Codex home for a given profile root (returns the root unchanged).
+pub fn codex_home_for_profile(profile_root: &Path) -> PathBuf {
+    profile_root.to_path_buf()
+}
+
+/// Codex default home: CODEX_HOME env or ~/.codex.
+pub fn codex_default_home() -> Option<PathBuf> {
+    codex_home() // Reuse existing helper
+}
+
+#[cfg(test)]
+mod tests_codex_managed {
+    use super::*;
+
+    #[test]
+    fn test_codex_managed_root_under_app_data() {
+        if let Some(root) = codex_managed_root() {
+            let root_str = root.to_string_lossy();
+            assert!(
+                root_str.contains("profiles") && root_str.contains("codex"),
+                "managed root should contain profiles/codex: {}",
+                root_str
+            );
+        }
+    }
+
+    #[test]
+    fn test_codex_home_for_profile_returns_input() {
+        let input = PathBuf::from("/tmp/test_profile");
+        let output = codex_home_for_profile(&input);
+        assert_eq!(output, input);
     }
 }

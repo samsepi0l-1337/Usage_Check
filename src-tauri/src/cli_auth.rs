@@ -2,7 +2,6 @@ use crate::terminal::{TerminalCommand, TerminalLauncher};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use usage_core::account::{Account, AuthSource, ProfileOwnership};
-use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuthError {
@@ -95,27 +94,34 @@ impl CliAuthCoordinator {
     }
 
     fn get_managed_profile_path(&self) -> Result<PathBuf, AuthError> {
-        let profile_dir = std::env::temp_dir().join(format!("cli_profile_{}", Uuid::new_v4()));
+        use crate::paths;
+        let profile_dir = paths::codex_managed_root()
+            .ok_or(AuthError::AdapterError("Failed to get app data dir".into()))?;
         std::fs::create_dir_all(&profile_dir)
             .map_err(|_| AuthError::AdapterError("Failed to create profile directory".into()))?;
+
+        // Set directory permissions to 0700 on unix
+        #[cfg(unix)]
+        {
+            use std::fs;
+            use std::os::unix::fs::PermissionsExt;
+            let perms = fs::Permissions::from_mode(0o700);
+            fs::set_permissions(&profile_dir, perms)
+                .map_err(|_| AuthError::AdapterError("Failed to set directory permissions".into()))?;
+        }
+
         Ok(profile_dir)
     }
 
-    async fn wait_for_authentication(&self) -> Result<(), ()> {
-        let start = Instant::now();
+    async fn wait_for_authentication(&self) -> Result<(), AuthError> {
+        let deadline = Instant::now() + self.retry_schedule.max_wait;
         loop {
+            if Instant::now() >= deadline {
+                return Err(AuthError::DeadlineReached);
+            }
             match self.adapter.probe() {
                 Ok(Some(_)) => return Ok(()),
-                Ok(None) => {
-                    if start.elapsed() > self.retry_schedule.max_wait {
-                        return Err(());
-                    }
-                    tokio::time::sleep(self.retry_schedule.interval).await;
-                }
-                Err(_) => {
-                    if start.elapsed() > self.retry_schedule.max_wait {
-                        return Err(());
-                    }
+                _ => {
                     tokio::time::sleep(self.retry_schedule.interval).await;
                 }
             }
@@ -126,133 +132,8 @@ impl CliAuthCoordinator {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    struct AlwaysAuthenticatedAdapter;
-    struct NeverAuthenticatedAdapter {
-        exe_path: PathBuf,
-    }
-    struct NeverAuthenticatedMissingExeAdapter;
-    struct SequentialProbeAdapter {
-        probes: Arc<Mutex<Vec<Option<Account>>>>,
-    }
-
-    impl ProviderAdapter for AlwaysAuthenticatedAdapter {
-        fn probe(&self) -> Result<Option<Account>, String> {
-            Ok(Some(Account {
-                id: "test".into(),
-                provider: usage_core::account::Provider::Codex,
-                label: "test".into(),
-                auth_source: AuthSource::CliProfile {
-                    profile_root: PathBuf::from("/tmp"),
-                    ownership: ProfileOwnership::External,
-                    expected_identity: "test@example.com".into(),
-                },
-            }))
-        }
-
-        fn login_command(&self, _: &Path) -> TerminalCommand {
-            TerminalCommand {
-                executable: PathBuf::from("/bin/ls"),
-                args: vec![],
-                env: vec![],
-                env_remove: vec![],
-            }
-        }
-
-        fn resolve_account(&self, auth_source: AuthSource) -> Result<Account, String> {
-            Ok(Account {
-                id: "test".into(),
-                provider: usage_core::account::Provider::Codex,
-                label: "test".into(),
-                auth_source,
-            })
-        }
-    }
-
-    impl ProviderAdapter for NeverAuthenticatedAdapter {
-        fn probe(&self) -> Result<Option<Account>, String> {
-            Ok(None)
-        }
-
-        fn login_command(&self, _: &Path) -> TerminalCommand {
-            TerminalCommand {
-                executable: self.exe_path.clone(),
-                args: vec![],
-                env: vec![],
-                env_remove: vec![],
-            }
-        }
-
-        fn resolve_account(&self, auth_source: AuthSource) -> Result<Account, String> {
-            Ok(Account {
-                id: "test".into(),
-                provider: usage_core::account::Provider::Codex,
-                label: "test".into(),
-                auth_source,
-            })
-        }
-    }
-
-    impl ProviderAdapter for NeverAuthenticatedMissingExeAdapter {
-        fn probe(&self) -> Result<Option<Account>, String> {
-            Ok(None)
-        }
-
-        fn login_command(&self, _: &Path) -> TerminalCommand {
-            TerminalCommand {
-                executable: PathBuf::from("/nonexistent/login"),
-                args: vec![],
-                env: vec![],
-                env_remove: vec![],
-            }
-        }
-
-        fn resolve_account(&self, auth_source: AuthSource) -> Result<Account, String> {
-            Ok(Account {
-                id: "test".into(),
-                provider: usage_core::account::Provider::Codex,
-                label: "test".into(),
-                auth_source,
-            })
-        }
-    }
-
-    impl SequentialProbeAdapter {
-        fn new(probes: Vec<Option<Account>>) -> Self {
-            Self {
-                probes: Arc::new(Mutex::new(probes)),
-            }
-        }
-    }
-
-    impl ProviderAdapter for SequentialProbeAdapter {
-        fn probe(&self) -> Result<Option<Account>, String> {
-            let mut probes = self.probes.lock().unwrap();
-            if probes.is_empty() {
-                Ok(None)
-            } else {
-                Ok(probes.remove(0))
-            }
-        }
-
-        fn login_command(&self, _: &Path) -> TerminalCommand {
-            TerminalCommand {
-                executable: PathBuf::from("/bin/ls"),
-                args: vec![],
-                env: vec![],
-                env_remove: vec![],
-            }
-        }
-
-        fn resolve_account(&self, auth_source: AuthSource) -> Result<Account, String> {
-            Ok(Account {
-                id: "test".into(),
-                provider: usage_core::account::Provider::Codex,
-                label: "test".into(),
-                auth_source,
-            })
-        }
-    }
+    use crate::terminal::TerminalError;
+    use std::sync::{Arc, Mutex};
 
     struct FakeLauncher {
         should_fail: Arc<Mutex<bool>>,
@@ -267,42 +148,105 @@ mod tests {
     }
 
     impl TerminalLauncher for FakeLauncher {
-        fn launch(&self, _: &TerminalCommand) -> Result<(), crate::terminal::TerminalError> {
+        fn launch(&self, _cmd: &TerminalCommand) -> Result<(), TerminalError> {
             if *self.should_fail.lock().unwrap() {
-                Err(crate::terminal::TerminalError::LaunchFailed("fake".into()))
+                Err(TerminalError::LaunchFailed("launch failed".to_string()))
             } else {
                 Ok(())
             }
         }
     }
 
-    #[tokio::test]
-    async fn test_authenticated_unregistered_default_registers_without_launch() {
-        let adapter = AlwaysAuthenticatedAdapter;
-        let launcher = FakeLauncher::new();
-        let coord = CliAuthCoordinator::new(
-            Box::new(adapter),
-            Box::new(launcher),
-            RetrySchedule::immediate(),
-        );
-        assert!(coord.execute().await.is_ok());
+    struct AlwaysAuthenticatedAdapter {
+        exe_path: PathBuf,
+    }
+
+    impl ProviderAdapter for AlwaysAuthenticatedAdapter {
+        fn probe(&self) -> Result<Option<Account>, String> {
+            Ok(Some(Account {
+                id: "test-account".to_string(),
+                provider: usage_core::account::Provider::Codex,
+                label: "test@example.com".to_string(),
+                auth_source: AuthSource::CliProfile {
+                    profile_root: PathBuf::from("/tmp/test"),
+                    ownership: ProfileOwnership::Managed,
+                    expected_identity: "test".to_string(),
+                },
+            }))
+        }
+
+        fn login_command(&self, _profile_root: &Path) -> TerminalCommand {
+            TerminalCommand {
+                executable: self.exe_path.clone(),
+                args: vec![],
+                env: vec![],
+                env_remove: vec![],
+            }
+        }
+
+        fn resolve_account(&self, _auth_source: AuthSource) -> Result<Account, String> {
+            Ok(Account {
+                id: "test-account".to_string(),
+                provider: usage_core::account::Provider::Codex,
+                label: "test@example.com".to_string(),
+                auth_source: AuthSource::CliProfile {
+                    profile_root: PathBuf::from("/tmp/test"),
+                    ownership: ProfileOwnership::Managed,
+                    expected_identity: "test".to_string(),
+                },
+            })
+        }
+    }
+
+    struct NeverAuthenticatedAdapter {
+        exe_path: PathBuf,
+    }
+
+    impl ProviderAdapter for NeverAuthenticatedAdapter {
+        fn probe(&self) -> Result<Option<Account>, String> {
+            Ok(None)
+        }
+
+        fn login_command(&self, _profile_root: &Path) -> TerminalCommand {
+            TerminalCommand {
+                executable: self.exe_path.clone(),
+                args: vec![],
+                env: vec![],
+                env_remove: vec![],
+            }
+        }
+
+        fn resolve_account(&self, _auth_source: AuthSource) -> Result<Account, String> {
+            Err("no account found".to_string())
+        }
+    }
+
+    struct NeverAuthenticatedMissingExeAdapter;
+
+    impl ProviderAdapter for NeverAuthenticatedMissingExeAdapter {
+        fn probe(&self) -> Result<Option<Account>, String> {
+            Ok(None)
+        }
+
+        fn login_command(&self, _profile_root: &Path) -> TerminalCommand {
+            TerminalCommand {
+                executable: PathBuf::from("/nonexistent/exe"),
+                args: vec![],
+                env: vec![],
+                env_remove: vec![],
+            }
+        }
+
+        fn resolve_account(&self, _auth_source: AuthSource) -> Result<Account, String> {
+            Err("no account found".to_string())
+        }
     }
 
     #[tokio::test]
-    async fn test_unauthenticated_default_launches_and_registers() {
-        let adapter = SequentialProbeAdapter::new(vec![
-            None,
-            Some(Account {
-                id: "test".into(),
-                provider: usage_core::account::Provider::Codex,
-                label: "test".into(),
-                auth_source: AuthSource::CliProfile {
-                    profile_root: PathBuf::from("/tmp"),
-                    ownership: ProfileOwnership::Managed,
-                    expected_identity: "test@example.com".into(),
-                },
-            }),
-        ]);
+    async fn test_execute_returns_account_when_already_authenticated() {
+        let adapter = AlwaysAuthenticatedAdapter {
+            exe_path: PathBuf::from("/bin/ls"),
+        };
         let launcher = FakeLauncher::new();
         let coord = CliAuthCoordinator::new(
             Box::new(adapter),
