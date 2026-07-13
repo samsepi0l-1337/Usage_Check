@@ -13,7 +13,6 @@ pub struct TerminalCommand {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TerminalError {
     LaunchFailed(String),
-    ScriptFailed(String),
     IoError(String),
 }
 

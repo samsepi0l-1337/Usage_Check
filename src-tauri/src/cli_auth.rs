@@ -7,7 +7,6 @@ use usage_core::account::{Account, AuthSource, ProfileOwnership};
 pub enum AuthError {
     TerminalError,
     NeedsSetup,
-    NeedsLogin,
     DeadlineReached,
     AdapterError(String),
 }

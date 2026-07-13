@@ -342,12 +342,6 @@ pub fn codex_managed_root() -> Option<PathBuf> {
             .join(uuid::Uuid::new_v4().to_string())
     })
 }
-
-/// Codex home for a given profile root (returns the root unchanged).
-pub fn codex_home_for_profile(profile_root: &Path) -> PathBuf {
-    profile_root.to_path_buf()
-}
-
 /// Codex default home: CODEX_HOME env or ~/.codex.
 pub fn codex_default_home() -> Option<PathBuf> {
     codex_home() // Reuse existing helper
@@ -369,12 +363,6 @@ mod tests_codex_managed {
         }
     }
 
-    #[test]
-    fn test_codex_home_for_profile_returns_input() {
-        let input = PathBuf::from("/tmp/test_profile");
-        let output = codex_home_for_profile(&input);
-        assert_eq!(output, input);
-    }
 }
 
 /// Get the default CLAUDE_CONFIG_DIR if it exists

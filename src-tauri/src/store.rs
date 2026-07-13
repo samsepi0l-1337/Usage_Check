@@ -481,15 +481,7 @@ impl AccountStore {
     ) -> Result<Account, String> {
         match provider {
             Provider::Codex | Provider::Claude | Provider::Agy => {
-                let id = uuid::Uuid::new_v4().to_string();
-                self.add_secret_with_ids(
-                    provider,
-                    label,
-                    SecretSource::BrowserOAuth,
-                    credentials,
-                    id.clone(),
-                    id,
-                )
+                self.add_secret(provider, label, SecretSource::BrowserOAuth, credentials)
             }
             #[cfg(feature = "edition-pro")]
             Provider::Cursor => {
@@ -508,19 +500,14 @@ impl AccountStore {
                 )
             }
             #[cfg(feature = "edition-pro")]
-            Provider::Grok => {
-                let id = uuid::Uuid::new_v4().to_string();
-                self.add_secret_with_ids(
-                    provider,
-                    label,
-                    SecretSource::XaiManagement {
-                        team_id: credentials.account_id.clone().unwrap_or_default(),
-                    },
-                    credentials,
-                    id.clone(),
-                    id,
-                )
-            }
+            Provider::Grok => self.add_secret(
+                provider,
+                label,
+                SecretSource::XaiManagement {
+                    team_id: credentials.account_id.clone().unwrap_or_default(),
+                },
+                credentials,
+            ),
             #[cfg(feature = "edition-pro")]
             Provider::Higgsfield => self.add_reference(
                 provider,
@@ -769,7 +756,7 @@ mod tests {
 
     #[cfg(feature = "edition-pro")]
     #[test]
-    fn v2_grok_compatibility_add_uses_account_id_for_credentials() {
+    fn v2_grok_compatibility_add_uses_credential_id_for_credentials() {
         let sandbox = TestSandbox::new();
         let store = sandbox.store();
         let account = store
@@ -783,8 +770,7 @@ mod tests {
         let AuthSource::XaiManagement { credential_id, .. } = &account.auth_source else {
             panic!("Grok compatibility add must use xAI Management credentials")
         };
-        assert_eq!(credential_id, &account.id);
-        assert_eq!(store.credentials(&account.id), Some(credentials("team-compat")));
+        assert_eq!(store.credentials(credential_id), Some(credentials("team-compat")));
     }
 
     #[cfg(feature = "edition-pro")]

@@ -41,7 +41,6 @@ pub struct CursorSession {
 #[derive(Debug)]
 #[cfg(feature = "edition-pro")]
 pub enum CursorLocalError {
-    NotFound,
     OpenFailed(String),
     TokenMissing,
     IdentityUnderivable,
@@ -51,7 +50,6 @@ pub enum CursorLocalError {
 impl std::fmt::Display for CursorLocalError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            Self::NotFound => write!(f, "Cursor state not found"),
             Self::OpenFailed(e) => write!(f, "Failed to open Cursor state: {}", e),
             Self::TokenMissing => write!(f, "Cursor access token missing"),
             Self::IdentityUnderivable => write!(f, "Could not derive Cursor identity"),

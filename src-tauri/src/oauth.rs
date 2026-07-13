@@ -483,16 +483,6 @@ pub fn google_sub_from_id_token(id_token: &str) -> Option<String> {
         .filter(|s| !s.is_empty())
         .map(str::to_string)
 }
-
-/// Extracts `email` from an OpenID `id_token` JWT payload. Pure — never logs.
-pub fn email_from_id_token(id_token: &str) -> Option<String> {
-    jwt_payload_json(id_token)?
-        .get("email")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-}
-
 /// Resolves a stable provider account id from a token response: ChatGPT
 /// account id when present, otherwise Google `sub` (Antigravity).
 fn account_id_from_token_response(body: &TokenResponse) -> Option<String> {
@@ -931,16 +921,15 @@ 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PX-SECONDSECRETVALUEHERE00https://x";
     }
 
     #[test]
-    fn google_sub_and_email_from_id_token() {
+    fn google_sub_and_chatgpt_account_id_from_id_token() {
         let payload = URL_SAFE_NO_PAD.encode(
-            br#"{"sub":"116950757786684882215","email":"a@b.com","email_verified":true}"#,
+            br#"{"sub":"116950757786684882215"}"#,
         );
         let jwt = format!("e30.{payload}.sig");
         assert_eq!(
             google_sub_from_id_token(&jwt).as_deref(),
             Some("116950757786684882215")
         );
-        assert_eq!(email_from_id_token(&jwt).as_deref(), Some("a@b.com"));
         // ChatGPT claim must not be invented from a Google id_token.
         assert!(chatgpt_account_id_from_id_token(&jwt).is_none());
     }
