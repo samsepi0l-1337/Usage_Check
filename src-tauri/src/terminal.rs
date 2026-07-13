@@ -144,6 +144,7 @@ impl TerminalLauncher for WindowsTerminalLauncher {
     fn launch(&self, command: &TerminalCommand) -> Result<(), TerminalError> {
         use crate::paths::paths_profiles::login_script_dir;
         use std::fs::OpenOptions;
+        use std::os::windows::process::CommandExt;
         use std::process::{Command, Stdio};
 
         let script_dir = login_script_dir()
