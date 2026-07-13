@@ -148,7 +148,21 @@ fn cli_coordinator_setup(app: &AppHandle, provider: Provider) {
                 };
                 let store = app2.state::<AccountStore>();
                 match store.add_reference(account.provider, account.label.clone(), auth_source) {
-                    Ok(_) => refresh_tray(&app2).await,
+                    Ok(saved) => {
+                        if saved.provider == Provider::Claude {
+                            if let AuthSource::CliProfile { profile_root, .. } = &saved.auth_source
+                            {
+                                let settings_path = profile_root.join("settings.json");
+                                if let Err(error) = claude_statusline::install_statusline_bridge(
+                                    &settings_path,
+                                    &saved.id,
+                                ) {
+                                    eprintln!("cli setup: bridge install failed: {error}");
+                                }
+                            }
+                        }
+                        refresh_tray(&app2).await;
+                    }
                     Err(error) => eprintln!("cli setup: failed to save account: {error}"),
                 }
             }
@@ -237,14 +251,14 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
             match app.state::<AccountStore>().remove(&account_id) {
                 Ok(Some(removed)) => {
                     poller::evict_last_success(&removed.id);
-                    if removed.provider == Provider::Claude
-                        && matches!(removed.auth_source, AuthSource::CliProfile { .. })
-                    {
-                        let settings_path = paths::claude_settings_json(&removed.id);
-                        if let Err(error) =
-                            claude_statusline::remove_statusline_bridge(&settings_path)
-                        {
-                            eprintln!("remove: bridge teardown failed: {error}");
+                    if removed.provider == Provider::Claude {
+                        if let AuthSource::CliProfile { profile_root, .. } = &removed.auth_source {
+                            let settings_path = profile_root.join("settings.json");
+                            if let Err(error) =
+                                claude_statusline::remove_statusline_bridge(&settings_path)
+                            {
+                                eprintln!("remove: bridge teardown failed: {error}");
+                            }
                         }
                     }
                 }
