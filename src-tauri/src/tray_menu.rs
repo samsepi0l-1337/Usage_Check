@@ -25,6 +25,7 @@ use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem, Submenu},
     AppHandle, Wry,
 };
+use tauri_plugin_autostart::ManagerExt;
 
 use usage_core::account::Provider;
 use usage_core::fetch::agy::AgyQuotaPool;
@@ -416,6 +417,19 @@ pub fn build_menu(app: &AppHandle, usages: &[AccountUsage]) -> tauri::Result<Men
         app,
         "refresh",
         "Refresh Now",
+        true,
+        None::<&str>,
+    )?)?;
+    let autostart_enabled = app.autolaunch().is_enabled().unwrap_or(false);
+    let autostart_label = if autostart_enabled {
+        "✔ Launch at Login"
+    } else {
+        "Launch at Login"
+    };
+    menu.append(&MenuItem::with_id(
+        app,
+        "toggle-autostart",
+        autostart_label,
         true,
         None::<&str>,
     )?)?;

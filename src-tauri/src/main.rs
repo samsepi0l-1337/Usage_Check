@@ -13,6 +13,7 @@ use std::time::Duration;
 use std::{ffi::OsStr, process};
 
 use tauri::{tray::TrayIconBuilder, AppHandle, Manager};
+use tauri_plugin_autostart::ManagerExt;
 use usage_core::{
     account::{AuthSource, Provider},
     AuthMethod,
@@ -284,6 +285,21 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
                 refresh_tray(&app2).await;
             });
         }
+        "toggle-autostart" => {
+            let manager = app.autolaunch();
+            let result = match manager.is_enabled() {
+                Ok(true) => manager.disable(),
+                Ok(false) => manager.enable(),
+                Err(error) => Err(error),
+            };
+            if let Err(error) = result {
+                eprintln!("autostart: toggle failed: {error}");
+            }
+            let app2 = app.clone();
+            tauri::async_runtime::spawn(async move {
+                refresh_tray(&app2).await;
+            });
+        }
         event_id => {
             if let Some(spec) = tray_menu::spec_for_event(event_id) {
                 dispatch_auth_action(app, spec.provider, spec.method);
@@ -331,6 +347,10 @@ fn main() {
     tauri::Builder::default()
         .manage(AccountStore::new())
         .manage(api::ApiState::new())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .setup(|app| {
             #[cfg(target_os = "macos")]
             {
