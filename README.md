@@ -46,10 +46,9 @@ Pro-only import paths (tray → Add Account), exact menu labels from
   automatically). Fallback: **Import xAI API credits (env vars)** with
   `XAI_MGMT_KEY` + `XAI_TEAM_ID`. This is xAI API management-key credit
   usage, not consumer SuperGrok quota.
-- **Add Higgsfield (CLI)** — imports `~/.config/higgsfield/credentials.json`
-  after you've run `higgsfield auth login` yourself. Polls
-  `higgsfield account status --json`; status `needs_setup` when the CLI or
-  its JSON output is unavailable.
+- **Add Higgsfield (CLI)** — pure CLI reference via `higgsfield account status --json`
+  (no credential file read). Status is `needs_setup` when the CLI or its JSON
+  output is unavailable.
 
 Plain `cargo build` produces the **Free** edition. Pro builds use
 `--no-default-features --features custom-protocol,edition-pro` and
@@ -74,7 +73,7 @@ manually. Artifacts: `UsageCheck-Free-macos`, `UsageCheck-Pro-macos`,
   PKCE OAuth, file-backed account store under Application Support /
   `%APPDATA%`, background poller, CLI credential import (including Claude
   Keychain on macOS; Pro: Cursor `state.vscdb`, Grok clipboard/env, Higgsfield
-  browser login/CLI).
+  pure CLI reference).
 - `ui/` — legacy Vite frontend (unused by the tray-menu shell; kept for
   optional future UI work).
 - `Sources/` — the original Swift/macOS-only menu bar app. **Reference only**;

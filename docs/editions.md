@@ -93,8 +93,8 @@ subscription quota. There is no SuperGrok integration.
    is on your `PATH`.
 2. Run `higgsfield auth login` in a terminal yourself first — there is no
    in-app browser login for Higgsfield.
-3. Tray menu → **Add Account** → **Add Higgsfield (CLI)** to import
-   `~/.config/higgsfield/credentials.json`.
+3. Tray menu → **Add Account** → **Add Higgsfield (CLI)** creates a pure CLI
+   reference via `higgsfield account status --json` (no credential file read).
 4. Each poll runs `higgsfield account status --json` and parses flexible
    JSON shapes for `credits` / `credits_total`.
 5. If the CLI is missing, import fails with a clear message; polling status
@@ -148,7 +148,7 @@ Plain `cargo build -p usage-app --release` produces the **Free** edition.
 | --- | --- |
 | **Cursor** | **Experimental.** Uses an **undocumented** private RPC (`GetCurrentPeriodUsage`). Cursor may change or break it without notice. No official public quota API. |
 | **Grok** | Shows **xAI API management-key prepaid credit** balance and spend-since-top-up %. This is **not** consumer SuperGrok — there is no SuperGrok weekly quota % and that subscription tier is not modeled. |
-| **Higgsfield** | **CLI-dependent** for both import and live polling (`higgsfield` must be on `PATH`; login happens via the CLI, not in-app). Unrecognized JSON → `needs_setup`. |
+| **Higgsfield** | **Pure CLI reference** via `higgsfield account status --json` (no credential file read). Login happens via the CLI, not in-app. Unrecognized JSON → `needs_setup`. |
 | **Claude CLI accounts** | Usage depends on a status-line bridge installed into the isolated profile; a newly added Claude CLI account shows `waiting_for_usage` until `claude` is run in that profile and renders its status line at least once. |
 | **Runtime unlock** | No feature flag or license server toggles Pro at runtime — you must install the Pro binary. |
 | **Local API** | `GET /v1/usage/{provider}` documents `codex` \| `claude` \| `agy` only; Pro providers appear in the full `/v1/usage` snapshot when running Pro. |

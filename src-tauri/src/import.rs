@@ -8,7 +8,7 @@
 //!
 //! SECURITY: never log/print access_token or refresh_token values.
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", feature = "edition-pro"))]
 use std::process::Command;
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
@@ -206,11 +206,7 @@ fn claude_keychain_accounts() -> Vec<Option<String>> {
     for key in ["USER", "USERNAME", "LOGNAME"] {
         if let Ok(v) = std::env::var(key) {
             let trimmed = v.trim();
-            if !trimmed.is_empty()
-                && !accounts
-                    .iter()
-                    .any(|a| a.as_deref() == Some(trimmed))
-            {
+            if !trimmed.is_empty() && !accounts.iter().any(|a| a.as_deref() == Some(trimmed)) {
                 accounts.push(Some(trimmed.to_string()));
             }
         }
@@ -264,9 +260,7 @@ fn read_claude_from_keyring_crate(service: &str, account: &str) -> Option<Creden
 fn read_claude_from_keychain() -> Option<Credentials> {
     let service = paths::claude_keychain_service_name();
     for account in claude_keychain_accounts() {
-        if let Some(creds) =
-            read_claude_from_macos_security(&service, account.as_deref())
-        {
+        if let Some(creds) = read_claude_from_macos_security(&service, account.as_deref()) {
             return Some(creds);
         }
         if let Some(account) = account.as_deref() {
@@ -292,16 +286,16 @@ fn parse_expires_at(v: &serde_json::Value) -> Option<chrono::DateTime<Utc>> {
 }
 /// Loads Codex credentials from `~/.codex/auth.json` (or `$CODEX_HOME`).
 pub fn load_codex_cli_auth() -> Result<ImportedAccount, String> {
-    let path = paths::codex_auth_file()
-        .ok_or_else(|| "could not resolve home directory".to_string())?;
+    let path =
+        paths::codex_auth_file().ok_or_else(|| "could not resolve home directory".to_string())?;
     let data = std::fs::read_to_string(&path).map_err(|_| {
         format!(
             "Codex auth not found at {} — run `codex login` first",
             path.display()
         )
     })?;
-    let root: serde_json::Value = serde_json::from_str(&data)
-        .map_err(|_| "Codex auth.json is not valid JSON".to_string())?;
+    let root: serde_json::Value =
+        serde_json::from_str(&data).map_err(|_| "Codex auth.json is not valid JSON".to_string())?;
     let (credentials, email) = parse_codex_auth_json(&root)
         .ok_or_else(|| "Codex auth.json has no usable access_token".to_string())?;
     Ok(ImportedAccount {
@@ -437,53 +431,29 @@ pub async fn import_grok_from_clipboard() -> Result<ImportedAccount, String> {
 }
 
 #[cfg(feature = "edition-pro")]
-fn parse_higgsfield_credentials_json(root: &serde_json::Value) -> Option<Credentials> {
-    let access_token = root
-        .get("access_token")
-        .or_else(|| root.get("accessToken"))
-        .or_else(|| root.get("token"))
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())?
-        .to_string();
-    let refresh_token = root
-        .get("refresh_token")
-        .or_else(|| root.get("refreshToken"))
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-        .map(str::to_string);
-    Some(Credentials {
-        access_token,
-        refresh_token,
-        account_id: None,
-        expires_at: None,
-    })
-}
-
-#[cfg(feature = "edition-pro")]
-/// Higgsfield CLI credentials from `~/.config/higgsfield/credentials.json`.
+/// Higgsfield CLI account reference from `higgsfield account status --json`.
 pub fn load_higgsfield_cli_auth() -> Result<ImportedAccount, String> {
-    let path = paths::higgsfield_credentials_file()
-        .ok_or_else(|| "could not resolve home directory".to_string())?;
-    let data = std::fs::read_to_string(&path).map_err(|_| {
-        format!(
-            "Higgsfield credentials not found at {} — run `higgsfield auth login` first",
-            path.display()
-        )
-    })?;
-    let root: serde_json::Value = serde_json::from_str(&data)
-        .map_err(|_| "Higgsfield credentials.json is not valid JSON".to_string())?;
-    let credentials = parse_higgsfield_credentials_json(&root).ok_or_else(|| {
-        "Higgsfield credentials.json has no usable access_token — run `higgsfield auth login`"
-            .to_string()
-    })?;
-    let email = root
-        .get("email")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-        .map(str::to_string);
+    use usage_core::fetch::higgsfield::parse_higgsfield_account;
+
+    let output = Command::new("higgsfield")
+        .args(["account", "status", "--json"])
+        .output()
+        .map_err(|_| {
+            "Higgsfield CLI unavailable — run `higgsfield auth login` first".to_string()
+        })?;
+    if !output.status.success() {
+        return Err(
+            "Higgsfield CLI status command failed — run `higgsfield auth login` first".into(),
+        );
+    }
+    let root: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .map_err(|_| "Higgsfield CLI status output is not valid JSON".to_string())?;
+    let account = parse_higgsfield_account(&root);
     Ok(ImportedAccount {
-        label: email.unwrap_or_else(|| default_label(Provider::Higgsfield)),
-        credentials,
+        label: account
+            .email
+            .unwrap_or_else(|| default_label(Provider::Higgsfield)),
+        credentials: Credentials { access_token: String::new(), refresh_token: None, account_id: None, expires_at: None },
     })
 }
 
@@ -597,38 +567,47 @@ mod tests {
     #[cfg(feature = "edition-pro")]
     fn xai_env_parse_reads_mgmt_key_and_team() {
         use std::env;
-        
+
         // Set env vars
         env::set_var("XAI_MGMT_KEY", "test-mgmt-key-123");
         env::set_var("XAI_TEAM_ID", "test-team-456");
-        
+
         // Load should succeed
         let result = load_grok_env_auth();
-        assert!(result.is_ok(), "load_grok_env_auth should succeed with env vars set");
-        
+        assert!(
+            result.is_ok(),
+            "load_grok_env_auth should succeed with env vars set"
+        );
+
         let imported = result.unwrap();
         assert_eq!(imported.credentials.access_token, "test-mgmt-key-123");
-        assert_eq!(imported.credentials.account_id, Some("test-team-456".to_string()));
-        
+        assert_eq!(
+            imported.credentials.account_id,
+            Some("test-team-456".to_string())
+        );
+
         // Clean up
         env::remove_var("XAI_MGMT_KEY");
         env::remove_var("XAI_TEAM_ID");
-        
+
         // Test with empty/missing env
         let result_empty = load_grok_env_auth();
-        assert!(result_empty.is_err(), "load_grok_env_auth should fail without env vars");
+        assert!(
+            result_empty.is_err(),
+            "load_grok_env_auth should fail without env vars"
+        );
     }
 
     #[test]
     #[cfg(feature = "edition-pro")]
     fn xai_paste_dedupes_team_line() {
         use usage_core::fetch::grok::parse_grok_paste;
-        
+
         // Test with key + team on separate lines
         let (key, team) = parse_grok_paste("KEY123\nTEAM456");
         assert_eq!(key, "KEY123");
         assert_eq!(team, Some("TEAM456".to_string()));
-        
+
         // Test with single line (key only)
         let (key_only, team_none) = parse_grok_paste("KEY789");
         assert_eq!(key_only, "KEY789");
@@ -639,12 +618,12 @@ mod tests {
     #[cfg(feature = "edition-pro")]
     fn xai_stored_as_management_reference() {
         use crate::store::AccountStore;
-        use usage_core::account::{Provider, Credentials, AuthSource};
         use tempfile::TempDir;
-        
+        use usage_core::account::{AuthSource, Credentials, Provider};
+
         let root = TempDir::new().unwrap();
         let store = AccountStore::new_at(root.path().to_path_buf());
-        
+
         let raw_key = "xai-management-key-test-value";
         let account = store
             .add(
@@ -658,20 +637,21 @@ mod tests {
                 },
             )
             .expect("store xAI account");
-        
+
         // Verify the account was stored with XaiManagement auth source
         assert!(matches!(
             account.auth_source,
             AuthSource::XaiManagement { ref team_id, .. } if team_id == "test-team"
         ));
-        
+
         // Verify the raw key is NOT in the serialized account index
         let index_path = root.path().join("accounts-v2.json");
         if index_path.exists() {
-            let index = std::fs::read_to_string(&index_path)
-                .expect("read account index");
-            assert!(!index.contains(raw_key), "raw key must not leak into account index");
+            let index = std::fs::read_to_string(&index_path).expect("read account index");
+            assert!(
+                !index.contains(raw_key),
+                "raw key must not leak into account index"
+            );
         }
     }
-
 }

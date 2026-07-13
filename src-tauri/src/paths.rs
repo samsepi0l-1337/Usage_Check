@@ -153,22 +153,6 @@ pub fn cursor_state_vscdb() -> Option<PathBuf> {
     }
 }
 
-/// Higgsfield CLI credentials (`higgsfield auth login`).
-#[cfg(feature = "edition-pro")]
-pub fn higgsfield_credentials_file() -> Option<PathBuf> {
-    if let Ok(raw) = std::env::var("HIGGSFIELD_CONFIG_DIR") {
-        let p = PathBuf::from(raw);
-        if !p.as_os_str().is_empty() {
-            return Some(p.join("credentials.json"));
-        }
-    }
-    home_dir().map(|h| {
-        h.join(".config")
-            .join("higgsfield")
-            .join("credentials.json")
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -362,7 +346,6 @@ mod tests_codex_managed {
             );
         }
     }
-
 }
 
 /// Get the default CLAUDE_CONFIG_DIR if it exists
