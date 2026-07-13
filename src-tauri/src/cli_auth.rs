@@ -16,6 +16,7 @@ pub trait ProviderAdapter: Send + Sync {
     fn probe(&self) -> Result<Option<Account>, String>;
     fn login_command(&self, profile_root: &Path) -> TerminalCommand;
     fn resolve_account(&self, auth_source: AuthSource) -> Result<Account, String>;
+    fn managed_profile_root(&self) -> Result<std::path::PathBuf, String>;
 }
 
 pub struct RetrySchedule {
@@ -94,20 +95,20 @@ impl CliAuthCoordinator {
     }
 
     fn get_managed_profile_path(&self) -> Result<PathBuf, AuthError> {
-        use crate::paths;
-        let profile_dir = paths::codex_managed_root()
-            .ok_or(AuthError::AdapterError("Failed to get app data dir".into()))?;
+        let profile_dir = self
+            .adapter
+            .managed_profile_root()
+            .map_err(AuthError::AdapterError)?;
         std::fs::create_dir_all(&profile_dir)
             .map_err(|_| AuthError::AdapterError("Failed to create profile directory".into()))?;
 
-        // Set directory permissions to 0700 on unix
         #[cfg(unix)]
         {
-            use std::fs;
             use std::os::unix::fs::PermissionsExt;
-            let perms = fs::Permissions::from_mode(0o700);
-            fs::set_permissions(&profile_dir, perms)
-                .map_err(|_| AuthError::AdapterError("Failed to set directory permissions".into()))?;
+            let perms = std::fs::Permissions::from_mode(0o700);
+            std::fs::set_permissions(&profile_dir, perms).map_err(|_| {
+                AuthError::AdapterError("Failed to set directory permissions".into())
+            })?;
         }
 
         Ok(profile_dir)
@@ -135,21 +136,25 @@ mod tests {
     use crate::terminal::TerminalError;
     use std::sync::{Arc, Mutex};
 
-    struct FakeLauncher {
-        should_fail: Arc<Mutex<bool>>,
+    struct MockTerminalLauncher {
+        should_fail: bool,
+        identity: Option<String>,
+        internal_fail: Arc<Mutex<bool>>,
     }
 
-    impl FakeLauncher {
+    impl MockTerminalLauncher {
         fn new() -> Self {
             Self {
-                should_fail: Arc::new(Mutex::new(false)),
+                should_fail: false,
+                identity: None,
+                internal_fail: Arc::new(Mutex::new(false)),
             }
         }
     }
 
-    impl TerminalLauncher for FakeLauncher {
+    impl TerminalLauncher for MockTerminalLauncher {
         fn launch(&self, _cmd: &TerminalCommand) -> Result<(), TerminalError> {
-            if *self.should_fail.lock().unwrap() {
+            if self.should_fail || *self.internal_fail.lock().unwrap() {
                 Err(TerminalError::LaunchFailed("launch failed".to_string()))
             } else {
                 Ok(())
@@ -173,6 +178,10 @@ mod tests {
                     expected_identity: "test".to_string(),
                 },
             }))
+        }
+
+        fn managed_profile_root(&self) -> Result<PathBuf, String> {
+            Ok(std::env::temp_dir().join("uc-cli-test"))
         }
 
         fn login_command(&self, _profile_root: &Path) -> TerminalCommand {
@@ -207,6 +216,10 @@ mod tests {
             Ok(None)
         }
 
+        fn managed_profile_root(&self) -> Result<PathBuf, String> {
+            Ok(std::env::temp_dir().join("uc-cli-test"))
+        }
+
         fn login_command(&self, _profile_root: &Path) -> TerminalCommand {
             TerminalCommand {
                 executable: self.exe_path.clone(),
@@ -228,6 +241,10 @@ mod tests {
             Ok(None)
         }
 
+        fn managed_profile_root(&self) -> Result<PathBuf, String> {
+            Ok(std::env::temp_dir().join("uc-cli-test"))
+        }
+
         fn login_command(&self, _profile_root: &Path) -> TerminalCommand {
             TerminalCommand {
                 executable: PathBuf::from("/nonexistent/exe"),
@@ -247,7 +264,7 @@ mod tests {
         let adapter = AlwaysAuthenticatedAdapter {
             exe_path: PathBuf::from("/bin/ls"),
         };
-        let launcher = FakeLauncher::new();
+        let launcher = MockTerminalLauncher::new();
         let coord = CliAuthCoordinator::new(
             Box::new(adapter),
             Box::new(launcher),
@@ -262,8 +279,11 @@ mod tests {
         let adapter = NeverAuthenticatedAdapter {
             exe_path: PathBuf::from("/bin/ls"),
         };
-        let launcher = FakeLauncher::new();
-        *launcher.should_fail.lock().unwrap() = true;
+        let launcher = MockTerminalLauncher {
+            should_fail: true,
+            identity: None,
+            internal_fail: Arc::new(Mutex::new(false)),
+        };
         let coord = CliAuthCoordinator::new(
             Box::new(adapter),
             Box::new(launcher),
@@ -278,7 +298,7 @@ mod tests {
         let adapter = NeverAuthenticatedAdapter {
             exe_path: PathBuf::from("/bin/ls"),
         };
-        let launcher = FakeLauncher::new();
+        let launcher = MockTerminalLauncher::new();
         let coord = CliAuthCoordinator::new(
             Box::new(adapter),
             Box::new(launcher),
@@ -291,7 +311,7 @@ mod tests {
     #[tokio::test]
     async fn test_missing_executable_returns_needs_setup() {
         let adapter = NeverAuthenticatedMissingExeAdapter;
-        let launcher = FakeLauncher::new();
+        let launcher = MockTerminalLauncher::new();
         let coord = CliAuthCoordinator::new(
             Box::new(adapter),
             Box::new(launcher),
@@ -299,5 +319,49 @@ mod tests {
         );
         let result = coord.execute().await;
         assert_eq!(result, Err(AuthError::NeedsSetup));
+    }
+
+    #[test]
+    fn test_adapter_error_propagates_from_managed_profile_root() {
+        struct ErrorAdapter;
+        impl ProviderAdapter for ErrorAdapter {
+            fn probe(&self) -> Result<Option<Account>, String> {
+                Ok(None)
+            }
+            fn login_command(&self, _profile_root: &Path) -> TerminalCommand {
+                panic!("login command must not be built when profile root resolution fails")
+            }
+            fn resolve_account(&self, _auth_source: AuthSource) -> Result<Account, String> {
+                Ok(Account {
+                    id: "test".to_string(),
+                    provider: usage_core::account::Provider::Codex,
+                    label: "test".to_string(),
+                    auth_source: AuthSource::BrowserOAuth {
+                        credential_id: "token".to_string(),
+                    },
+                })
+            }
+            fn managed_profile_root(&self) -> Result<std::path::PathBuf, String> {
+                Err("simulated error".to_string())
+            }
+        }
+
+        let launcher = MockTerminalLauncher {
+            should_fail: false,
+            identity: Some("test-id".to_string()),
+            internal_fail: Arc::new(Mutex::new(false)),
+        };
+
+        let coordinator = CliAuthCoordinator::new(
+            Box::new(ErrorAdapter),
+            Box::new(launcher),
+            RetrySchedule::immediate(),
+        );
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(coordinator.execute());
+
+        assert!(result.is_err());
+        assert!(format!("{:?}", result.unwrap_err()).contains("AdapterError"));
     }
 }

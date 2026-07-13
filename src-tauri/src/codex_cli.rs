@@ -5,9 +5,11 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 use crate::cli_auth::ProviderAdapter;
 use crate::terminal::TerminalCommand;
-use usage_core::account::{Account, AuthSource, ProfileOwnership};
-use usage_core::fetch::codex::{parse_app_server_account, parse_app_server_rate_limits, AppServerAccount};
 use serde_json::Value;
+use usage_core::account::{Account, AuthSource, ProfileOwnership};
+use usage_core::fetch::codex::{
+    parse_app_server_account, parse_app_server_rate_limits, AppServerAccount,
+};
 
 /// Probe result from Codex app-server
 #[derive(Debug, Clone)]
@@ -33,10 +35,7 @@ fn which_codex() -> Option<std::path::PathBuf> {
 /// Extract JSONL exchange into a testable function that consumes an async reader.
 /// Sends requests and reads responses, matching responses by id.
 /// FIX: pass WHOLE line object to parsers (they unwrap "result" once).
-pub async fn probe_codex_exchange<R, W>(
-    mut reader: R,
-    mut writer: W,
-) -> Result<CodexProbe, String>
+pub async fn probe_codex_exchange<R, W>(mut reader: R, mut writer: W) -> Result<CodexProbe, String>
 where
     R: tokio::io::AsyncBufRead + Unpin,
     W: tokio::io::AsyncWrite + Unpin,
@@ -50,9 +49,13 @@ where
     ];
 
     for req in &requests {
-        writer.write_all(req.as_bytes()).await
+        writer
+            .write_all(req.as_bytes())
+            .await
             .map_err(|e| format!("failed to write request: {}", e))?;
-        writer.write_all(b"\n").await
+        writer
+            .write_all(b"\n")
+            .await
             .map_err(|e| format!("failed to write newline: {}", e))?;
     }
     drop(writer);
@@ -61,14 +64,18 @@ where
     // read_line() returns byte count: Ok(0) = EOF, Ok(n>0) = line.
     // The old code == Some(1) only matched 1-byte lines, causing it to exit on any real line.
     let mut account: Option<AppServerAccount> = None;
-    let mut rate_limits: Option<(Option<usage_core::models::QuotaUsage>, Option<usage_core::models::QuotaUsage>)> = None;
+    let mut rate_limits: Option<(
+        Option<usage_core::models::QuotaUsage>,
+        Option<usage_core::models::QuotaUsage>,
+    )> = None;
     let mut line = String::new();
 
     loop {
         line.clear();
         match reader.read_line(&mut line).await {
-            Ok(0) => break,    // EOF
-            Ok(_) => {         // Got a line (>0 bytes)
+            Ok(0) => break, // EOF
+            Ok(_) => {
+                // Got a line (>0 bytes)
                 if line.trim().is_empty() {
                     continue;
                 }
@@ -109,14 +116,13 @@ where
                     break;
                 }
             }
-            Err(_) => break,   // I/O error
+            Err(_) => break, // I/O error
         }
     }
 
-    let account = account
-        .ok_or_else(|| "no account found in response".to_string())?;
-    let (primary, secondary) = rate_limits
-        .ok_or_else(|| "no rate limits found in response".to_string())?;
+    let account = account.ok_or_else(|| "no account found in response".to_string())?;
+    let (primary, secondary) =
+        rate_limits.ok_or_else(|| "no rate limits found in response".to_string())?;
 
     Ok(CodexProbe {
         account,
@@ -128,8 +134,7 @@ where
 /// Probe Codex at a given profile root by launching `codex app-server --stdio`
 /// with a 10-second timeout. Returns CodexProbe with account and rate limits.
 pub async fn probe_codex(profile_root: &Path) -> Result<CodexProbe, String> {
-    let codex_exe = which_codex()
-        .ok_or_else(|| "codex not found on PATH".to_string())?;
+    let codex_exe = which_codex().ok_or_else(|| "codex not found on PATH".to_string())?;
 
     let mut child = tokio::process::Command::new(&codex_exe)
         .arg("app-server")
@@ -143,9 +148,13 @@ pub async fn probe_codex(profile_root: &Path) -> Result<CodexProbe, String> {
         .spawn()
         .map_err(|e| format!("failed to spawn codex app-server: {}", e))?;
 
-    let stdin = child.stdin.take()
+    let stdin = child
+        .stdin
+        .take()
         .ok_or_else(|| "failed to open stdin".to_string())?;
-    let stdout = child.stdout.take()
+    let stdout = child
+        .stdout
+        .take()
         .ok_or_else(|| "failed to open stdout".to_string())?;
 
     // Read responses with 10-second timeout
@@ -157,7 +166,11 @@ pub async fn probe_codex(profile_root: &Path) -> Result<CodexProbe, String> {
 }
 
 /// Build account from probe result
-fn account_from_probe(probe: CodexProbe, profile_root: std::path::PathBuf, ownership: ProfileOwnership) -> Account {
+fn account_from_probe(
+    probe: CodexProbe,
+    profile_root: std::path::PathBuf,
+    ownership: ProfileOwnership,
+) -> Account {
     Account {
         id: probe.account.id.clone(),
         provider: usage_core::account::Provider::Codex,
@@ -179,14 +192,18 @@ impl ProviderAdapter for CodexCliAdapter {
         // The app runs in Tauri's multi-threaded Tokio runtime; block_in_place temporarily
         // yields the thread to prevent a "cannot start a runtime from within a runtime" panic.
         // This is safe on multi-threaded runtimes and required for sync adapter methods.
-        
+
         // Try default CODEX_HOME first
         if let Some(default_home) = crate::paths::codex_default_home() {
             let result = tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(probe_codex(&default_home))
             });
             if let Ok(probe) = result {
-                return Ok(Some(account_from_probe(probe, default_home, ProfileOwnership::External)));
+                return Ok(Some(account_from_probe(
+                    probe,
+                    default_home,
+                    ProfileOwnership::External,
+                )));
             }
         }
 
@@ -196,11 +213,20 @@ impl ProviderAdapter for CodexCliAdapter {
                 tokio::runtime::Handle::current().block_on(probe_codex(&managed_root))
             });
             if let Ok(probe) = result {
-                return Ok(Some(account_from_probe(probe, managed_root, ProfileOwnership::Managed)));
+                return Ok(Some(account_from_probe(
+                    probe,
+                    managed_root,
+                    ProfileOwnership::Managed,
+                )));
             }
         }
 
         Ok(None)
+    }
+
+    fn managed_profile_root(&self) -> Result<std::path::PathBuf, String> {
+        crate::paths::codex_managed_root()
+            .ok_or_else(|| "codex managed root unavailable".to_string())
     }
 
     fn login_command(&self, profile_root: &Path) -> TerminalCommand {
@@ -220,7 +246,11 @@ impl ProviderAdapter for CodexCliAdapter {
 
     fn resolve_account(&self, auth_source: AuthSource) -> Result<Account, String> {
         match auth_source {
-            AuthSource::CliProfile { profile_root, ownership, expected_identity } => {
+            AuthSource::CliProfile {
+                profile_root,
+                ownership,
+                expected_identity,
+            } => {
                 let result = tokio::task::block_in_place(|| {
                     tokio::runtime::Handle::current().block_on(probe_codex(&profile_root))
                 });
@@ -261,8 +291,8 @@ mod tests {
     async fn test_probe_codex_exchange_real_shape() {
         let account_line = r#"{"id":2,"result":{"id":"user-test","email":"test@example.com"}}"#;
         let rate_limits_line = r#"{"id":3,"result":{"primaryWindow":{"usedPercent":50.0,"windowDurationMins":60,"resetsAt":2000000000.0},"secondaryWindow":{"usedPercent":25.0,"windowDurationMins":10080,"resetsAt":2000700000.0}}}"#;
-        let notification_line = r#"{"type":"sessionUpdate"}"#;  // Interleaved notification (no id)
-        
+        let notification_line = r#"{"type":"sessionUpdate"}"#; // Interleaved notification (no id)
+
         let input = format!(
             "{}\n{}\n{}\n",
             account_line, rate_limits_line, notification_line
@@ -271,22 +301,25 @@ mod tests {
         let writer = Vec::new();
 
         let result = probe_codex_exchange(reader, writer).await;
-        
+
         // After the fix, this MUST pass.
         assert!(result.is_ok(), "Probe failed: {:?}", result);
         let probe = result.unwrap();
-        
+
         assert_eq!(probe.account.id, "user-test");
         assert_eq!(probe.account.email, Some("test@example.com".to_string()));
         assert!(probe.primary.is_some(), "Primary quota should be parsed");
         let prim = probe.primary.unwrap();
         assert_eq!(prim.percent, 50.0);
-        assert_eq!(prim.window_seconds, Some(3600));  // 60 * 60
-        
-        assert!(probe.secondary.is_some(), "Secondary quota should be parsed");
+        assert_eq!(prim.window_seconds, Some(3600)); // 60 * 60
+
+        assert!(
+            probe.secondary.is_some(),
+            "Secondary quota should be parsed"
+        );
         let sec = probe.secondary.unwrap();
         assert_eq!(sec.percent, 25.0);
-        assert_eq!(sec.window_seconds, Some(604800));  // 10080 * 60
+        assert_eq!(sec.window_seconds, Some(604800)); // 10080 * 60
     }
 
     /// Test 2: Hung-child timeout — reader never yields a line.
@@ -295,7 +328,7 @@ mod tests {
     async fn test_probe_codex_exchange_hung_child() {
         // A reader that never yields (stuck in read).
         struct HungReader;
-        
+
         impl tokio::io::AsyncRead for HungReader {
             fn poll_read(
                 self: std::pin::Pin<&mut Self>,
@@ -306,7 +339,7 @@ mod tests {
                 std::task::Poll::Pending
             }
         }
-        
+
         impl tokio::io::AsyncBufRead for HungReader {
             fn poll_fill_buf(
                 self: std::pin::Pin<&mut Self>,
@@ -314,17 +347,17 @@ mod tests {
             ) -> std::task::Poll<std::io::Result<&[u8]>> {
                 std::task::Poll::Pending
             }
-            
+
             fn consume(self: std::pin::Pin<&mut Self>, _amt: usize) {}
         }
-        
+
         let reader = HungReader;
         let writer = Vec::new();
-        
+
         // Wrap in a SHORT timeout (200ms, not 10s) so test is fast.
         let future = probe_codex_exchange(reader, writer);
         let result = tokio::time::timeout(std::time::Duration::from_millis(200), future).await;
-        
+
         assert!(result.is_err(), "Should timeout on hung reader, not panic");
     }
 
@@ -333,13 +366,13 @@ mod tests {
     async fn test_probe_codex_exchange_null_identity_rejected() {
         let account_line_null = r#"{"id":2,"result":null}"#;
         let rate_limits_line = r#"{"id":3,"result":{"primaryWindow":{"usedPercent":50.0,"windowDurationMins":60,"resetsAt":2000000000.0}}}"#;
-        
+
         let input = format!("{}\n{}\n", account_line_null, rate_limits_line);
         let reader = Cursor::new(input.as_bytes());
         let writer = Vec::new();
 
         let result = probe_codex_exchange(reader, writer).await;
-        
+
         // FIX BUG 4: Rejection must surface as Err, not Ok with empty identity.
         assert!(result.is_err(), "Null identity should be rejected as error");
     }
@@ -347,28 +380,34 @@ mod tests {
     /// Test 4: API-key identity rejection.
     #[tokio::test]
     async fn test_probe_codex_exchange_api_key_rejected() {
-        let account_line_apikey = r#"{"id":2,"result":{"id":"sk-proj-123abc","email":"sk-proj@openai.com"}}"#;
+        let account_line_apikey =
+            r#"{"id":2,"result":{"id":"sk-proj-123abc","email":"sk-proj@openai.com"}}"#;
         let rate_limits_line = r#"{"id":3,"result":{"primaryWindow":{"usedPercent":50.0,"windowDurationMins":60,"resetsAt":2000000000.0}}}"#;
-        
+
         let input = format!("{}\n{}\n", account_line_apikey, rate_limits_line);
         let reader = Cursor::new(input.as_bytes());
         let writer = Vec::new();
 
         let result = probe_codex_exchange(reader, writer).await;
-        
+
         // API-key accounts must be rejected.
-        assert!(result.is_err(), "API-key identity should be rejected as error");
+        assert!(
+            result.is_err(),
+            "API-key identity should be rejected as error"
+        );
     }
 
     #[test]
     fn test_cli_adapter_login_command_clears_env_vars() {
         let adapter = CodexCliAdapter;
         let cmd = adapter.login_command(std::path::Path::new("/tmp/profile"));
-        
+
         assert_eq!(cmd.executable.to_string_lossy(), "codex");
         assert!(cmd.args.contains(&OsString::from("login")));
-        
-        let env_remove_strs: Vec<String> = cmd.env_remove.iter()
+
+        let env_remove_strs: Vec<String> = cmd
+            .env_remove
+            .iter()
             .map(|s| s.to_string_lossy().to_string())
             .collect();
         assert!(env_remove_strs.contains(&"CODEX_ACCESS_TOKEN".to_string()));
@@ -380,11 +419,20 @@ mod tests {
         let adapter = CodexCliAdapter;
         let profile = std::path::Path::new("/tmp/test_profile");
         let cmd = adapter.login_command(profile);
-        
-        let env_vars: Vec<(String, String)> = cmd.env.iter()
-            .map(|(k, v)| (k.to_string_lossy().to_string(), v.to_string_lossy().to_string()))
+
+        let env_vars: Vec<(String, String)> = cmd
+            .env
+            .iter()
+            .map(|(k, v)| {
+                (
+                    k.to_string_lossy().to_string(),
+                    v.to_string_lossy().to_string(),
+                )
+            })
             .collect();
-        
-        assert!(env_vars.iter().any(|(k, v)| k == "CODEX_HOME" && v.contains("test_profile")));
+
+        assert!(env_vars
+            .iter()
+            .any(|(k, v)| k == "CODEX_HOME" && v.contains("test_profile")));
     }
 }

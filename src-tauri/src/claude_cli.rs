@@ -123,8 +123,31 @@ impl ProviderAdapter for ClaudeCliAdapter {
         }
     }
 
-    fn resolve_account(&self, _auth_source: AuthSource) -> Result<Account, String> {
-        Err("Claude resolve_account not yet implemented".to_string())
+    fn resolve_account(&self, auth_source: AuthSource) -> Result<Account, String> {
+        match auth_source {
+            AuthSource::CliProfile {
+                profile_root,
+                ownership,
+                expected_identity,
+            } => {
+                let (identity, _plan) = probe_claude_dir(&profile_root)?;
+                Ok(Account {
+                    id: format!("claude-{identity}"),
+                    provider: Provider::Claude,
+                    label: identity.clone(),
+                    auth_source: AuthSource::CliProfile {
+                        profile_root,
+                        ownership,
+                        expected_identity,
+                    },
+                })
+            }
+            _ => Err("unsupported auth source for claude".to_string()),
+        }
+    }
+
+    fn managed_profile_root(&self) -> Result<std::path::PathBuf, String> {
+        crate::paths::claude_managed_root("default").map_err(|e| e.to_string())
     }
 }
 

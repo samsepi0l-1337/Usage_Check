@@ -108,6 +108,55 @@ fn import_provider(app: &AppHandle, provider: Provider) {
     }
 }
 
+fn cli_coordinator_setup(app: &AppHandle, provider: Provider) {
+    use crate::cli_auth::{CliAuthCoordinator, ProviderAdapter, RetrySchedule};
+    use crate::terminal::TerminalLauncher;
+
+    let app2 = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let adapter: Box<dyn ProviderAdapter> = match provider {
+            Provider::Codex => Box::new(crate::codex_cli::CodexCliAdapter),
+            Provider::Claude => Box::new(crate::claude_cli::ClaudeCliAdapter),
+            _ => return,
+        };
+
+        #[cfg(target_os = "macos")]
+        let launcher: Box<dyn TerminalLauncher> = Box::new(crate::terminal::MacosTerminalLauncher);
+        #[cfg(target_os = "windows")]
+        let launcher: Box<dyn TerminalLauncher> =
+            Box::new(crate::terminal::WindowsTerminalLauncher);
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        let launcher: Box<dyn TerminalLauncher> = {
+            eprintln!("cli setup: unsupported platform");
+            return;
+        };
+
+        let coordinator = CliAuthCoordinator::new(adapter, launcher, RetrySchedule::production());
+        match coordinator.execute().await {
+            Ok(account) => {
+                let auth_source = match account.auth_source {
+                    AuthSource::CliProfile {
+                        profile_root,
+                        ownership,
+                        ..
+                    } => AuthSource::CliProfile {
+                        profile_root,
+                        ownership,
+                        expected_identity: account.label.clone(),
+                    },
+                    other => other,
+                };
+                let store = app2.state::<AccountStore>();
+                match store.add_reference(account.provider, account.label.clone(), auth_source) {
+                    Ok(_) => refresh_tray(&app2).await,
+                    Err(error) => eprintln!("cli setup: failed to save account: {error}"),
+                }
+            }
+            Err(error) => eprintln!("cli setup: {error:?}"),
+        }
+    });
+}
+
 #[cfg(feature = "edition-pro")]
 fn import_grok_clipboard(app: &AppHandle) {
     let app2 = app.clone();
@@ -158,7 +207,11 @@ fn oauth_provider(app: &AppHandle, provider: Provider) {
 fn dispatch_auth_action(app: &AppHandle, provider: Provider, method: AuthMethod) {
     match method {
         AuthMethod::BrowserOAuth => oauth_provider(app, provider),
-        AuthMethod::Cli | AuthMethod::LocalDatabase | AuthMethod::ManagementKeyEnvironment => {
+        AuthMethod::Cli => match provider {
+            Provider::Codex | Provider::Claude => cli_coordinator_setup(app, provider),
+            _ => import_provider(app, provider),
+        },
+        AuthMethod::LocalDatabase | AuthMethod::ManagementKeyEnvironment => {
             import_provider(app, provider)
         }
         AuthMethod::ManagementKeyClipboard => {
