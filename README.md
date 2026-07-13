@@ -15,8 +15,9 @@ rows, Add/Remove account actions, Refresh, and Quit.
   menu, fetched from each provider's usage API.
 - **agy**: Antigravity Model Quota (Gemini / Claude+GPT pools) as used % in
   the tray menu.
-- **UsageCheck Pro** adds **Cursor**, **Grok (xAI API credits)**, and
-  **Higgsfield** (credits via CLI when available).
+- **UsageCheck Pro** adds **Cursor** (local, Experimental), **Grok** (xAI API
+  management-key credits, not consumer SuperGrok), and **Higgsfield**
+  (credits via CLI).
 - A background poll refreshes the tray menu every 60 seconds.
 
 ## Free vs Pro editions
@@ -33,17 +34,22 @@ binary unlocked at runtime. Deep reference:
 **Gemini** is `Provider::Agy` (Antigravity Gemini Models quota), not a
 separate enum.
 
-Pro-only import paths (tray → Add account):
+Pro-only import paths (tray → Add Account), exact menu labels from
+`auth_action_specs()`:
 
-- **Cursor** — **Import Cursor (local)**: read-only `state.vscdb` →
-  undocumented `GetCurrentPeriodUsage` on `api2.cursor.sh`.
-- **Grok** — **Import Grok (clipboard)**: copy Management Key → tray import
-  (validates via xAI API; team ID resolved automatically). Fallback:
-  **Import Grok (env vars)** with `XAI_MGMT_KEY` + `XAI_TEAM_ID`.
-- **Higgsfield** — **Login Higgsfield (browser)** runs `higgsfield auth login`
-  and imports credentials; **Import Higgsfield (CLI)** re-imports after a
-  terminal login. Polls `higgsfield account --json`. Status `needs_setup`
-  when the CLI or JSON shape is unavailable.
+- **Import Cursor (local, Experimental)** — read-only reference to the local
+  Cursor `state.vscdb` via an undocumented private RPC
+  (`GetCurrentPeriodUsage` on `api2.cursor.sh`). Experimental: not an
+  officially supported integration.
+- **Import xAI API credits (clipboard)** — copy an xAI **Management Key** to
+  the clipboard, then import (validates via xAI API; team ID resolved
+  automatically). Fallback: **Import xAI API credits (env vars)** with
+  `XAI_MGMT_KEY` + `XAI_TEAM_ID`. This is xAI API management-key credit
+  usage, not consumer SuperGrok quota.
+- **Add Higgsfield (CLI)** — imports `~/.config/higgsfield/credentials.json`
+  after you've run `higgsfield auth login` yourself. Polls
+  `higgsfield account status --json`; status `needs_setup` when the CLI or
+  its JSON output is unavailable.
 
 Plain `cargo build` produces the **Free** edition. Pro builds use
 `--no-default-features --features custom-protocol,edition-pro` and
@@ -139,6 +145,12 @@ Accounts are stored under:
 - macOS: `~/Library/Application Support/UsageCheck/`
 - Windows: `%APPDATA%/UsageCheck/`
 
+The account store uses a file-backed **schema-v2** index (`accounts-v2.json`).
+This is a fresh schema, not a migration: on first run under schema v2, any
+legacy single-token account index and credentials file at the same
+app-data root are reset (deleted), not converted. Accounts must be re-added
+after upgrading from a pre-schema-v2 build.
+
 ## Verify
 
 ```sh
@@ -164,34 +176,72 @@ for the manual end-to-end checklist to run on a real machine before a release.
 
 ## Multi-Account Usage
 
-Click the tray icon to open the popup, then click **"계정 추가"** ("Add
-account") to open the provider picker:
+Click the tray icon, then **Add Account** to open the provider submenu. Menu
+labels below are the exact strings from `auth_action_specs()` in
+`src-tauri/src/tray_menu.rs`.
 
-- **Codex** / **Claude** — **브라우저 로그인**: opens the system browser for
-  that provider's OAuth login (PKCE via a local loopback callback). On
-  success, a new account card appears and starts polling.
-- **Codex** / **Claude** — **CLI에서 가져오기**: imports tokens already stored
-  by the CLI (`~/.codex/auth.json`, or `$CODEX_HOME/auth.json`; Claude's
-  `.credentials.json` under `~/.claude` / `$CLAUDE_CONFIG_DIR`). Useful when
-  you are already logged in via `codex login` / `claude` and do not want a
-  second browser flow.
-- **agy** — **로컬 로그로 추가**: agy has no public OAuth or quota API, so this
-  registers a local-log-only account that shows 5h/7d token totals scanned
-  from `~/.gemini` (and `~/.config/gemini`).
+- **Login Codex (browser)** / **Login Claude (browser)** — opens the system
+  browser for that provider's OAuth login (PKCE via a local loopback
+  callback, app-owned client credential). On success, a new account card
+  appears and starts polling.
+- **Add Codex (CLI)** / **Add Claude (CLI)** — CLI profile isolation, not a
+  token copy. UsageCheck opens the system terminal and runs the provider's
+  own login command (`codex login` / `claude auth login --claudeai`) into an
+  app-managed, isolated profile directory (`CODEX_HOME` / `CLAUDE_CONFIG_DIR`)
+  and registers a **reference** to that profile — no access/refresh token is
+  extracted or stored by UsageCheck. Codex usage then comes from a live probe
+  of the Codex app-server (`codex app-server --stdio`) against that profile.
+  Claude usage comes from a status-line bridge UsageCheck installs into the
+  profile's `settings.json`; a freshly added Claude CLI account shows
+  **`waiting_for_usage`** until you run `claude` yourself and it renders its
+  status line at least once, which is what emits the first quota sample.
+- **Login Antigravity (browser)** — agy/Antigravity has no CLI import; this
+  is the only way to add it. It registers `Provider::Agy`, whose quota model
+  is the Antigravity Model Quota (Gemini and Claude+GPT pools) as used %, not
+  a standalone Gemini API.
+
+### Status meanings
+
+The tray shows one of these per account (see `src-tauri/src/poller.rs`):
+
+- `ok` — live quota fetched successfully.
+- `needs_login` — no usable credentials; re-add the account.
+- `rate_limited` — provider returned HTTP 429.
+- `error` — provider call failed for another reason.
+- `stale` — a transient failure occurred, so the last known-good quota is
+  shown instead of clearing it.
+- `waiting_for_usage` — a CLI-profile Claude account whose profile hasn't
+  emitted a status-line usage sample yet.
+- `identity_changed` — the CLI profile's logged-in identity no longer matches
+  the identity UsageCheck registered.
+- `needs_setup` — the CLI or its JSON output is unavailable (e.g. Higgsfield
+  CLI not installed).
 
 Right-click (or use the tray menu) → **Quit UsageCheck** to exit. Accounts can
-be removed individually from their card (✕); that also deletes credentials
-from the OS keychain.
+be removed individually via the tray's **Remove** submenu; removing a CLI
+Claude account also tears down the status-line bridge from that profile's
+`settings.json`.
 
 ## Data Sources
 
-- **Codex**: `https://chatgpt.com/backend-api/wham/usage` (quota API, using
-  stored OAuth credentials) plus local log scanning of `~/.codex/sessions`
-  and `~/.codex/archived_sessions` as a fallback/supplement.
-- **Claude**: `https://api.anthropic.com/api/oauth/usage` (quota API, using
-  stored OAuth credentials) plus local log scanning of `~/.claude/projects`
-  (or `~/.config/claude/projects` / `CLAUDE_CONFIG_DIR`) as a
+Codex and Claude each have two account types with different data sources:
+
+- **Codex, browser OAuth account**: `https://chatgpt.com/backend-api/wham/usage`
+  (quota API, using the app-owned stored OAuth credentials) plus local log
+  scanning of `~/.codex/sessions` and `~/.codex/archived_sessions` as a
   fallback/supplement.
+- **Codex, CLI account** (`Add Codex (CLI)`): live probe of the Codex
+  app-server (`codex app-server --stdio`) against the isolated `CODEX_HOME`
+  profile UsageCheck manages — no HTTP usage API call, no token held by
+  UsageCheck.
+- **Claude, browser OAuth account**: `https://api.anthropic.com/api/oauth/usage`
+  (quota API, using the app-owned stored OAuth credentials) plus local log
+  scanning of `~/.claude/projects` (or `~/.config/claude/projects` /
+  `CLAUDE_CONFIG_DIR`) as a fallback/supplement.
+- **Claude, CLI account** (`Add Claude (CLI)`): a status-line bridge
+  UsageCheck installs into the isolated profile's `settings.json`; usage
+  appears once `claude` renders its status line in that profile (see
+  `waiting_for_usage` above).
 - **agy**: no usage API exists, so agy accounts rely entirely on local log
   scanning of `~/.gemini/**/transcript*.jsonl` (including Antigravity CLI
   transcripts) for token totals.
@@ -242,10 +292,15 @@ curl -s http://127.0.0.1:5178/openapi.yaml -o usagecheck-openapi.yaml
 
 ## Credential Storage
 
-All OAuth credentials (access token, refresh token, expiry) are stored in the
-OS-native credential store — macOS Keychain or Windows Credential Manager —
-via the `keyring` crate, keyed per account. Nothing is written to a plaintext
-config file.
+Browser-OAuth accounts (`Login … (browser)`) store their OAuth credentials
+(access token, refresh token, expiry) in the OS-native credential store —
+macOS Keychain or Windows Credential Manager — via the `keyring` crate, keyed
+per account. Nothing is written to a plaintext config file.
+
+CLI accounts (`Add Codex/Claude (CLI)`) do **not** have their tokens copied
+into UsageCheck at all — UsageCheck stores only a reference to the isolated
+CLI profile directory (`CODEX_HOME` / `CLAUDE_CONFIG_DIR`) and reads usage
+from that profile in place.
 
 ## Notes
 

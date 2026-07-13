@@ -30,19 +30,24 @@ edition-specific installers from CI.
 
 | Provider | Edition | Import path | Data source | Tray display |
 | --- | --- | --- | --- | --- |
-| **Codex** | Free | Browser OAuth or CLI import | `chatgpt.com` usage API + local logs | 5h / 7d used % |
-| **Claude** | Free | Browser OAuth or CLI import | Anthropic OAuth usage API + local logs | 5h / 7d used % |
-| **Gemini (agy)** | Free | Browser OAuth (Antigravity) | Antigravity `RetrieveUserQuotaSummary` | Gemini + Claude+GPT pools as used % |
-| **Cursor** | Pro | **Import Cursor (local)** — reads `state.vscdb` | Undocumented Connect RPC `GetCurrentPeriodUsage` on `api2.cursor.sh` | Billing-period used % + optional `$ left` |
-| **Grok (xAI)** | Pro | **Import Grok (clipboard)** — paste Management Key; optional **Import Grok (env vars)** | xAI Management API prepaid balance | Spend-since-top-up used % + `$ left` |
-| **Higgsfield** | Pro | **Login Higgsfield (browser)** or **Import Higgsfield (CLI)** | `higgsfield account --json` subprocess | Credits used % + `N credits left` |
+| **Codex** | Free | **Login Codex (browser)** (OAuth) or **Add Codex (CLI)** (isolated CLI profile) | Browser: `chatgpt.com` usage API + local logs. CLI: live `codex app-server --stdio` probe of the managed profile | 5h / 7d used % |
+| **Claude** | Free | **Login Claude (browser)** (OAuth) or **Add Claude (CLI)** (isolated CLI profile) | Browser: Anthropic OAuth usage API + local logs. CLI: status-line bridge installed into the managed profile (`waiting_for_usage` until first sample) | 5h / 7d used % |
+| **Gemini (agy)** | Free | **Login Antigravity (browser)** — no CLI import | Antigravity Model Quota (`RetrieveUserQuotaSummary`) | Gemini + Claude+GPT pools as used % |
+| **Cursor** | Pro | **Import Cursor (local, Experimental)** — reads `state.vscdb` | Undocumented Connect RPC `GetCurrentPeriodUsage` on `api2.cursor.sh` | Billing-period used % + optional `$ left` |
+| **Grok (xAI)** | Pro | **Import xAI API credits (clipboard)** — paste Management Key; optional **Import xAI API credits (env vars)** | xAI Management API prepaid balance (not consumer SuperGrok) | Spend-since-top-up used % + `$ left` |
+| **Higgsfield** | Pro | **Add Higgsfield (CLI)** | `higgsfield account status --json` subprocess | Credits used % + `N credits left` |
 
 ### Pro provider setup
 
-#### Cursor
+#### Cursor (Experimental)
+
+This integration is **Experimental** — it depends on an undocumented private
+RPC and Cursor's local SQLite layout, both of which Cursor can change without
+notice. It is read-only and never writes to Cursor's database.
 
 1. Sign in to the Cursor desktop app.
-2. In UsageCheck Pro, tray menu → **Add account** → **Import Cursor (local)**.
+2. In UsageCheck Pro, tray menu → **Add Account** → **Import Cursor (local,
+   Experimental)**.
 3. The app reads (read-only) from Cursor's SQLite `state.vscdb`:
 
    - macOS: `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb`
@@ -57,11 +62,14 @@ edition-specific installers from CI.
 6. Local tokens are re-synced from `state.vscdb` on each poll when the
    identity matches.
 
-#### Grok (xAI API credits)
+#### Grok (xAI API management-key credits)
+
+This is xAI **API** management-key credit usage — not consumer SuperGrok
+subscription quota. There is no SuperGrok integration.
 
 1. Obtain an xAI **Management API key** from xAI Console → Settings → Management Keys.
 2. Copy the key to your clipboard.
-3. Tray menu → **Add account** → **Import Grok (clipboard)**.
+3. Tray menu → **Add Account** → **Import xAI API credits (clipboard)**.
 4. UsageCheck validates the key via
    `GET https://management-api.x.ai/auth/management-keys/validation` and
    resolves your team ID from `scopeId` (no `XAI_TEAM_ID` required when
@@ -75,22 +83,22 @@ edition-specific installers from CI.
 
 - Paste the Management Key and team ID on **separate lines** in the clipboard
   before import, or set `XAI_TEAM_ID` and use clipboard import with key only.
-- **Import Grok (env vars)** — set `XAI_MGMT_KEY` (or `XAI_MANAGEMENT_KEY`)
-  and `XAI_TEAM_ID` in the environment before importing.
+- **Import xAI API credits (env vars)** — set `XAI_MGMT_KEY` (or
+  `XAI_MANAGEMENT_KEY`) and `XAI_TEAM_ID` in the environment before
+  importing.
 
 #### Higgsfield
 
 1. Install the [Higgsfield CLI](https://higgsfield.ai) and ensure `higgsfield`
    is on your `PATH`.
-2. Tray menu → **Add account** → **Login Higgsfield (browser)**.
-   This runs `higgsfield auth login` (system browser device flow) and, on
-   success, imports `~/.config/higgsfield/credentials.json` automatically.
-3. Alternatively, run `higgsfield auth login` in a terminal yourself, then
-   choose **Import Higgsfield (CLI)** to re-import credentials.
-4. Each poll runs `higgsfield account --json` and parses flexible JSON
-   shapes for `credits` / `credits_total`.
-5. If the CLI is missing, login/import fails with a clear message; polling
-   status is **`needs_setup`** when the CLI is unavailable or JSON has no
+2. Run `higgsfield auth login` in a terminal yourself first — there is no
+   in-app browser login for Higgsfield.
+3. Tray menu → **Add Account** → **Add Higgsfield (CLI)** to import
+   `~/.config/higgsfield/credentials.json`.
+4. Each poll runs `higgsfield account status --json` and parses flexible
+   JSON shapes for `credits` / `credits_total`.
+5. If the CLI is missing, import fails with a clear message; polling status
+   is **`needs_setup`** when the CLI is unavailable or JSON has no
    recognizable credit fields.
 
 ## Architecture
@@ -113,11 +121,11 @@ src-tauri/
   src/edition.rs          # product_name(), re-exports all_providers()
   src/cursor_local.rs     # read-only state.vscdb import (edition-pro)
   src/import.rs           # load_grok_env_auth(), import_grok_from_clipboard(),
-                          # run_higgsfield_browser_login(), load_higgsfield_cli_auth()
+                          # load_higgsfield_cli_auth()
   src/poller.rs           # poll_cursor, poll_grok, poll_higgsfield
-  src/tray_menu.rs        # Pro import menu items
-  src/main.rs             # add-cursor-local / add-grok-clipboard / add-grok-env /
-                          # add-higgsfield-login / add-higgsfield-cli handlers
+  src/tray_menu.rs        # auth_action_specs() — Pro menu items (edition-pro)
+  src/main.rs             # dispatch_auth_action(): add-cursor-local /
+                          # add-grok-clipboard / add-grok-env / add-higgsfield-cli
   tauri.conf.json         # UsageCheck-Free defaults
   tauri.pro.conf.json     # UsageCheck-Pro productName + identifier override
 ```
@@ -138,9 +146,10 @@ Plain `cargo build -p usage-app --release` produces the **Free** edition.
 
 | Area | Limitation |
 | --- | --- |
-| **Cursor** | Uses an **undocumented** internal API (`GetCurrentPeriodUsage`). Cursor may change or break it without notice. No official public quota API. |
-| **Grok** | Shows **prepaid API credit** balance and spend-since-top-up %. There is **no SuperGrok weekly quota %** — that subscription tier is not modeled. |
-| **Higgsfield** | **CLI-dependent** for live polling (`higgsfield` must be on `PATH`). Import only needs `credentials.json`; polling needs the CLI. Unrecognized JSON → `needs_setup`. |
+| **Cursor** | **Experimental.** Uses an **undocumented** private RPC (`GetCurrentPeriodUsage`). Cursor may change or break it without notice. No official public quota API. |
+| **Grok** | Shows **xAI API management-key prepaid credit** balance and spend-since-top-up %. This is **not** consumer SuperGrok — there is no SuperGrok weekly quota % and that subscription tier is not modeled. |
+| **Higgsfield** | **CLI-dependent** for both import and live polling (`higgsfield` must be on `PATH`; login happens via the CLI, not in-app). Unrecognized JSON → `needs_setup`. |
+| **Claude CLI accounts** | Usage depends on a status-line bridge installed into the isolated profile; a newly added Claude CLI account shows `waiting_for_usage` until `claude` is run in that profile and renders its status line at least once. |
 | **Runtime unlock** | No feature flag or license server toggles Pro at runtime — you must install the Pro binary. |
 | **Local API** | `GET /v1/usage/{provider}` documents `codex` \| `claude` \| `agy` only; Pro providers appear in the full `/v1/usage` snapshot when running Pro. |
 
@@ -202,5 +211,5 @@ cargo test -p usage-app --no-default-features --features custom-protocol,edition
 - **Free**: Codex, Claude, Gemini(agy) — 기본 빌드.
 - **Pro**: Free 제공자 + Cursor, Grok, Higgsfield — 별도 바이너리(`UsageCheck-Pro`).
 - 런타임 라이선스 없음; CI에서 에디션별 설치 파일을 배포.
-- Pro 계정 추가: Cursor 로컬 DB, Grok 클립보드(또는 환경 변수), Higgsfield 브라우저 로그인/CLI.
+- Pro 계정 추가: Cursor 로컬 DB(Experimental), xAI API 크레딧 클립보드(또는 환경 변수), Higgsfield CLI.
 - 자세한 빌드: `./scripts/build-edition.sh free|pro`.

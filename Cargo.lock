@@ -4221,7 +4221,7 @@ dependencies = [
 
 [[package]]
 name = "usage-app"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "arboard",
  "base64 0.22.1",
