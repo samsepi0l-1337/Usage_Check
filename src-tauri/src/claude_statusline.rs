@@ -27,8 +27,7 @@ fn statusline_command(value: &Value) -> Option<&str> {
 }
 
 fn is_usagecheck_bridge(value: &Value) -> bool {
-    statusline_command(value)
-        .is_some_and(|command| command.contains("usage-app") && command.contains(BRIDGE_FLAG))
+    statusline_command(value).is_some_and(|command| command.contains(BRIDGE_FLAG))
 }
 
 fn sidecar_path(settings_path: &Path) -> Result<std::path::PathBuf, String> {
@@ -98,8 +97,25 @@ fn run_prior(command: &str, stdin_data: &[u8]) -> Result<Vec<u8>, String> {
     Ok(output.stdout)
 }
 
+/// Translate Claude's status-line rate-limit window
+/// (`{ "used_percentage": <f64>, "resets_at": <epoch> }`) into the app's canonical
+/// shape consumed by `usage_core::fetch::claude::parse_claude_usage`
+/// (`{ "utilization": <f64>, "resets_at": <epoch|rfc3339> }`). `resets_at` passes
+/// through unchanged (the parser already accepts an epoch number).
+fn normalize_rate_window(window: &Value) -> Value {
+    let mut out = serde_json::Map::new();
+    if let Some(percent) = window.get("used_percentage").and_then(Value::as_f64) {
+        out.insert("utilization".to_string(), json!(percent));
+    }
+    if let Some(resets_at) = window.get("resets_at") {
+        out.insert("resets_at".to_string(), resets_at.clone());
+    }
+    Value::Object(out)
+}
+
 pub fn run_bridge<R: Read, W: Write>(
     account_id: &str,
+    identity: &str,
     profile_settings_path: &Path,
     mut stdin: R,
     mut stdout: W,
@@ -109,23 +125,24 @@ pub fn run_bridge<R: Read, W: Write>(
     stdin
         .read_to_end(&mut stdin_data)
         .map_err(|error| format!("failed to read status-line stdin: {error}"))?;
+    // Claude Code's status-line JSON has no user-identity field, and `rate_limits`
+    // is absent until the first API response of a Pro/Max session — both are optional
+    // here. Identity comes from the caller (the stored account label); a missing or
+    // partial rate_limits simply yields an empty snapshot ("waiting for usage").
     let status: Value = serde_json::from_slice(&stdin_data)
         .map_err(|error| format!("failed to parse status-line JSON: {error}"))?;
-    let identity = status
-        .get("identity")
-        .and_then(Value::as_str)
-        .filter(|identity| !identity.is_empty())
-        .ok_or_else(|| "status-line input is missing identity".to_string())?;
-    let rate_limits = status
-        .get("rate_limits")
-        .and_then(Value::as_object)
-        .ok_or_else(|| "status-line input rate_limits must be an object".to_string())?;
+    let rate_limits = status.get("rate_limits").and_then(Value::as_object);
+    let five_hour = rate_limits
+        .and_then(|limits| limits.get("five_hour"))
+        .map(normalize_rate_window)
+        .unwrap_or(Value::Null);
+    let seven_day = rate_limits
+        .and_then(|limits| limits.get("seven_day"))
+        .map(normalize_rate_window)
+        .unwrap_or(Value::Null);
     let snapshot = json!({
         "identity": identity,
-        "rate_limits": {
-            "five_hour": rate_limits.get("five_hour").cloned().unwrap_or(Value::Null),
-            "seven_day": rate_limits.get("seven_day").cloned().unwrap_or(Value::Null),
-        }
+        "rate_limits": { "five_hour": five_hour, "seven_day": seven_day }
     });
     write_snapshot(account_id, &snapshot)?;
 
@@ -146,10 +163,17 @@ pub fn handle_statusline_bridge(
     account_id: &str,
     profile_settings_path: &Path,
 ) -> Result<(), String> {
+    // Claude does not pass user identity to the status line; recover it from the
+    // stored account — its label is the identity the poller compares against.
+    let identity = crate::store::AccountStore::new()
+        .account(account_id)
+        .map(|account| account.label)
+        .unwrap_or_default();
     let stdin = io::stdin();
     let stdout = io::stdout();
     run_bridge(
         account_id,
+        &identity,
         profile_settings_path,
         stdin.lock(),
         stdout.lock(),
@@ -181,9 +205,13 @@ pub fn install_statusline_bridge(
         fs::write(sidecar_path(profile_settings_path)?, sidecar.to_string())
             .map_err(|error| format!("failed to preserve prior status line: {error}"))?;
     }
+    let exe = std::env::current_exe()
+        .ok()
+        .and_then(|path| path.to_str().map(str::to_string))
+        .unwrap_or_else(|| "usage-app".to_string());
     settings["statusLine"] = json!({
         "type": "command",
-        "command": format!("usage-app {BRIDGE_FLAG} {account_id}"),
+        "command": format!("\"{}\" {BRIDGE_FLAG} {account_id}", exe.replace('"', "")),
     });
     let body = serde_json::to_string_pretty(&settings)
         .map_err(|error| format!("failed to serialize Claude settings: {error}"))?;
@@ -275,10 +303,9 @@ mod tests {
 
         let installed = read_json(&settings_path);
         assert_eq!(installed["statusLine"]["type"], "command");
-        assert_eq!(
-            installed["statusLine"]["command"],
-            "usage-app --claude-statusline-bridge test-account"
-        );
+        let command = installed["statusLine"]["command"].as_str().expect("command string");
+        assert!(command.contains("--claude-statusline-bridge test-account"), "{command}");
+        assert!(command.contains("usage-app") || command.contains("usage_app"), "{command}");
         assert_eq!(
             read_json(&temp.path().join(".statusline_prior.json"))["prior_command"],
             prior
@@ -347,19 +374,17 @@ mod tests {
         )
         .expect("write settings");
         install_statusline_bridge(&settings_path, account_id).expect("install bridge");
-        let input = br#"{"identity":"user@example.com","rate_limits":{"five_hour":{"used":7},"seven_day":{"used":42},"other":{"secret":"discard"}},"token":"discard"}"#;
+        let input = br#"{"model":{"id":"claude-opus-4-8"},"rate_limits":{"five_hour":{"used_percentage":23.5,"resets_at":1738425600},"seven_day":{"used_percentage":41.2,"resets_at":1738857600}}}"#;
         let mut output = Vec::new();
-
-        run_bridge(account_id, &settings_path, &input[..], &mut output).expect("run bridge");
-
-        assert_eq!(output, input);
-        assert_eq!(
-            read_json(&crate::paths::claude_statusline_snapshot(account_id)),
-            json!({
-                "identity": "user@example.com",
-                "rate_limits": {"five_hour": {"used": 7}, "seven_day": {"used": 42}}
-            })
-        );
+        run_bridge(account_id, "user@example.com", &settings_path, &input[..], &mut output).expect("run bridge");
+        assert_eq!(output, input); // prior "cat" echoes stdin through
+        let snap = read_json(&crate::paths::claude_statusline_snapshot(account_id));
+        assert_eq!(snap["identity"], "user@example.com");
+        assert_eq!(snap["rate_limits"]["five_hour"]["utilization"], 23.5);
+        assert_eq!(snap["rate_limits"]["five_hour"]["resets_at"], 1738425600);
+        let quota = usage_core::fetch::claude::parse_claude_usage(&snap["rate_limits"]);
+        assert!(quota.five_hour.is_some() && quota.week.is_some());
+        assert_eq!(quota.five_hour.unwrap().percent, 23.5);
     }
 
     #[test]
@@ -372,14 +397,30 @@ mod tests {
         fs::create_dir_all(settings_path.parent().expect("settings parent"))
             .expect("create profile");
         fs::write(&settings_path, "{}").expect("write settings");
-        let input =
-            br#"{"identity":"ready@example.com","rate_limits":{"five_hour":{},"seven_day":{}}}"#;
+        let input = br#"{"model":{"id":"claude-opus-4-8"}}"#;
         let mut output = Vec::new();
 
-        run_bridge(account_id, &settings_path, &input[..], &mut output).expect("run bridge");
+        run_bridge(account_id, "ready@example.com", &settings_path, &input[..], &mut output).expect("run bridge");
 
         let rendered = String::from_utf8(output).expect("UTF-8 fallback");
         assert!(rendered.contains("ready@example.com"));
         assert!(rendered.contains("Usage check ready"));
+    }
+
+    #[test]
+    fn runtime_bridge_writes_empty_snapshot_without_rate_limits() {
+        let _lock = ENV_LOCK.lock().expect("environment lock");
+        let temp = TempDir::new().expect("temp directory");
+        let _home = HomeGuard::set(temp.path());
+        let account_id = "norates";
+        let settings_path = crate::paths::claude_settings_json(account_id);
+        fs::create_dir_all(settings_path.parent().expect("parent")).expect("create profile");
+        fs::write(&settings_path, "{}").expect("write settings");
+        let input = br#"{"model":{"id":"claude-opus-4-8"},"cost":{"total_cost_usd":0.01}}"#;
+        let mut output = Vec::new();
+        run_bridge(account_id, "u@e.com", &settings_path, &input[..], &mut output).expect("run bridge");
+        let snap = read_json(&crate::paths::claude_statusline_snapshot(account_id));
+        let quota = usage_core::fetch::claude::parse_claude_usage(&snap["rate_limits"]);
+        assert!(quota.five_hour.is_none() && quota.week.is_none());
     }
 }
