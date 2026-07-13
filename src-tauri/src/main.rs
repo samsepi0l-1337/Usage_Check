@@ -88,24 +88,38 @@ async fn refresh_tray(app: &AppHandle) {
     app.state::<api::ApiState>().publish(&snapshot);
     let app2 = app.clone();
     let _ = app.run_on_main_thread(move || {
-        tray_menu::apply_menu(&app2, &snapshot);
+        // Runs inside tao's `extern "C"` `send_event`; a panic unwinding across
+        // that FFI frame triggers `panic_cannot_unwind` → process abort. Contain it
+        // so a malformed snapshot can never take the whole app down.
+        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            tray_menu::apply_menu(&app2, &snapshot);
+        }))
+        .is_err()
+        {
+            eprintln!("tray: apply_menu panicked; suppressed to keep the tray alive");
+        }
     });
 }
 
 fn import_provider(app: &AppHandle, provider: Provider) {
-    let store = app.state::<AccountStore>();
-    match import::import_from_cli(provider) {
-        Ok(imported) => match store.add(provider, imported.label, imported.credentials) {
-            Ok(_) => {
-                let app2 = app.clone();
-                tauri::async_runtime::spawn(async move {
-                    refresh_tray(&app2).await;
-                });
+    // Previously this ran the blocking CLI/DB read synchronously inside the tray
+    // menu-event callback (tao `send_event`), so any panic in `import_from_cli`
+    // unwound across the FFI boundary and aborted the app. Spawn it (like every
+    // sibling action) so panics are contained by the runtime and the menu stays
+    // responsive during the import.
+    let app2 = app.clone();
+    tauri::async_runtime::spawn(async move {
+        match import::import_from_cli(provider) {
+            Ok(imported) => {
+                let store = app2.state::<AccountStore>();
+                match store.add(provider, imported.label, imported.credentials) {
+                    Ok(_) => refresh_tray(&app2).await,
+                    Err(e) => eprintln!("import: failed to save account: {e}"),
+                }
             }
-            Err(e) => eprintln!("import: failed to save account: {e}"),
-        },
-        Err(e) => eprintln!("import: {e}"),
-    }
+            Err(e) => eprintln!("import: {e}"),
+        }
+    });
 }
 
 fn cli_coordinator_setup(app: &AppHandle, provider: Provider) {
@@ -343,7 +357,17 @@ fn main() {
                 .tooltip(edition::product_name())
                 .show_menu_on_left_click(true)
                 .on_menu_event(|app, event| {
-                    handle_menu_event(app, event.id.as_ref());
+                    // Menu clicks are delivered inside tao's `extern "C"` event
+                    // dispatch; a panic unwinding across that boundary aborts the
+                    // process. Contain it so one bad click can't kill the app.
+                    let id = event.id.as_ref().to_string();
+                    if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        handle_menu_event(app, &id);
+                    }))
+                    .is_err()
+                    {
+                        eprintln!("tray: menu handler panicked (id={id}); suppressed");
+                    }
                 });
             #[cfg(target_os = "macos")]
             {
