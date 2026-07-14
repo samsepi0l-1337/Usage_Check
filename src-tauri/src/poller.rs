@@ -1111,7 +1111,20 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
     use usage_core::account::{Account, AuthSource, Provider};
+
     use usage_core::models::QuotaUsage;
+
+    // Serializes every test that mutates the process-global `last_success_cache`
+    // (clear/evict/direct-lock). Without this, parallel `cargo test` threads clobber
+    // each other's cached entries (e.g. one test's clear() wipes another's seeded "ok"
+    // before its assertion), producing intermittent "error" vs "stale" failures.
+    static LAST_SUCCESS_CACHE_TEST_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn lock_last_success_cache_tests() -> std::sync::MutexGuard<'static, ()> {
+        LAST_SUCCESS_CACHE_TEST_GUARD
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
 
     fn auth_source_usage(id: &str, status: &str, five_hour: Option<QuotaUsage>) -> AccountUsage {
         let account = Account {
@@ -1212,6 +1225,7 @@ mod tests {
 
     #[test]
     fn auth_source_evict_last_success_drops_stale() {
+        let _cache_guard = lock_last_success_cache_tests();
         clear_last_success_cache();
         let quota = auth_source_quota(25.0);
         {
@@ -1236,6 +1250,7 @@ mod tests {
 
     #[test]
     fn auth_source_evict_is_isolated() {
+        let _cache_guard = lock_last_success_cache_tests();
         clear_last_success_cache();
         let x_quota = auth_source_quota(25.0);
         let y_quota = auth_source_quota(75.0);
@@ -1272,6 +1287,7 @@ mod tests {
 
     #[test]
     fn auth_source_ok_then_transient_error_serves_stale() {
+        let _cache_guard = lock_last_success_cache_tests();
         clear_last_success_cache();
         let mut cache = HashMap::new();
         let quota = auth_source_quota(25.0);
@@ -1293,6 +1309,7 @@ mod tests {
 
     #[test]
     fn auth_source_transient_error_without_prior_success_stays_error() {
+        let _cache_guard = lock_last_success_cache_tests();
         clear_last_success_cache();
         let mut cache = HashMap::new();
 
@@ -1308,6 +1325,7 @@ mod tests {
 
     #[test]
     fn auth_source_needs_login_never_stale() {
+        let _cache_guard = lock_last_success_cache_tests();
         clear_last_success_cache();
         let mut cache = HashMap::new();
         apply_last_success(
@@ -1329,6 +1347,7 @@ mod tests {
 
     #[test]
     fn auth_source_stale_uses_latest_success() {
+        let _cache_guard = lock_last_success_cache_tests();
         clear_last_success_cache();
         let mut cache = HashMap::new();
         let first = auth_source_quota(25.0);
