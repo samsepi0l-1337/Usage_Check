@@ -1792,7 +1792,7 @@ mod tests_filesystem {
                 "tokens": 100,
                 "dedupe_key": format!("key-{}", i)
             });
-            fs::write(&file_path, format!("{}\n", json.to_string())).expect("write file");
+            fs::write(&file_path, format!("{}\n", json)).expect("write file");
         }
 
         let now = Utc::now();
@@ -1805,8 +1805,8 @@ mod tests_filesystem {
             "Should scan all 300 events (currently stub returns 0)"
         );
         // Provenance should be Ok, NOT Truncated (300 « budget)
-        assert_eq!(
-            result.health.truncated, false,
+        assert!(
+            !result.health.truncated,
             "300 events should NOT trigger truncation"
         );
     }
@@ -1831,7 +1831,7 @@ mod tests_filesystem {
             "tokens": 100,
             "dedupe_key": "test-key"
         });
-        fs::write(&file_path, format!("{}\n", json.to_string())).expect("write file");
+        fs::write(&file_path, format!("{}\n", json)).expect("write file");
 
         // Set file mtime to 40 days ago
         let old_time = FileTime::from_system_time(

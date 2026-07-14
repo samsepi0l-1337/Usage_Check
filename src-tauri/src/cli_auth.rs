@@ -133,11 +133,18 @@ impl CliAuthCoordinator {
 mod tests {
     use super::*;
     use crate::terminal::TerminalError;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Mutex};
+
+    static PROFILE_SEQ: AtomicU64 = AtomicU64::new(0);
+
+    fn unique_profile_root() -> std::path::PathBuf {
+        let n = PROFILE_SEQ.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!("uc-cli-test-{}-{}", std::process::id(), n))
+    }
 
     struct MockTerminalLauncher {
         should_fail: bool,
-        identity: Option<String>,
         internal_fail: Arc<Mutex<bool>>,
     }
 
@@ -145,7 +152,6 @@ mod tests {
         fn new() -> Self {
             Self {
                 should_fail: false,
-                identity: None,
                 internal_fail: Arc::new(Mutex::new(false)),
             }
         }
@@ -180,7 +186,7 @@ mod tests {
         }
 
         fn managed_profile_root(&self) -> Result<PathBuf, String> {
-            Ok(std::env::temp_dir().join("uc-cli-test"))
+            Ok(unique_profile_root())
         }
 
         fn login_command(&self, _profile_root: &Path) -> TerminalCommand {
@@ -216,7 +222,7 @@ mod tests {
         }
 
         fn managed_profile_root(&self) -> Result<PathBuf, String> {
-            Ok(std::env::temp_dir().join("uc-cli-test"))
+            Ok(unique_profile_root())
         }
 
         fn login_command(&self, _profile_root: &Path) -> TerminalCommand {
@@ -241,7 +247,7 @@ mod tests {
         }
 
         fn managed_profile_root(&self) -> Result<PathBuf, String> {
-            Ok(std::env::temp_dir().join("uc-cli-test"))
+            Ok(unique_profile_root())
         }
 
         fn login_command(&self, _profile_root: &Path) -> TerminalCommand {
@@ -280,7 +286,6 @@ mod tests {
         };
         let launcher = MockTerminalLauncher {
             should_fail: true,
-            identity: None,
             internal_fail: Arc::new(Mutex::new(false)),
         };
         let coord = CliAuthCoordinator::new(
@@ -347,7 +352,6 @@ mod tests {
 
         let launcher = MockTerminalLauncher {
             should_fail: false,
-            identity: Some("test-id".to_string()),
             internal_fail: Arc::new(Mutex::new(false)),
         };
 
