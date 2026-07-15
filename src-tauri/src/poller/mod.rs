@@ -16,11 +16,9 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
-use serde::Serialize;
-
 use usage_core::account::{Account, AuthSource, Credentials, Provider};
 use usage_core::attribution::{assign_local_usage, AccountRef, ScannedRoot};
-use usage_core::fetch::agy::{compact_windows, parse_agy_quota_summary, AgyQuota, AgyQuotaPool};
+use usage_core::fetch::agy::{parse_agy_quota_summary, AgyQuota};
 use usage_core::fetch::claude::{parse_claude_usage, ClaudeQuota};
 use usage_core::fetch::codex::{parse_codex_usage, CodexQuota};
 #[cfg(feature = "edition-pro")]
@@ -29,12 +27,33 @@ use usage_core::fetch::cursor::{cursor_quota_with_auth, parse_cursor_period_usag
 use usage_core::fetch::grok::{parse_grok_prepaid_balance, GrokPrepaid};
 #[cfg(feature = "edition-pro")]
 use usage_core::fetch::higgsfield::{parse_higgsfield_account, HiggsfieldCredits};
-use usage_core::models::{LocalProvenance, LocalUsage, ModelTokenEvent, QuotaUsage, WindowTotals};
+use usage_core::models::{LocalProvenance, LocalUsage, ModelTokenEvent};
 use usage_core::scanners::{claude as claude_scanner, codex as codex_scanner};
 
 use crate::agy_local;
 use crate::paths;
 use crate::store::AccountStore;
+
+mod usage_model;
+pub use usage_model::{
+    account_usage_from_agy,
+    assemble_account_usage,
+    AccountUsage,
+    FetchOutcome,
+};
+use usage_model::{
+    claude_fetch_outcome,
+    claude_identity_status,
+    codex_fetch_outcome,
+    codex_identity_status,
+    status_for_failure,
+};
+#[cfg(feature = "edition-pro")]
+use usage_model::{
+    account_usage_from_cursor,
+    account_usage_from_grok,
+    account_usage_from_higgsfield,
+};
 
 mod last_success;
 pub use last_success::evict_last_success;
@@ -77,80 +96,6 @@ async fn maybe_refresh(
             refreshed
         }
         Err(_) => creds,
-    }
-}
-
-/// A single account's usage snapshot: live quota (when available) plus
-/// local-log token totals (Codex/Claude fallback only), ready for the tray.
-#[derive(Clone, Debug, Serialize)]
-pub struct AccountUsage {
-    pub account: Account,
-    /// Prefer email / plan-aware name over the stored label when available.
-    pub display_name: String,
-    pub plan: Option<String>,
-    pub five_hour: Option<QuotaUsage>,
-    pub week: Option<QuotaUsage>,
-    pub totals: WindowTotals,
-    /// Agy: Gemini / Claude+GPT pool rows (used %, like Codex/Claude).
-    pub pool_breakdown: Vec<AgyQuotaPool>,
-    /// Pro providers: secondary label (`$12 left`, `809 credits left`).
-    pub detail_suffix: Option<String>,
-    pub status: String,
-    /// Local-aggregation provenance label when the locally-summed token totals
-    /// are not a clean `Ok` (e.g. `unavailable`, `partial`, `truncated`,
-    /// `ambiguous`, `conflict`, `assumed`, `no_local_profile`). `None` means the
-    /// local totals are fully trustworthy. Lets the tray/DTO distinguish a real
-    /// zero from a failed/ambiguous local scan.
-    pub local_status: Option<String>,
-}
-
-fn display_name_for(account: &Account, email: Option<&str>, plan: Option<&str>) -> String {
-    if let Some(email) = email.filter(|s| !s.is_empty()) {
-        return email.to_string();
-    }
-    let label = account.label.trim();
-    if !label.is_empty()
-        && !label.ends_with(" (CLI import)")
-        && !label.ends_with(" account")
-        && label != "agy (local logs)"
-        && label != "Gemini (local logs)"
-        && label != "Gemini"
-        && label != "agy"
-    {
-        return label.to_string();
-    }
-    if let Some(plan) = plan.filter(|s| !s.is_empty()) {
-        return format!("{} · {}", provider_short(account.provider), plan);
-    }
-    if !label.is_empty()
-        && label != "Gemini"
-        && label != "agy"
-        && label != "agy (local logs)"
-        && label != "Gemini (local logs)"
-    {
-        return label.to_string();
-    }
-    provider_short(account.provider).to_string()
-}
-
-fn provider_short(p: Provider) -> &'static str {
-    p.display_name()
-}
-
-/// Maps Antigravity Model Quota pools into tray `AccountUsage`.
-pub fn account_usage_from_agy(account: &Account, quota: &AgyQuota, status: &str) -> AccountUsage {
-    let (five_hour, week) = compact_windows(&quota.pools);
-    AccountUsage {
-        display_name: display_name_for(account, quota.email.as_deref(), quota.plan.as_deref()),
-        plan: quota.plan.clone(),
-        account: account.clone(),
-        five_hour,
-        week,
-        totals: WindowTotals::default(),
-        pool_breakdown: quota.pools.clone(),
-        detail_suffix: None,
-        status: status.to_string(),
-        local_status: None,
     }
 }
 
@@ -372,57 +317,6 @@ async fn fetch_grok_prepaid(
     Ok(parse_grok_prepaid_balance(&body))
 }
 
-#[cfg(feature = "edition-pro")]
-fn account_usage_from_cursor(account: &Account, quota: &CursorQuota, status: &str) -> AccountUsage {
-    AccountUsage {
-        display_name: display_name_for(account, quota.email.as_deref(), quota.plan.as_deref()),
-        plan: quota.plan.clone(),
-        account: account.clone(),
-        five_hour: None,
-        week: quota.period.clone(),
-        totals: WindowTotals::default(),
-        pool_breakdown: Vec::new(),
-        detail_suffix: quota.detail_suffix.clone(),
-        status: status.to_string(),
-        local_status: None,
-    }
-}
-
-#[cfg(feature = "edition-pro")]
-fn account_usage_from_grok(account: &Account, prepaid: &GrokPrepaid, status: &str) -> AccountUsage {
-    AccountUsage {
-        display_name: display_name_for(account, None, Some("API credits")),
-        plan: Some("API credits".into()),
-        account: account.clone(),
-        five_hour: None,
-        week: prepaid.period.clone(),
-        totals: WindowTotals::default(),
-        pool_breakdown: Vec::new(),
-        detail_suffix: prepaid.detail_suffix.clone(),
-        status: status.to_string(),
-        local_status: None,
-    }
-}
-
-#[cfg(feature = "edition-pro")]
-fn account_usage_from_higgsfield(
-    account: &Account,
-    credits: &HiggsfieldCredits,
-    status: &str,
-) -> AccountUsage {
-    AccountUsage {
-        display_name: display_name_for(account, credits.email.as_deref(), credits.plan.as_deref()),
-        plan: credits.plan.clone(),
-        account: account.clone(),
-        five_hour: None,
-        week: credits.to_quota(),
-        totals: WindowTotals::default(),
-        pool_breakdown: Vec::new(),
-        detail_suffix: credits.detail_suffix(),
-        status: status.to_string(),
-        local_status: None,
-    }
-}
 
 #[cfg(feature = "edition-pro")]
 fn cursor_outcome_status(
@@ -618,15 +512,6 @@ async fn poll_higgsfield(store: &AccountStore, account: &Account) -> AccountUsag
     }
 }
 
-/// Maps an HTTP failure to a status string: 401/403 (expired/invalid token)
-/// -> "needs_login", 429 -> "rate_limited", anything else -> "error".
-fn status_for_failure(status: Option<u16>) -> &'static str {
-    match status {
-        Some(401) | Some(403) => "needs_login",
-        Some(429) => "rate_limited",
-        _ => "error",
-    }
-}
 
 /// Backfills Google `account_id` / email label for legacy agy rows that were
 /// saved before identity was persisted (opaque `ya29` tokens, no `id_token`).
@@ -720,39 +605,6 @@ async fn poll_agy(
     }
 }
 
-fn codex_fetch_outcome(quota: CodexQuota) -> FetchOutcome {
-    FetchOutcome::Live {
-        five_hour: quota.five_hour,
-        week: quota.week,
-        plan: quota.plan,
-        email: quota.email,
-    }
-}
-
-fn claude_fetch_outcome(quota: ClaudeQuota, email: Option<&str>) -> FetchOutcome {
-    FetchOutcome::Live {
-        five_hour: quota.five_hour,
-        week: quota.week,
-        plan: None,
-        email: email.map(str::to_string),
-    }
-}
-
-fn codex_identity_status(probe_identity: &str, expected: &str) -> Option<&'static str> {
-    if probe_identity == expected {
-        None
-    } else {
-        Some("identity_changed")
-    }
-}
-
-fn claude_identity_status(snapshot_identity: &str, expected: &str) -> Option<&'static str> {
-    if snapshot_identity != expected {
-        Some("identity_changed")
-    } else {
-        None
-    }
-}
 
 enum ClaudeCliOutcome {
     Live(FetchOutcome),
@@ -1054,25 +906,6 @@ pub async fn poll_all(store: &AccountStore) -> Vec<AccountUsage> {
 mod tests {
     use super::*;
     use tempfile::TempDir;
-    use usage_core::account::{Account, AuthSource, Provider};
-
-    use usage_core::models::QuotaUsage;
-
-    #[test]
-    fn auth_source_codex_identity_mismatch() {
-        assert_eq!(
-            codex_identity_status("id-a", "id-b"),
-            Some("identity_changed")
-        );
-        assert_eq!(codex_identity_status("id", "id"), None);
-    }
-
-    #[test]
-    fn auth_source_claude_identity_mismatch() {
-        assert_eq!(claude_identity_status("a", "b"), Some("identity_changed"));
-        assert_eq!(claude_identity_status("a", "a"), None);
-    }
-
     #[test]
     fn auth_source_claude_snapshot_missing_is_waiting() {
         use std::path::Path;
@@ -1124,44 +957,6 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn maps_agy_pools() {
-        let acct = Account {
-            id: "3".into(),
-            provider: Provider::Agy,
-            label: "agy".into(),
-            auth_source: AuthSource::BrowserOAuth {
-                credential_id: "agy-credential".into(),
-            },
-        };
-        let quota = AgyQuota {
-            email: Some("a@b.com".into()),
-            plan: Some("Pro".into()),
-            pools: vec![AgyQuotaPool {
-                name: "Gemini Models".into(),
-                five_hour: None,
-                week: Some(QuotaUsage {
-                    percent: 0.0,
-                    resets_at: None,
-                    window_seconds: Some(604_800),
-                }),
-            }],
-        };
-        let au = account_usage_from_agy(&acct, &quota, "ok");
-        assert_eq!(au.display_name, "a@b.com");
-        assert_eq!(au.pool_breakdown.len(), 1);
-        assert!((au.week.as_ref().unwrap().percent - 0.0).abs() < 0.01);
-    }
-
-    #[test]
-    fn status_for_failure_maps_auth_errors() {
-        assert_eq!(status_for_failure(Some(401)), "needs_login");
-        assert_eq!(status_for_failure(Some(403)), "needs_login");
-        assert_eq!(status_for_failure(Some(429)), "rate_limited");
-        assert_eq!(status_for_failure(Some(500)), "error");
-        assert_eq!(status_for_failure(None), "error");
-    }
-
 }
 
 /// Result of scanning a local provider root for events.
@@ -1177,20 +972,6 @@ pub struct ScanHealth {
     pub any_read_error: bool,
     pub root_unreadable: bool,
     pub truncated: bool,
-}
-
-/// Outcome of a provider HTTP fetch.
-#[derive(Clone, Debug)]
-pub enum FetchOutcome {
-    Live {
-        five_hour: Option<QuotaUsage>,
-        week: Option<QuotaUsage>,
-        plan: Option<String>,
-        email: Option<String>,
-    },
-    Failed {
-        status: Option<u16>,
-    },
 }
 
 /// Scan local provider roots for token events (raw, not aggregated).
@@ -1212,46 +993,6 @@ pub async fn scan_local_events(
         })
 }
 
-/// Assemble a single AccountUsage from account, fetch outcome, and local usage.
-pub fn assemble_account_usage(
-    account: &Account,
-    outcome: FetchOutcome,
-    local: LocalUsage,
-) -> AccountUsage {
-    let local_status = local_status_label(local.provenance).map(str::to_string);
-    let (five_hour, week, plan, email, status) = match outcome {
-        FetchOutcome::Live {
-            five_hour,
-            week,
-            plan,
-            email,
-        } => (five_hour, week, plan, email, "ok".to_string()),
-        FetchOutcome::Failed { status } => (
-            None,
-            None,
-            None,
-            None,
-            status_for_failure(status).to_string(),
-        ),
-    };
-    let mut account = account.clone();
-    if let Some(email) = email.as_deref().filter(|email| !email.is_empty()) {
-        account.label = email.to_string();
-    }
-
-    AccountUsage {
-        display_name: display_name_for(&account, email.as_deref(), plan.as_deref()),
-        plan,
-        account,
-        five_hour,
-        week,
-        totals: local.totals,
-        pool_breakdown: Vec::new(),
-        detail_suffix: None,
-        status,
-        local_status,
-    }
-}
 
 fn scan_local_events_blocking(provider: Provider, roots: &[PathBuf]) -> ScanResult {
     let started = Instant::now();
@@ -1391,149 +1132,6 @@ fn parse_local_event(provider: Provider, line: &str) -> Option<ModelTokenEvent> 
 
 fn is_jsonl(path: &Path) -> bool {
     path.extension().and_then(|extension| extension.to_str()) == Some("jsonl")
-}
-
-fn local_status_label(provenance: LocalProvenance) -> Option<&'static str> {
-    match provenance {
-        LocalProvenance::Ok | LocalProvenance::NoEvents | LocalProvenance::SharedProfileOther => {
-            None
-        }
-        LocalProvenance::NoLocalProfile => Some("no_local_profile"),
-        LocalProvenance::Assumed => Some("assumed"),
-        LocalProvenance::Ambiguous => Some("ambiguous"),
-        LocalProvenance::Conflict => Some("conflict"),
-        LocalProvenance::Partial => Some("partial"),
-        LocalProvenance::Unavailable => Some("unavailable"),
-        LocalProvenance::Truncated => Some("truncated"),
-    }
-}
-
-// NOTE: superseded `tests_new` module (which used the #[should_panic] anti-pattern)
-// removed during TEST verification — the correct assemble-seam tests live in
-// `tests_seam` below/above.
-
-#[cfg(test)]
-mod tests_seam {
-    use super::*;
-
-    #[test]
-    fn test_assemble_live_outcome_ok_local_preserves_totals() {
-        // §6.9: Live outcome + local(Ok, totals>0).
-        // Expected: token_totals == local.totals, five_hour/week Some.
-        // This is the CURRENT BUG — assemble_account_usage passes WindowTotals::default() instead.
-        let acct = Account {
-            id: "test".into(),
-            provider: Provider::Codex,
-            label: "user@ex.com".into(),
-            auth_source: usage_core::account::AuthSource::BrowserOAuth {
-                credential_id: "test-cred".into(),
-            },
-        };
-        let outcome = FetchOutcome::Live {
-            five_hour: Some(QuotaUsage {
-                percent: 25.0,
-                resets_at: None,
-                window_seconds: Some(18000),
-            }),
-            week: Some(QuotaUsage {
-                percent: 30.0,
-                resets_at: None,
-                window_seconds: None,
-            }),
-            plan: Some("Pro".into()),
-            email: Some("user@ex.com".into()),
-        };
-        let local = LocalUsage {
-            totals: WindowTotals {
-                five_hours: 500,
-                week: 2000,
-                month: 10000,
-            },
-            provenance: usage_core::models::LocalProvenance::Ok,
-        };
-        let result = assemble_account_usage(&acct, outcome, local);
-        // Real assertions:
-        assert!(
-            result.five_hour.is_some(),
-            "Live outcome should preserve five_hour"
-        );
-        assert!(result.week.is_some(), "Live outcome should preserve week");
-        // CRITICAL: token_totals must match local.totals (currently fails — returns 0)
-        assert_eq!(
-            result.totals.five_hours, 500,
-            "token_totals should match local.totals (BUG: currently returns 0)"
-        );
-        assert_eq!(result.totals.week, 2000, "week tokens should match local");
-        assert_eq!(
-            result.totals.month, 10000,
-            "month tokens should match local"
-        );
-    }
-
-    #[test]
-    fn test_assemble_failed_outcome_uses_local_totals() {
-        // §6.9: Failed(429) + local(Ok).
-        // Expected: five_hour/week None, token_totals == local.totals.
-        let acct = Account {
-            id: "test".into(),
-            provider: Provider::Claude,
-            label: "user@ex.com".into(),
-            auth_source: usage_core::account::AuthSource::BrowserOAuth {
-                credential_id: "claude-cred".into(),
-            },
-        };
-        let outcome = FetchOutcome::Failed { status: Some(429) };
-        let local = LocalUsage {
-            totals: WindowTotals {
-                five_hours: 300,
-                week: 1500,
-                month: 8000,
-            },
-            provenance: usage_core::models::LocalProvenance::Ok,
-        };
-        let result = assemble_account_usage(&acct, outcome, local);
-        // Real assertions:
-        assert!(
-            result.five_hour.is_none(),
-            "Failed outcome should not set five_hour"
-        );
-        assert!(result.week.is_none(), "Failed outcome should not set week");
-        assert_eq!(
-            result.totals.five_hours, 300,
-            "Failed should use local totals"
-        );
-        assert_eq!(result.totals.week, 1500, "Failed should use local week");
-    }
-
-    #[test]
-    fn test_assemble_failed_unavailable_distinct_from_zero() {
-        // §6.9/DoD §1.4: Unavailable must be DISTINCT from real 0 totals.
-        // The DTO's local_status should carry "unavailable" when provenance=Unavailable.
-        let acct = Account {
-            id: "test".into(),
-            provider: Provider::Codex,
-            label: "test@ex.com".into(),
-            auth_source: usage_core::account::AuthSource::BrowserOAuth {
-                credential_id: "cred".into(),
-            },
-        };
-        let outcome = FetchOutcome::Failed { status: None };
-        let local = LocalUsage {
-            totals: WindowTotals::default(),
-            provenance: usage_core::models::LocalProvenance::Unavailable,
-        };
-        let result = assemble_account_usage(&acct, outcome, local);
-
-        // CRITICAL: totals are 0, BUT status must distinguish Unavailable
-        assert_eq!(result.totals.five_hours, 0, "Unavailable has no totals");
-
-        // The status field should indicate the problem, not generic "error"
-        // Stub will have generic status, but test proves the seam exists
-        assert!(
-            !result.status.is_empty(),
-            "Status must be set (stub returns generic, LOGIC refines per provenance)"
-        );
-    }
 }
 
 #[cfg(test)]
