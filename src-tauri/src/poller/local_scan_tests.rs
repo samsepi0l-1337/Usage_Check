@@ -1,0 +1,102 @@
+use super::*;
+use chrono::Utc;
+use std::fs;
+use std::path::PathBuf;
+use tempfile::tempdir;
+
+
+/// §6.1 Cap regression: write 300 real .jsonl files, scan them.
+/// This test MUST call scan_local_events (real filesystem layer).
+/// Guards against reintroducing the old MAX_FILES=200 cap.
+#[tokio::test]
+async fn test_cap_regression_300_real_files() {
+    let dir = tempdir().expect("tempdir");
+    let root_path = dir.path().to_path_buf();
+
+    // Create 300 .jsonl files, each with one event
+    for i in 0..300 {
+        let file_path = root_path.join(format!("event_{:03}.jsonl", i));
+        let now = Utc::now();
+        let json = serde_json::json!({
+            "timestamp": now.to_rfc3339(),
+            "model": format!("test-model-{}", i),
+            "tokens": 100,
+            "dedupe_key": format!("key-{}", i)
+        });
+        fs::write(&file_path, format!("{}\n", json)).expect("write file");
+    }
+
+    let now = Utc::now();
+    let result = scan_local_events(Provider::Codex, &[root_path], now).await;
+
+    // Real assertion: all 300 events scanned
+    assert_eq!(
+        result.events.len(),
+        300,
+        "Should scan all 300 events (currently stub returns 0)"
+    );
+    // Provenance should be Ok, NOT Truncated (300 « budget)
+    assert!(
+        !result.health.truncated,
+        "300 events should NOT trigger truncation"
+    );
+}
+
+/// §6.2 mtime irrelevance: file mtime is 40 days old, event timestamp 1h old.
+/// scan_local_events MUST scan by event timestamp, NOT mtime.
+/// FAILS on stub, and WOULD FAIL if implementation uses mtime skip.
+#[tokio::test]
+async fn test_mtime_irrelevance_recent_timestamp() {
+    use filetime::FileTime;
+
+    let dir = tempdir().expect("tempdir");
+    let root_path = dir.path().to_path_buf();
+    let file_path = root_path.join("old_mtime.jsonl");
+
+    let now = Utc::now();
+    let event_ts = now - chrono::Duration::hours(1);
+
+    let json = serde_json::json!({
+        "timestamp": event_ts.to_rfc3339(),
+        "model": "test",
+        "tokens": 100,
+        "dedupe_key": "test-key"
+    });
+    fs::write(&file_path, format!("{}\n", json)).expect("write file");
+
+    // Set file mtime to 40 days ago
+    let old_time = FileTime::from_system_time(
+        std::time::SystemTime::now() - std::time::Duration::from_secs(40 * 24 * 3600),
+    );
+    filetime::set_file_mtime(&file_path, old_time).expect("set mtime");
+
+    let result = scan_local_events(Provider::Codex, &[root_path], now).await;
+
+    // Real assertion: event must be scanned despite old mtime
+    assert_eq!(
+        result.events.len(),
+        1,
+        "Should scan event with 1h-old timestamp, even though file mtime is 40d old"
+    );
+    assert_eq!(
+        result.events[0].tokens, 100,
+        "Event tokens should be counted"
+    );
+}
+
+/// §6.10 Error classification: unreadable root → Unavailable provenance.
+#[tokio::test]
+async fn test_scan_unreadable_root_provenance() {
+    let nonexistent = PathBuf::from("/nonexistent/root/path");
+    let now = Utc::now();
+
+    let result = scan_local_events(Provider::Codex, &[nonexistent], now).await;
+
+    // Root doesn't exist → root_unreadable should be true
+    assert!(
+        result.health.root_unreadable,
+        "Unreadable root should set root_unreadable=true"
+    );
+    // Events should be empty
+    assert_eq!(result.events.len(), 0, "Unreadable root has no events");
+}

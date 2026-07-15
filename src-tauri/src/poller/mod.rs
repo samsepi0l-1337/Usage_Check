@@ -9,15 +9,11 @@
 //!
 //! SECURITY: never log/print an access token or other credential value.
 
-use std::collections::HashMap;
-use std::collections::HashSet;
-use std::io::{BufRead, BufReader};
-use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::path::Path;
+use std::time::Duration;
 
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use usage_core::account::{Account, AuthSource, Credentials, Provider};
-use usage_core::attribution::{assign_local_usage, AccountRef, ScannedRoot};
 use usage_core::fetch::agy::{parse_agy_quota_summary, AgyQuota};
 use usage_core::fetch::claude::{parse_claude_usage, ClaudeQuota};
 use usage_core::fetch::codex::{parse_codex_usage, CodexQuota};
@@ -27,12 +23,14 @@ use usage_core::fetch::cursor::{cursor_quota_with_auth, parse_cursor_period_usag
 use usage_core::fetch::grok::{parse_grok_prepaid_balance, GrokPrepaid};
 #[cfg(feature = "edition-pro")]
 use usage_core::fetch::higgsfield::{parse_higgsfield_account, HiggsfieldCredits};
-use usage_core::models::{LocalProvenance, LocalUsage, ModelTokenEvent};
-use usage_core::scanners::{claude as claude_scanner, codex as codex_scanner};
+use usage_core::models::{LocalProvenance, LocalUsage};
 
 use crate::agy_local;
 use crate::paths;
 use crate::store::AccountStore;
+
+mod local_scan;
+use local_scan::local_usage_for_provider;
 
 mod usage_model;
 pub use usage_model::{
@@ -61,9 +59,6 @@ use last_success::{apply_last_success, last_success_cache};
 
 /// Refresh proactively when the access token expires within this window.
 const REFRESH_THRESHOLD: Duration = Duration::from_secs(60);
-const MAX_LOCAL_FILES: usize = 50_000;
-const MAX_LOCAL_SCAN_TIME: Duration = Duration::from_secs(5);
-
 const AGY_USER_AGENT: &str = "antigravity/usagecheck macos/arm64";
 const AGY_QUOTA_SUMMARY_URLS: &[&str] = &[
     "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
@@ -708,115 +703,6 @@ async fn poll_claude_oauth(
     }
 }
 
-async fn local_usage_for_provider(
-    store: &AccountStore,
-    accounts: &[Account],
-    provider: Provider,
-    now: DateTime<Utc>,
-) -> HashMap<String, LocalUsage> {
-    let provider_accounts: Vec<&Account> = accounts
-        .iter()
-        .filter(|account| account.provider == provider)
-        .collect();
-    if provider_accounts.is_empty() {
-        return HashMap::new();
-    }
-
-    let mut profile_roots = match provider {
-        Provider::Codex => paths::codex_home().into_iter().collect(),
-        Provider::Claude => paths::claude_config_roots(),
-        _ => return HashMap::new(),
-    };
-    profile_roots.extend(provider_accounts.iter().filter_map(|account| {
-        if let AuthSource::CliProfile { profile_root, .. } = &account.auth_source {
-            Some(profile_root.clone())
-        } else {
-            None
-        }
-    }));
-    let profile_roots = match provider {
-        Provider::Codex => paths::codex_profile_roots(&profile_roots),
-        Provider::Claude => paths::claude_profile_roots(&profile_roots),
-        _ => Vec::new(),
-    };
-
-    let mut scanned = Vec::with_capacity(profile_roots.len());
-    for profile_root in profile_roots {
-        let scan_roots = match provider {
-            Provider::Codex => paths::codex_session_roots_for(&profile_root),
-            Provider::Claude => paths::claude_project_roots_for(&profile_root),
-            _ => Vec::new(),
-        };
-        let scan = scan_local_events(provider, &scan_roots, now).await;
-        let health = scan_provenance(&scan);
-        scanned.push(ScannedRoot {
-            root_key: profile_root.clone(),
-            source_roots: vec![profile_root.clone()],
-            events: scan.events,
-            health,
-            identity: paths::root_identity(provider, &profile_root),
-        });
-    }
-
-    let credential_ids: Vec<Option<String>> = provider_accounts
-        .iter()
-        .map(|account| {
-            store
-                .credentials(&account.id)
-                .and_then(|credentials| credentials.account_id)
-        })
-        .collect();
-    let account_refs: Vec<AccountRef<'_>> = provider_accounts
-        .iter()
-        .zip(&credential_ids)
-        .map(|(account, credential_id)| AccountRef {
-            account_id: &account.id,
-            creds_account_id: credential_id.as_deref(),
-            expected_identity: expected_identity(account),
-            is_browser_oauth: matches!(account.auth_source, AuthSource::BrowserOAuth { .. }),
-            profile_roots: account_profile_roots(provider, account),
-        })
-        .collect();
-
-    assign_local_usage(&account_refs, &scanned, now)
-        .into_iter()
-        .collect()
-}
-
-fn account_profile_roots(provider: Provider, account: &Account) -> Vec<PathBuf> {
-    let AuthSource::CliProfile { profile_root, .. } = &account.auth_source else {
-        return Vec::new();
-    };
-    match provider {
-        Provider::Codex => paths::codex_profile_roots(std::slice::from_ref(profile_root)),
-        Provider::Claude => paths::claude_profile_roots(std::slice::from_ref(profile_root)),
-        _ => Vec::new(),
-    }
-}
-
-fn expected_identity(account: &Account) -> Option<&str> {
-    match &account.auth_source {
-        AuthSource::CliProfile {
-            expected_identity, ..
-        } => Some(expected_identity),
-        AuthSource::BrowserOAuth { .. } => Some(&account.label),
-        _ => None,
-    }
-}
-
-fn scan_provenance(scan: &ScanResult) -> LocalProvenance {
-    if scan.health.truncated {
-        LocalProvenance::Truncated
-    } else if scan.health.root_unreadable {
-        LocalProvenance::Unavailable
-    } else if scan.health.any_read_error {
-        LocalProvenance::Partial
-    } else if scan.events.is_empty() {
-        LocalProvenance::NoEvents
-    } else {
-        LocalProvenance::Ok
-    }
-}
 
 /// Builds the full per-account usage snapshot.
 pub async fn poll_all(store: &AccountStore) -> Vec<AccountUsage> {
@@ -959,284 +845,11 @@ mod tests {
 
 }
 
-/// Result of scanning a local provider root for events.
-#[derive(Clone, Debug)]
-pub struct ScanResult {
-    pub events: Vec<ModelTokenEvent>,
-    pub health: ScanHealth,
-}
-
-/// Health status of a scan operation.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ScanHealth {
-    pub any_read_error: bool,
-    pub root_unreadable: bool,
-    pub truncated: bool,
-}
-
-/// Scan local provider roots for token events (raw, not aggregated).
-pub async fn scan_local_events(
-    provider: Provider,
-    scan_roots: &[PathBuf],
-    _now: DateTime<Utc>,
-) -> ScanResult {
-    let roots = scan_roots.to_vec();
-    tokio::task::spawn_blocking(move || scan_local_events_blocking(provider, &roots))
-        .await
-        .unwrap_or_else(|_| ScanResult {
-            events: Vec::new(),
-            health: ScanHealth {
-                any_read_error: true,
-                root_unreadable: true,
-                truncated: false,
-            },
-        })
-}
-
-
-fn scan_local_events_blocking(provider: Provider, roots: &[PathBuf]) -> ScanResult {
-    let started = Instant::now();
-    let mut result = ScanResult {
-        events: Vec::new(),
-        health: ScanHealth {
-            any_read_error: false,
-            root_unreadable: false,
-            truncated: false,
-        },
-    };
-    let mut visited = HashSet::new();
-    let mut files_read = 0;
-
-    for root in roots {
-        if result.health.truncated {
-            break;
-        }
-        let Ok(metadata) = std::fs::symlink_metadata(root) else {
-            result.health.root_unreadable = true;
-            continue;
-        };
-        if !metadata.is_dir() || metadata.file_type().is_symlink() {
-            result.health.root_unreadable = true;
-            continue;
-        }
-        if std::fs::read_dir(root).is_err() {
-            result.health.root_unreadable = true;
-            continue;
-        }
-        let root_key = root.canonicalize().unwrap_or_else(|_| root.clone());
-        if !visited.insert(root_key) {
-            continue;
-        }
-        scan_directory(
-            provider,
-            root,
-            &mut result,
-            &mut visited,
-            &mut files_read,
-            started,
-        );
-    }
-    result
-}
-
-fn scan_directory(
-    provider: Provider,
-    root: &Path,
-    result: &mut ScanResult,
-    visited: &mut HashSet<PathBuf>,
-    files_read: &mut usize,
-    started: Instant,
-) {
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(directory) = stack.pop() {
-        if started.elapsed() >= MAX_LOCAL_SCAN_TIME {
-            result.health.truncated = true;
-            return;
-        }
-        let entries = match std::fs::read_dir(&directory) {
-            Ok(entries) => entries,
-            Err(_) => {
-                result.health.any_read_error = true;
-                continue;
-            }
-        };
-        for entry in entries {
-            let entry = match entry {
-                Ok(entry) => entry,
-                Err(_) => {
-                    result.health.any_read_error = true;
-                    continue;
-                }
-            };
-            let file_type = match entry.file_type() {
-                Ok(file_type) => file_type,
-                Err(_) => {
-                    result.health.any_read_error = true;
-                    continue;
-                }
-            };
-            if file_type.is_symlink() {
-                continue;
-            }
-            let path = entry.path();
-            if file_type.is_dir() {
-                let key = path.canonicalize().unwrap_or_else(|_| path.clone());
-                if visited.insert(key) {
-                    stack.push(path);
-                }
-                continue;
-            }
-            if !is_jsonl(&path) {
-                continue;
-            }
-            if *files_read >= MAX_LOCAL_FILES || started.elapsed() >= MAX_LOCAL_SCAN_TIME {
-                result.health.truncated = true;
-                return;
-            }
-            *files_read += 1;
-            read_event_file(provider, &path, result);
-        }
-    }
-}
-
-fn read_event_file(provider: Provider, path: &Path, result: &mut ScanResult) {
-    let file = match std::fs::File::open(path) {
-        Ok(file) => file,
-        Err(_) => {
-            result.health.any_read_error = true;
-            return;
-        }
-    };
-    for line in BufReader::new(file).lines() {
-        let line = match line {
-            Ok(line) => line,
-            Err(_) => {
-                result.health.any_read_error = true;
-                return;
-            }
-        };
-        if let Some(event) = parse_local_event(provider, &line) {
-            result.events.push(event);
-        }
-    }
-}
-
-fn parse_local_event(provider: Provider, line: &str) -> Option<ModelTokenEvent> {
-    let parsed = match provider {
-        Provider::Codex => codex_scanner::parse_codex_line(line),
-        Provider::Claude => claude_scanner::parse_claude_line(line),
-        _ => None,
-    };
-    parsed.or_else(|| serde_json::from_str(line).ok())
-}
-
-fn is_jsonl(path: &Path) -> bool {
-    path.extension().and_then(|extension| extension.to_str()) == Some("jsonl")
-}
 
 #[cfg(test)]
-mod tests_filesystem {
+#[cfg(feature = "edition-pro")]
+mod tests_pro {
     use super::*;
-    use chrono::Utc;
-    use std::fs;
-    use std::path::PathBuf;
-    use tempfile::tempdir;
-
-    /// §6.1 Cap regression: write 300 real .jsonl files, scan them.
-    /// This test MUST call scan_local_events (real filesystem layer).
-    /// Guards against reintroducing the old MAX_FILES=200 cap.
-    #[tokio::test]
-    async fn test_cap_regression_300_real_files() {
-        let dir = tempdir().expect("tempdir");
-        let root_path = dir.path().to_path_buf();
-
-        // Create 300 .jsonl files, each with one event
-        for i in 0..300 {
-            let file_path = root_path.join(format!("event_{:03}.jsonl", i));
-            let now = Utc::now();
-            let json = serde_json::json!({
-                "timestamp": now.to_rfc3339(),
-                "model": format!("test-model-{}", i),
-                "tokens": 100,
-                "dedupe_key": format!("key-{}", i)
-            });
-            fs::write(&file_path, format!("{}\n", json)).expect("write file");
-        }
-
-        let now = Utc::now();
-        let result = scan_local_events(Provider::Codex, &[root_path], now).await;
-
-        // Real assertion: all 300 events scanned
-        assert_eq!(
-            result.events.len(),
-            300,
-            "Should scan all 300 events (currently stub returns 0)"
-        );
-        // Provenance should be Ok, NOT Truncated (300 « budget)
-        assert!(
-            !result.health.truncated,
-            "300 events should NOT trigger truncation"
-        );
-    }
-
-    /// §6.2 mtime irrelevance: file mtime is 40 days old, event timestamp 1h old.
-    /// scan_local_events MUST scan by event timestamp, NOT mtime.
-    /// FAILS on stub, and WOULD FAIL if implementation uses mtime skip.
-    #[tokio::test]
-    async fn test_mtime_irrelevance_recent_timestamp() {
-        use filetime::FileTime;
-
-        let dir = tempdir().expect("tempdir");
-        let root_path = dir.path().to_path_buf();
-        let file_path = root_path.join("old_mtime.jsonl");
-
-        let now = Utc::now();
-        let event_ts = now - chrono::Duration::hours(1);
-
-        let json = serde_json::json!({
-            "timestamp": event_ts.to_rfc3339(),
-            "model": "test",
-            "tokens": 100,
-            "dedupe_key": "test-key"
-        });
-        fs::write(&file_path, format!("{}\n", json)).expect("write file");
-
-        // Set file mtime to 40 days ago
-        let old_time = FileTime::from_system_time(
-            std::time::SystemTime::now() - std::time::Duration::from_secs(40 * 24 * 3600),
-        );
-        filetime::set_file_mtime(&file_path, old_time).expect("set mtime");
-
-        let result = scan_local_events(Provider::Codex, &[root_path], now).await;
-
-        // Real assertion: event must be scanned despite old mtime
-        assert_eq!(
-            result.events.len(),
-            1,
-            "Should scan event with 1h-old timestamp, even though file mtime is 40d old"
-        );
-        assert_eq!(
-            result.events[0].tokens, 100,
-            "Event tokens should be counted"
-        );
-    }
-
-    /// §6.10 Error classification: unreadable root → Unavailable provenance.
-    #[tokio::test]
-    async fn test_scan_unreadable_root_provenance() {
-        let nonexistent = PathBuf::from("/nonexistent/root/path");
-        let now = Utc::now();
-
-        let result = scan_local_events(Provider::Codex, &[nonexistent], now).await;
-
-        // Root doesn't exist → root_unreadable should be true
-        assert!(
-            result.health.root_unreadable,
-            "Unreadable root should set root_unreadable=true"
-        );
-        // Events should be empty
-        assert_eq!(result.events.len(), 0, "Unreadable root has no events");
-    }
     #[test]
     #[cfg(feature = "edition-pro")]
     fn cursor_identity_mismatch_maps_identity_changed() {
