@@ -596,7 +596,7 @@ mod tests {
             vec![root_conflict.clone(), root_ambiguous.clone()],
             vec![root_ambiguous.clone(), root_conflict.clone()],
         ] {
-            let result = assign_local_usage(&[acct.clone()], roots, now);
+            let result = assign_local_usage(std::slice::from_ref(&acct), roots, now);
             assert_eq!(result.len(), 1);
             let (_, usage) = &result[0];
             assert_eq!(
@@ -766,9 +766,9 @@ fn test_conflicting_dedupekeys_order_invariance() {
     };
 
     // Call with [R1, R2] order
-    let result1 = assign_local_usage(&[acct.clone()], &[root_r1.clone(), root_r2.clone()], now);
+    let result1 = assign_local_usage(std::slice::from_ref(&acct), &[root_r1.clone(), root_r2.clone()], now);
     // Call with [R2, R1] order (reversed)
-    let result2 = assign_local_usage(&[acct.clone()], &[root_r2.clone(), root_r1.clone()], now);
+    let result2 = assign_local_usage(std::slice::from_ref(&acct), &[root_r2.clone(), root_r1.clone()], now);
 
     assert_eq!(result1.len(), 1);
     assert_eq!(result2.len(), 1);
