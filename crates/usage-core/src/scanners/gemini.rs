@@ -20,7 +20,13 @@ pub fn parse_gemini_line(line: &str) -> Option<ModelTokenEvent> {
     let tokens = v.pointer("/usageMetadata/totalTokenCount")?.as_i64()?;
     if tokens <= 0 { return None; }
     let model = v.get("model").and_then(|m| m.as_str()).unwrap_or("gemini").to_string();
-    Some(ModelTokenEvent { timestamp: ts, model, tokens, dedupe_key: None })
+    let dedupe_key = Some(format!("gemini:{line}"));
+    Some(ModelTokenEvent {
+        timestamp: ts,
+        model,
+        tokens,
+        dedupe_key,
+    })
 }
 
 #[cfg(test)]
@@ -61,5 +67,19 @@ mod tests {
         let e = parse_gemini_line(line).unwrap();
         assert_eq!(e.model, "gemini");
         assert_eq!(e.tokens, 300);
+    }
+
+    #[test]
+    fn sets_stable_distinct_dedupe_keys() {
+        let line = r#"{"timestamp":"2026-07-08T10:00:00Z","model":"gemini-3.5-flash","usageMetadata":{"totalTokenCount":900}}"#;
+        let different_line = r#"{"timestamp":"2026-07-08T10:00:00Z","model":"gemini-3.5-flash","usageMetadata":{"totalTokenCount":901}}"#;
+
+        let first = parse_gemini_line(line).unwrap().dedupe_key;
+        let second = parse_gemini_line(line).unwrap().dedupe_key;
+        let different = parse_gemini_line(different_line).unwrap().dedupe_key;
+
+        assert!(first.is_some());
+        assert_eq!(first, second);
+        assert_ne!(first, different);
     }
 }

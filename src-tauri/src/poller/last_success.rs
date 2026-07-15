@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 use super::AccountUsage;
+use usage_core::fetch::agy::AgyQuotaPool;
 use usage_core::models::QuotaUsage;
 
 #[derive(Clone)]
@@ -10,6 +11,11 @@ pub(super) struct LastSuccess {
     plan: Option<String>,
     five_hour: Option<QuotaUsage>,
     week: Option<QuotaUsage>,
+    /// Agy per-pool rows — restored on stale so the tray keeps the pool
+    /// breakdown instead of showing an empty, inconsistent snapshot.
+    pool_breakdown: Vec<AgyQuotaPool>,
+    /// Pro-provider secondary label (`$12 left`, `809 credits left`).
+    detail_suffix: Option<String>,
 }
 
 pub(super) fn last_success_cache() -> &'static Mutex<HashMap<String, LastSuccess>> {
@@ -33,6 +39,8 @@ pub(super) fn apply_last_success(
                 plan: usage.plan.clone(),
                 five_hour: usage.five_hour.clone(),
                 week: usage.week.clone(),
+                pool_breakdown: usage.pool_breakdown.clone(),
+                detail_suffix: usage.detail_suffix.clone(),
             },
         );
     } else if usage.status == "error" {
@@ -41,6 +49,8 @@ pub(super) fn apply_last_success(
             usage.plan = previous.plan.clone();
             usage.five_hour = previous.five_hour.clone();
             usage.week = previous.week.clone();
+            usage.pool_breakdown = previous.pool_breakdown.clone();
+            usage.detail_suffix = previous.detail_suffix.clone();
             usage.status = "stale".to_string();
         }
     }

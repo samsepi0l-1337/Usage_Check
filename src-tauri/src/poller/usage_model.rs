@@ -211,7 +211,17 @@ pub fn assemble_account_usage(
             week,
             plan,
             email,
-        } => (five_hour, week, plan, email, "ok".to_string()),
+        } => {
+            // A 2xx with no usable quota windows (empty/unparseable body, schema
+            // drift) must not masquerade as a healthy "ok" with blank bars —
+            // report it as `waiting_for_usage`, mirroring the CLI-snapshot path.
+            let status = if five_hour.is_none() && week.is_none() {
+                "waiting_for_usage"
+            } else {
+                "ok"
+            };
+            (five_hour, week, plan, email, status.to_string())
+        }
         FetchOutcome::Failed { status } => (
             None,
             None,

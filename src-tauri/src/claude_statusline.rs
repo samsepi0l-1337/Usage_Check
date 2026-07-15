@@ -3,6 +3,7 @@ use std::fs;
 use std::io::{self, Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
+use usage_core::account::AuthSource;
 
 const BRIDGE_FLAG: &str = "--claude-statusline-bridge";
 const PRIOR_SIDECAR: &str = ".statusline_prior.json";
@@ -159,22 +160,31 @@ pub fn run_bridge<R: Read, W: Write>(
         .map_err(|error| format!("failed to flush status-line stdout: {error}"))
 }
 
-pub fn handle_statusline_bridge(
+fn resolve_bridge_settings_path(
+    account: Option<&usage_core::account::Account>,
     account_id: &str,
-    profile_settings_path: &Path,
-) -> Result<(), String> {
+) -> std::path::PathBuf {
+    match account.map(|account| &account.auth_source) {
+        Some(AuthSource::CliProfile { profile_root, .. }) => profile_root.join("settings.json"),
+        _ => crate::paths::claude_settings_json(account_id),
+    }
+}
+
+pub fn handle_statusline_bridge(account_id: &str) -> Result<(), String> {
     // Claude does not pass user identity to the status line; recover it from the
     // stored account — its label is the identity the poller compares against.
-    let identity = crate::store::AccountStore::new()
-        .account(account_id)
-        .map(|account| account.label)
+    let account = crate::store::AccountStore::new().account(account_id);
+    let identity = account
+        .as_ref()
+        .map(|account| account.label.clone())
         .unwrap_or_default();
+    let settings_path = resolve_bridge_settings_path(account.as_ref(), account_id);
     let stdin = io::stdin();
     let stdout = io::stdout();
     run_bridge(
         account_id,
         &identity,
-        profile_settings_path,
+        &settings_path,
         stdin.lock(),
         stdout.lock(),
     )
@@ -209,18 +219,32 @@ pub fn install_statusline_bridge(
         .ok()
         .and_then(|path| path.to_str().map(str::to_string))
         .unwrap_or_else(|| "usage-app".to_string());
-    settings["statusLine"] = json!({
-        "type": "command",
-        "command": format!("\"{}\" {BRIDGE_FLAG} {account_id}", exe.replace('"', "")),
-    });
+    let settings_obj = settings
+        .as_object_mut()
+        .ok_or_else(|| "Claude settings root must be an object".to_string())?;
+    settings_obj.insert(
+        "statusLine".to_string(),
+        json!({
+            "type": "command",
+            "command": format!("\"{}\" {BRIDGE_FLAG} {account_id}", exe.replace('"', "")),
+        }),
+    );
     let body = serde_json::to_string_pretty(&settings)
         .map_err(|error| format!("failed to serialize Claude settings: {error}"))?;
     fs::write(profile_settings_path, body)
         .map_err(|error| format!("failed to write Claude settings: {error}"))
 }
 
-pub fn remove_statusline_bridge(profile_settings_path: &Path) -> Result<(), String> {
+pub fn remove_statusline_bridge(profile_settings_path: &Path, account_id: &str) -> Result<(), String> {
+    let cleanup_artifacts = || {
+        let _ = fs::remove_file(crate::paths::claude_statusline_snapshot(account_id));
+        if let Ok(sidecar_path) = sidecar_path(profile_settings_path) {
+            let _ = fs::remove_file(sidecar_path);
+        }
+    };
+
     if !profile_settings_path.exists() {
+        cleanup_artifacts();
         return Ok(());
     }
     let body = fs::read_to_string(profile_settings_path)
@@ -228,9 +252,11 @@ pub fn remove_statusline_bridge(profile_settings_path: &Path) -> Result<(), Stri
     let mut settings: Value = serde_json::from_str(&body)
         .map_err(|error| format!("failed to parse Claude settings: {error}"))?;
     let Some(current) = settings.get("statusLine") else {
+        cleanup_artifacts();
         return Ok(());
     };
     if !is_usagecheck_bridge(current) {
+        cleanup_artifacts();
         return Ok(());
     }
 
@@ -248,10 +274,8 @@ pub fn remove_statusline_bridge(profile_settings_path: &Path) -> Result<(), Stri
                 .remove("statusLine");
         }
     }
-    if sidecar_path.exists() {
-        fs::remove_file(&sidecar_path)
-            .map_err(|error| format!("failed to remove status-line sidecar: {error}"))?;
-    }
+    let _ = fs::remove_file(&sidecar_path);
+    let _ = fs::remove_file(crate::paths::claude_statusline_snapshot(account_id));
     let body = serde_json::to_string_pretty(&settings)
         .map_err(|error| format!("failed to serialize Claude settings: {error}"))?;
     fs::write(profile_settings_path, body)
@@ -264,6 +288,7 @@ mod tests {
     use std::ffi::OsString;
     use std::sync::Mutex;
     use tempfile::TempDir;
+    use usage_core::account::{Account, ProfileOwnership, Provider};
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
@@ -292,6 +317,46 @@ mod tests {
     }
 
     #[test]
+    fn bridge_settings_path_uses_cli_profile_root() {
+        let profile_root = std::path::PathBuf::from("claude-profile");
+        let account = Account {
+            id: "claude-account".to_string(),
+            provider: Provider::Claude,
+            label: "user@example.com".to_string(),
+            auth_source: AuthSource::CliProfile {
+                profile_root: profile_root.clone(),
+                ownership: ProfileOwnership::External,
+                expected_identity: "user@example.com".to_string(),
+            },
+        };
+
+        assert_eq!(
+            resolve_bridge_settings_path(Some(&account), &account.id),
+            profile_root.join("settings.json")
+        );
+    }
+
+    #[test]
+    fn bridge_settings_path_falls_back_without_cli_profile() {
+        let account_id = "claude-account";
+        let expected = crate::paths::claude_settings_json(account_id);
+        assert_eq!(resolve_bridge_settings_path(None, account_id), expected);
+
+        let account = Account {
+            id: account_id.to_string(),
+            provider: Provider::Claude,
+            label: "user@example.com".to_string(),
+            auth_source: AuthSource::BrowserOAuth {
+                credential_id: "credential-id".to_string(),
+            },
+        };
+        assert_eq!(
+            resolve_bridge_settings_path(Some(&account), account_id),
+            expected
+        );
+    }
+
+    #[test]
     fn install_and_remove_use_object_form_and_preserve_complete_prior() {
         let temp = TempDir::new().expect("temp directory");
         let settings_path = temp.path().join("settings.json");
@@ -311,7 +376,7 @@ mod tests {
             prior
         );
 
-        remove_statusline_bridge(&settings_path).expect("remove bridge");
+        remove_statusline_bridge(&settings_path, "test-account").expect("remove bridge");
         assert_eq!(read_json(&settings_path)["statusLine"], prior);
     }
 
@@ -329,7 +394,7 @@ mod tests {
         settings["statusLine"] = json!({"type": "command", "command": "user-edit"});
         fs::write(&settings_path, settings.to_string()).expect("update settings");
 
-        remove_statusline_bridge(&settings_path).expect("remove is no-op");
+        remove_statusline_bridge(&settings_path, "test-account").expect("remove is no-op");
 
         assert_eq!(
             read_json(&settings_path)["statusLine"]["command"],
@@ -422,5 +487,42 @@ mod tests {
         let snap = read_json(&crate::paths::claude_statusline_snapshot(account_id));
         let quota = usage_core::fetch::claude::parse_claude_usage(&snap["rate_limits"]);
         assert!(quota.five_hour.is_none() && quota.week.is_none());
+    }
+
+    #[test]
+    fn install_rejects_non_object_root() {
+        let temp = TempDir::new().expect("temp directory");
+        let settings_path = temp.path().join("settings.json");
+        fs::write(&settings_path, "42").expect("write settings");
+
+        assert!(install_statusline_bridge(&settings_path, "test-account").is_err());
+    }
+
+    #[test]
+    fn remove_bridge_tears_down_sidecar_and_snapshot_on_non_bridge_statusline() {
+        let _lock = ENV_LOCK.lock().expect("environment lock");
+        let temp = TempDir::new().expect("temp directory");
+        let _home = HomeGuard::set(temp.path());
+        let account_id = "teardown-test";
+        let settings_path = temp.path().join("settings.json");
+        let sidecar_path = temp.path().join(".statusline_prior.json");
+        fs::write(
+            &settings_path,
+            json!({"statusLine": {"type": "command", "command": "user-edit"}}).to_string(),
+        )
+        .expect("write settings");
+        fs::write(&sidecar_path, json!({"prior_command": {"type": "command", "command": "noop"}}).to_string())
+            .expect("write sidecar");
+        let snapshot_path = crate::paths::claude_statusline_snapshot(account_id);
+        fs::create_dir_all(snapshot_path.parent().expect("snapshot parent"))
+            .expect("create snapshot dir");
+        fs::write(&snapshot_path, json!({"identity":"teardown-test"}).to_string())
+            .expect("write snapshot");
+
+        remove_statusline_bridge(&settings_path, account_id).expect("remove no-op");
+
+        assert!(!sidecar_path.exists());
+        assert!(!snapshot_path.exists());
+        assert_eq!(read_json(&settings_path)["statusLine"]["command"], "user-edit");
     }
 }

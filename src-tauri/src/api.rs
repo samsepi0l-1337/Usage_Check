@@ -243,15 +243,19 @@ fn route(state: &ApiState, method: &str, path: &str) -> Reply {
                     Some(p) => serialize(&state.usage_response_for(p)),
                     None => json(
                         404,
-                        format!(
-                            r#"{{"error":"unknown_provider","message":"unknown provider '{}' (expected {})"}}"#,
-                            name.replace('"', ""),
-                            if cfg!(feature = "edition-pro") {
-                                "codex, claude, agy, cursor, grok, or higgsfield"
-                            } else {
-                                "codex, claude, or agy"
-                            }
-                        ),
+                        serde_json::json!({
+                            "error": "unknown_provider",
+                            "message": format!(
+                                "unknown provider '{}' (expected {})",
+                                name,
+                                if cfg!(feature = "edition-pro") {
+                                    "codex, claude, agy, cursor, grok, or higgsfield"
+                                } else {
+                                    "codex, claude, or agy"
+                                }
+                            ),
+                        })
+                        .to_string(),
                     ),
                 };
             }

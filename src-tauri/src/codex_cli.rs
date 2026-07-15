@@ -99,11 +99,11 @@ where
                             3 => {
                                 // FIX BUG 1: Pass WHOLE line object to parser.
                                 // Rate-limit absence is OK (None result), but parse errors still propagate.
-                                if let Err(e) = parse_app_server_rate_limits(&obj) {
-                                    return Err(format!("rate limits parse error: {}", e));
-                                }
-                                if let Ok((prim, sec)) = parse_app_server_rate_limits(&obj) {
-                                    rate_limits = Some((prim, sec));
+                                match parse_app_server_rate_limits(&obj) {
+                                    Ok((prim, sec)) => rate_limits = Some((prim, sec)),
+                                    Err(e) => {
+                                        return Err(format!("rate limits parse error: {}", e));
+                                    }
                                 }
                             }
                             _ => {}
@@ -320,6 +320,18 @@ mod tests {
         let sec = probe.secondary.unwrap();
         assert_eq!(sec.percent, 25.0);
         assert_eq!(sec.window_seconds, Some(604800)); // 10080 * 60
+    }
+
+    #[tokio::test]
+    async fn test_probe_codex_exchange_missing_rate_limits_rejected() {
+        let account_line = r#"{"id":2,"result":{"id":"user-test","email":"test@example.com"}}"#;
+        let rate_limits_line = r#"{"id":3}"#;
+        let input = format!("{}\n{}\n", account_line, rate_limits_line);
+
+        let result = probe_codex_exchange(Cursor::new(input.as_bytes()), Vec::new()).await;
+
+        let error = result.expect_err("missing rate limits should be rejected");
+        assert_eq!(error, "rate limits parse error: no rate_limits in response");
     }
 
     /// Test 2: Hung-child timeout — reader never yields a line.

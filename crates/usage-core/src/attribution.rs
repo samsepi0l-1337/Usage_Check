@@ -128,12 +128,20 @@ fn matching_accounts(accounts: &[AccountRef], identity: &RootIdentity) -> Vec<us
         .iter()
         .enumerate()
         .filter_map(|(index, account)| {
-            let account_id_matches = root_account_id
-                .zip(account.creds_account_id)
-                .is_some_and(|(root, expected)| root == expected);
-            let email_matches = root_email
-                .zip(account.expected_identity)
-                .is_some_and(|(root, expected)| root.eq_ignore_ascii_case(expected));
+            let account_id_matches =
+                root_account_id
+                    .zip(account.creds_account_id)
+                    .is_some_and(|(root, expected)| {
+                        !root.trim().is_empty() && !expected.trim().is_empty() && root == expected
+                    });
+            let email_matches =
+                root_email
+                    .zip(account.expected_identity)
+                    .is_some_and(|(root, expected)| {
+                        !root.trim().is_empty()
+                            && !expected.trim().is_empty()
+                            && root.eq_ignore_ascii_case(expected)
+                    });
             (account_id_matches || email_matches).then_some(index)
         })
         .collect()
@@ -203,6 +211,43 @@ fn canonical_event_order(left: &ModelTokenEvent, right: &ModelTokenEvent) -> Ord
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn matching_accounts_rejects_empty_identities_and_keeps_real_matches() {
+        let accounts = [
+            AccountRef {
+                account_id: "empty",
+                creds_account_id: Some("   "),
+                expected_identity: Some(""),
+                is_browser_oauth: false,
+                profile_roots: vec![],
+            },
+            AccountRef {
+                account_id: "real",
+                creds_account_id: Some("account-123"),
+                expected_identity: Some("User@Example.com"),
+                is_browser_oauth: false,
+                profile_roots: vec![],
+            },
+        ];
+
+        let empty_identity = RootIdentity::CodexAuth {
+            account_id: Some("   ".into()),
+            email: Some("".into()),
+        };
+        assert!(matching_accounts(&accounts, &empty_identity).is_empty());
+
+        let real_id = RootIdentity::CodexAuth {
+            account_id: Some("account-123".into()),
+            email: None,
+        };
+        assert_eq!(matching_accounts(&accounts, &real_id), vec![1]);
+
+        let real_email = RootIdentity::ClaudeEmail {
+            email: Some("user@example.com".into()),
+        };
+        assert_eq!(matching_accounts(&accounts, &real_email), vec![1]);
+    }
 
     #[test]
     fn test_local_provenance_severity_order() {

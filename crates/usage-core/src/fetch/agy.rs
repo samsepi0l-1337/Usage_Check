@@ -108,6 +108,9 @@ fn remaining_to_quota(bucket: &Value) -> Option<(bool /*is_week*/, QuotaUsage)> 
         || bucket_id
             .map(|id| id.to_ascii_lowercase().contains("week"))
             .unwrap_or(false);
+    if window_seconds.is_none() && !is_week {
+        return None;
+    }
 
     Some((
         is_week,
@@ -287,5 +290,28 @@ mod tests {
         let (email, plan) = parse_agy_user_status(&v);
         assert_eq!(email.as_deref(), Some("a@b.com"));
         assert_eq!(plan.as_deref(), Some("Pro"));
+    }
+
+    #[test]
+    fn unrecognized_window_bucket_is_skipped_not_five_hour() {
+        let v = json!({
+            "displayName": "Gemini Models",
+            "buckets": [
+                {
+                    "bucketId": "gemini-weekly",
+                    "window": "weekly",
+                    "remainingFraction": 0.8
+                },
+                {
+                    "bucketId": "gemini-monthly",
+                    "window": "monthly",
+                    "remainingFraction": 0.1
+                }
+            ]
+        });
+
+        let pool = parse_group(&v).unwrap();
+        assert!(pool.five_hour.is_none());
+        assert!((pool.week.unwrap().percent - 20.0).abs() < 0.01);
     }
 }

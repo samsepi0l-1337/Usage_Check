@@ -36,10 +36,10 @@ fn parse_plan_usage(plan: &Value) -> Option<(f64, Option<String>)> {
 
 /// Parses `GetCurrentPeriodUsage` JSON into tray-friendly quota fields.
 pub fn parse_cursor_period_usage(root: &Value) -> CursorQuota {
-    let plan_usage = root.get("planUsage");
-    let (percent, detail_suffix) = plan_usage
-        .and_then(parse_plan_usage)
-        .unwrap_or((0.0, None));
+    // Key `period` off a successfully *parsed* percent, not the raw `planUsage`
+    // Option — otherwise a `planUsage` object lacking a percent field would leak
+    // the `0.0` default and display "0% used" (full quota) for unknown usage.
+    let parsed = root.get("planUsage").and_then(parse_plan_usage);
 
     let billing_end = root
         .get("billingCycleEnd")
@@ -50,11 +50,17 @@ pub fn parse_cursor_period_usage(root: &Value) -> CursorQuota {
         })
         .and_then(|ms| Utc.timestamp_millis_opt(ms).single());
 
-    let period = plan_usage.map(|_| QuotaUsage {
-        percent,
-        resets_at: billing_end,
-        window_seconds: None,
-    });
+    let (period, detail_suffix) = match parsed {
+        Some((percent, suffix)) => (
+            Some(QuotaUsage {
+                percent,
+                resets_at: billing_end,
+                window_seconds: None,
+            }),
+            suffix,
+        ),
+        None => (None, None),
+    };
 
     CursorQuota {
         email: None,
@@ -105,5 +111,21 @@ mod tests {
         let v = json!({ "billingCycleEnd": "1771077734000" });
         let q = parse_cursor_period_usage(&v);
         assert!(q.period.is_none());
+    }
+
+    #[test]
+    fn plan_usage_present_without_percent_yields_none_period() {
+        // A `planUsage` object with no `totalPercentUsed`/`apiPercentUsed` must
+        // NOT be reported as 0% used (full quota); usage is unknown → no period.
+        let v = json!({
+            "billingCycleEnd": "1771077734000",
+            "planUsage": { "remaining": 16778, "limit": 40000 }
+        });
+        let q = parse_cursor_period_usage(&v);
+        assert!(
+            q.period.is_none(),
+            "percent-less planUsage must yield None period, not 0%"
+        );
+        assert_eq!(q.detail_suffix, None);
     }
 }

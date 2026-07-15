@@ -42,16 +42,21 @@ fn render_macos_script(command: &TerminalCommand, script_path: &Path) -> String 
         ));
     }
 
+    // Executable and args must share ONE command line — a trailing `\n` after
+    // each token would make bash run them as separate commands (dropping the
+    // args, and invoking the system `login` binary for `codex login`).
     let exe_str = command.executable.display().to_string().replace("'", "'\\''");
-    script.push_str(&format!("'{}'\n", exe_str));
-
+    let mut command_line = format!("'{}'", exe_str);
     for arg in &command.args {
         let arg_str = arg.to_string_lossy().replace("'", "'\\''");
-        script.push_str(&format!(" '{}'\n", arg_str));
+        command_line.push_str(&format!(" '{}'", arg_str));
     }
-
     let rm_path = script_path.display().to_string().replace("'", "'\\''");
-    script.push_str(&format!("rm -f '{}'\n", rm_path));
+    script.push_str(&format!("__usagecheck_script='{}'\n", rm_path));
+    script.push_str("trap 'rm -f \"$__usagecheck_script\"' EXIT\n");
+
+    script.push_str(&command_line);
+    script.push('\n');
 
     script
 }
@@ -80,7 +85,12 @@ impl TerminalLauncher for MacosTerminalLauncher {
         file.write_all(script.as_bytes())
             .map_err(|e| TerminalError::IoError(e.to_string()))?;
 
-        let script_path_escaped = script_path.display().to_string().replace("'", "'\\''");
+        let script_path_escaped = script_path
+            .display()
+            .to_string()
+            .replace("'", "'\\''")
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"");
         let osascript_cmd = format!(
             "tell application \"Terminal\" to do script \"'{}'\"",
             script_path_escaped
@@ -109,17 +119,20 @@ fn render_windows_script(command: &TerminalCommand, script_path: &Path) -> Strin
     let mut script = String::from("$ErrorActionPreference = 'Stop'\n");
 
     for var in &command.env_remove {
-        let var_str = var.to_string_lossy();
-        script.push_str(&format!("Remove-Item Env:'{}' -ErrorAction SilentlyContinue\n", var_str));
+        let var_str = var.to_string_lossy().replace("'", "''");
+        script.push_str(&format!(
+            "[Environment]::SetEnvironmentVariable('{}', $null, 'Process')\n",
+            var_str
+        ));
     }
 
     for (key, value) in &command.env {
-        let key_str = key.to_string_lossy();
-        let value_str = value.to_string_lossy();
+        let key_str = key.to_string_lossy().replace("'", "''");
+        let value_str = value.to_string_lossy().replace("'", "''");
         script.push_str(&format!(
-            "$Env:{} = '{}'\n",
+            "[Environment]::SetEnvironmentVariable('{}', '{}', 'Process')\n",
             key_str,
-            value_str.replace("'", "''")
+            value_str
         ));
     }
 
@@ -254,6 +267,50 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
+    fn test_macos_render_keeps_exe_and_args_on_one_line() {
+        // Regression: exe + args must be a single command line, else bash runs
+        // them as separate commands (args dropped; `codex login` would invoke
+        // the system `login` binary instead of `codex login`).
+        let cmd = TerminalCommand {
+            executable: PathBuf::from("/usr/local/bin/codex"),
+            args: vec![OsString::from("login")],
+            env: vec![],
+            env_remove: vec![],
+        };
+        let script = render_macos_script(&cmd, &PathBuf::from("/tmp/login_x.sh"));
+        assert!(
+            script.contains("'/usr/local/bin/codex' 'login'\n"),
+            "exe and args must share one line, got:\n{script}"
+        );
+        // The args must NOT appear on their own line.
+        assert!(
+            !script.contains("\n 'login'\n"),
+            "arg must not be a standalone command line, got:\n{script}"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_macos_render_multiple_args_single_line() {
+        let cmd = TerminalCommand {
+            executable: PathBuf::from("/usr/local/bin/claude"),
+            args: vec![
+                OsString::from("auth"),
+                OsString::from("login"),
+                OsString::from("--claudeai"),
+            ],
+            env: vec![],
+            env_remove: vec![],
+        };
+        let script = render_macos_script(&cmd, &PathBuf::from("/tmp/login_y.sh"));
+        assert!(
+            script.contains("'/usr/local/bin/claude' 'auth' 'login' '--claudeai'\n"),
+            "all args must share the exe's line, got:\n{script}"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
     fn test_macos_script_uses_app_private_path() {
         let cmd = TerminalCommand {
             executable: PathBuf::from("/usr/bin/test"),
@@ -263,7 +320,13 @@ mod tests {
         };
         let script_path = PathBuf::from("/var/folders/test/app/tmp/login_abc123.sh");
         let script = render_macos_script(&cmd, &script_path);
-        assert!(script.contains(&format!("rm -f '{}'", script_path.display())));
+        assert!(script.contains(&format!(
+            "__usagecheck_script='{}'",
+            script_path.display()
+        )));
+        assert!(script.contains("trap 'rm -f \"$__usagecheck_script\"' EXIT"));
+        let bare_cleanup = format!("rm -f '{}'", script_path.display());
+        assert!(!script.lines().any(|line| line == bare_cleanup));
     }
 
     #[cfg(target_os = "windows")]
@@ -272,12 +335,15 @@ mod tests {
         let cmd = TerminalCommand {
             executable: PathBuf::from("C:\\Users\\test user\\it's app\\login"),
             args: vec![OsString::from("arg's value")],
-            env: vec![],
-            env_remove: vec![],
+            env: vec![(OsString::from("KEY'NAME"), OsString::from("value's"))],
+            env_remove: vec![OsString::from("OLD'KEY")],
         };
         let script_path = PathBuf::from("C:\\Users\\user\\AppData\\Local\\UsageCheck\\tmp\\login_abc123.ps1");
         let script = render_windows_script(&cmd, &script_path);
         assert!(script.contains("''"));
+        assert!(script.contains("[Environment]::SetEnvironmentVariable"));
+        assert!(script.contains("[Environment]::SetEnvironmentVariable('KEY''NAME', 'value''s', 'Process')"));
+        assert!(script.contains("[Environment]::SetEnvironmentVariable('OLD''KEY', $null, 'Process')"));
     }
 
     #[cfg(target_os = "windows")]

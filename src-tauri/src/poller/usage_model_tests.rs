@@ -171,3 +171,51 @@ fn test_assemble_failed_unavailable_distinct_from_zero() {
         "Status must be set (stub returns generic, LOGIC refines per provenance)"
     );
 }
+
+#[test]
+fn test_assemble_live_empty_windows_yields_waiting_for_usage() {
+    let acct = Account {
+        id: "test".into(),
+        provider: Provider::Codex,
+        label: "user@ex.com".into(),
+        auth_source: usage_core::account::AuthSource::BrowserOAuth {
+            credential_id: "test-cred".into(),
+        },
+    };
+    let outcome = FetchOutcome::Live {
+        five_hour: None,
+        week: None,
+        plan: None,
+        email: None,
+    };
+    let local = LocalUsage::none(usage_core::models::LocalProvenance::NoLocalProfile);
+    let result = assemble_account_usage(&acct, outcome, local);
+
+    assert_eq!(result.status, "waiting_for_usage");
+}
+
+#[test]
+fn test_assemble_live_some_five_hour_yields_ok() {
+    let acct = Account {
+        id: "test".into(),
+        provider: Provider::Codex,
+        label: "user@ex.com".into(),
+        auth_source: usage_core::account::AuthSource::BrowserOAuth {
+            credential_id: "test-cred".into(),
+        },
+    };
+    let outcome = FetchOutcome::Live {
+        five_hour: Some(QuotaUsage {
+            percent: 10.0,
+            resets_at: None,
+            window_seconds: Some(18000),
+        }),
+        week: None,
+        plan: None,
+        email: None,
+    };
+    let local = LocalUsage::none(usage_core::models::LocalProvenance::NoLocalProfile);
+    let result = assemble_account_usage(&acct, outcome, local);
+
+    assert_eq!(result.status, "ok");
+}

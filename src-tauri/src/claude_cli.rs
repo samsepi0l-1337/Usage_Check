@@ -188,39 +188,44 @@ fn probe_claude_dir(profile_dir: &Path) -> Result<(String, String), String> {
     let result = tokio::task::block_in_place(|| {
         let handle = tokio::runtime::Handle::current();
         handle.block_on(async {
-            let mut child = tokio::process::Command::new(&claude_exe)
-                .args(["auth", "status", "--json"])
-                .env("CLAUDE_CONFIG_DIR", &profile_str)
-                .env_remove("ANTHROPIC_API_KEY")
-                .env_remove("CLAUDE_CODE_OAUTH_TOKEN")
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()
-                .map_err(|e| format!("failed to spawn claude: {}", e))?;
+            tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                let mut child = tokio::process::Command::new(&claude_exe)
+                    .args(["auth", "status", "--json"])
+                    .env("CLAUDE_CONFIG_DIR", &profile_str)
+                    .env_remove("ANTHROPIC_API_KEY")
+                    .env_remove("CLAUDE_CODE_OAUTH_TOKEN")
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .kill_on_drop(true)
+                    .spawn()
+                    .map_err(|e| format!("failed to spawn claude: {}", e))?;
 
-            let stdout = child.stdout.take().ok_or_else(|| "no stdout".to_string())?;
-            let mut reader = tokio::io::BufReader::new(stdout);
-            let mut output = String::new();
+                let stdout = child.stdout.take().ok_or_else(|| "no stdout".to_string())?;
+                let mut reader = tokio::io::BufReader::new(stdout);
+                let mut output = String::new();
 
-            use tokio::io::AsyncReadExt;
-            reader
-                .read_to_string(&mut output)
-                .await
-                .map_err(|e| format!("read error: {}", e))?;
+                use tokio::io::AsyncReadExt;
+                reader
+                    .read_to_string(&mut output)
+                    .await
+                    .map_err(|e| format!("read error: {}", e))?;
 
-            let status = child
-                .wait()
-                .await
-                .map_err(|e| format!("wait error: {}", e))?;
+                let status = child
+                    .wait()
+                    .await
+                    .map_err(|e| format!("wait error: {}", e))?;
 
-            if !status.success() {
-                return Err(format!(
-                    "claude auth status exited with: {}",
-                    status.code().unwrap_or(-1)
-                ));
-            }
+                if !status.success() {
+                    return Err(format!(
+                        "claude auth status exited with: {}",
+                        status.code().unwrap_or(-1)
+                    ));
+                }
 
-            Ok::<String, String>(output)
+                Ok::<String, String>(output)
+            })
+            .await
+            .map_err(|_| "claude auth status timed out after 10s".to_string())?
         })
     })?;
 

@@ -171,25 +171,28 @@ async fn poll_agy(
 }
 
 
-enum ClaudeCliOutcome {
+/// Outcome of reading a CLI-profile provider (Claude snapshot / Codex probe).
+/// Shared by both CLI providers so an identity change is never collapsed into a
+/// generic `needs_login`. `WaitingForUsage` is Claude-snapshot-specific.
+enum CliProfileOutcome {
     Live(FetchOutcome),
     WaitingForUsage,
     IdentityChanged,
 }
 
-fn read_claude_snapshot_outcome(snapshot_path: &Path, expected_identity: &str) -> ClaudeCliOutcome {
+fn read_claude_snapshot_outcome(snapshot_path: &Path, expected_identity: &str) -> CliProfileOutcome {
     let Ok(bytes) = std::fs::read(snapshot_path) else {
-        return ClaudeCliOutcome::WaitingForUsage;
+        return CliProfileOutcome::WaitingForUsage;
     };
     let Ok(root) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
-        return ClaudeCliOutcome::WaitingForUsage;
+        return CliProfileOutcome::WaitingForUsage;
     };
     let identity = root
         .get("identity")
         .and_then(serde_json::Value::as_str)
         .unwrap_or("");
     if claude_identity_status(identity, expected_identity).is_some() {
-        return ClaudeCliOutcome::IdentityChanged;
+        return CliProfileOutcome::IdentityChanged;
     }
     let rate_limits = root
         .get("rate_limits")
@@ -197,9 +200,9 @@ fn read_claude_snapshot_outcome(snapshot_path: &Path, expected_identity: &str) -
         .unwrap_or(serde_json::Value::Null);
     let quota = parse_claude_usage(&rate_limits);
     if quota.five_hour.is_none() && quota.week.is_none() {
-        return ClaudeCliOutcome::WaitingForUsage;
+        return CliProfileOutcome::WaitingForUsage;
     }
-    ClaudeCliOutcome::Live(FetchOutcome::Live {
+    CliProfileOutcome::Live(FetchOutcome::Live {
         five_hour: quota.five_hour,
         week: quota.week,
         plan: None,
@@ -207,23 +210,50 @@ fn read_claude_snapshot_outcome(snapshot_path: &Path, expected_identity: &str) -
     })
 }
 
+/// Maps a shared CLI-profile outcome to an `AccountUsage`, stamping the
+/// non-`Live` statuses. Used by both the Claude and Codex CLI-profile arms.
+fn assemble_cli_profile_usage(
+    account: &Account,
+    outcome: CliProfileOutcome,
+    local: LocalUsage,
+) -> AccountUsage {
+    match outcome {
+        CliProfileOutcome::Live(fetch) => assemble_account_usage(account, fetch, local),
+        CliProfileOutcome::WaitingForUsage => {
+            let mut usage =
+                assemble_account_usage(account, FetchOutcome::Failed { status: None }, local);
+            usage.status = "waiting_for_usage".to_string();
+            usage
+        }
+        CliProfileOutcome::IdentityChanged => {
+            let mut usage =
+                assemble_account_usage(account, FetchOutcome::Failed { status: None }, local);
+            usage.status = "identity_changed".to_string();
+            usage
+        }
+    }
+}
+
 async fn poll_codex_cli_profile(
     profile_root: &std::path::Path,
     expected_identity: &str,
-) -> FetchOutcome {
+) -> CliProfileOutcome {
     match crate::codex_cli::probe_codex(profile_root).await {
         Ok(probe) => {
+            // A re-logged profile now owning a different identity is a distinct
+            // state from an expired credential — surface `identity_changed`, not
+            // `needs_login` (parity with the Claude CLI path).
             if codex_identity_status(&probe.account.id, expected_identity).is_some() {
-                return FetchOutcome::Failed { status: Some(401) };
+                return CliProfileOutcome::IdentityChanged;
             }
-            FetchOutcome::Live {
+            CliProfileOutcome::Live(FetchOutcome::Live {
                 five_hour: probe.primary,
                 week: probe.secondary,
                 plan: None,
                 email: probe.account.email.clone(),
-            }
+            })
         }
-        Err(_) => FetchOutcome::Failed { status: None },
+        Err(_) => CliProfileOutcome::Live(FetchOutcome::Failed { status: None }),
     }
 }
 
@@ -287,18 +317,24 @@ pub async fn poll_all(store: &AccountStore) -> Vec<AccountUsage> {
         let usage = match account.provider {
             Provider::Agy => poll_agy(store, &client, &account).await,
             Provider::Codex => {
-                let outcome = match &account.auth_source {
+                let local = codex_local
+                    .remove(&account.id)
+                    .unwrap_or_else(|| LocalUsage::none(LocalProvenance::NoLocalProfile));
+                match &account.auth_source {
                     AuthSource::CliProfile {
                         profile_root,
                         expected_identity,
                         ..
-                    } => poll_codex_cli_profile(profile_root, expected_identity).await,
-                    _ => poll_codex_oauth(store, &client, &account).await,
-                };
-                let local = codex_local
-                    .remove(&account.id)
-                    .unwrap_or_else(|| LocalUsage::none(LocalProvenance::NoLocalProfile));
-                assemble_account_usage(&account, outcome, local)
+                    } => {
+                        let outcome =
+                            poll_codex_cli_profile(profile_root, expected_identity).await;
+                        assemble_cli_profile_usage(&account, outcome, local)
+                    }
+                    _ => {
+                        let outcome = poll_codex_oauth(store, &client, &account).await;
+                        assemble_account_usage(&account, outcome, local)
+                    }
+                }
             }
             Provider::Claude => {
                 let local = claude_local
@@ -307,32 +343,13 @@ pub async fn poll_all(store: &AccountStore) -> Vec<AccountUsage> {
                 match &account.auth_source {
                     AuthSource::CliProfile {
                         expected_identity, ..
-                    } => match read_claude_snapshot_outcome(
-                        &paths::claude_statusline_snapshot(&account.id),
-                        expected_identity,
-                    ) {
-                        ClaudeCliOutcome::Live(outcome) => {
-                            assemble_account_usage(&account, outcome, local)
-                        }
-                        ClaudeCliOutcome::WaitingForUsage => {
-                            let mut usage = assemble_account_usage(
-                                &account,
-                                FetchOutcome::Failed { status: None },
-                                local,
-                            );
-                            usage.status = "waiting_for_usage".to_string();
-                            usage
-                        }
-                        ClaudeCliOutcome::IdentityChanged => {
-                            let mut usage = assemble_account_usage(
-                                &account,
-                                FetchOutcome::Failed { status: None },
-                                local,
-                            );
-                            usage.status = "identity_changed".to_string();
-                            usage
-                        }
-                    },
+                    } => {
+                        let outcome = read_claude_snapshot_outcome(
+                            &paths::claude_statusline_snapshot(&account.id),
+                            expected_identity,
+                        );
+                        assemble_cli_profile_usage(&account, outcome, local)
+                    }
                     _ => {
                         let outcome = poll_claude_oauth(store, &client, &account).await;
                         assemble_account_usage(&account, outcome, local)
@@ -367,7 +384,7 @@ mod tests {
         use std::path::Path;
         assert!(matches!(
             read_claude_snapshot_outcome(Path::new("/nonexistent"), "id"),
-            ClaudeCliOutcome::WaitingForUsage
+            CliProfileOutcome::WaitingForUsage
         ));
     }
 
@@ -381,7 +398,7 @@ mod tests {
         )
         .expect("write snapshot");
 
-        let ClaudeCliOutcome::Live(FetchOutcome::Live {
+        let CliProfileOutcome::Live(FetchOutcome::Live {
             five_hour,
             week,
             plan,
@@ -409,7 +426,7 @@ mod tests {
 
         assert!(matches!(
             read_claude_snapshot_outcome(&snapshot, "id"),
-            ClaudeCliOutcome::IdentityChanged
+            CliProfileOutcome::IdentityChanged
         ));
     }
 

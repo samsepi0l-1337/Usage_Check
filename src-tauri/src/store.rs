@@ -11,8 +11,19 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
 use usage_core::account::{Account, AuthSource, Credentials, Provider};
+
+/// Process-global lock serializing every index read-modify-write. Each
+/// `AccountStore` is stateless and recreated per call, and mutators run from
+/// concurrently-spawned async tasks, so without this two interleaved mutations
+/// would both read the same base list and the last writer would silently drop
+/// the other's change (lost update / account resurrection).
+fn index_mutation_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
 
 const LEGACY_INDEX_FILE: &str = "accounts.json";
 const INDEX_FILE: &str = "accounts-v2.json";
@@ -39,16 +50,35 @@ fn set_private_dir_permissions(path: &Path) {
 }
 
 fn write_private_file(path: &Path, contents: &str) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| format!("create dir: {e}"))?;
-        set_private_dir_permissions(parent);
-    }
-    fs::write(path, contents).map_err(|e| format!("write {}: {e}", path.display()))?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("no parent directory for {}", path.display()))?;
+    fs::create_dir_all(parent).map_err(|e| format!("create dir: {e}"))?;
+    set_private_dir_permissions(parent);
+
+    // Atomic write: stage into a private temp sibling on the SAME directory
+    // (hence same filesystem), then rename over the target. A crash mid-write
+    // can then never truncate/half-write the real file — the rename either
+    // fully lands the new bytes or leaves the previous file intact.
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("file");
+    let tmp = parent.join(format!(".{file_name}.tmp-{}", uuid::Uuid::new_v4()));
+
+    fs::write(&tmp, contents).map_err(|e| {
+        let _ = fs::remove_file(&tmp);
+        format!("write {}: {e}", tmp.display())
+    })?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
+        let _ = fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600));
     }
+    fs::rename(&tmp, path).map_err(|e| {
+        let _ = fs::remove_file(&tmp);
+        format!("commit {}: {e}", path.display())
+    })?;
     Ok(())
 }
 
@@ -256,6 +286,21 @@ impl AccountStore {
         write_private_file(&path, &serialize_index(accounts))
     }
 
+    /// Strict index read for mutators. Distinguishes "no index file yet"
+    /// (`Ok(empty)`) from a read/parse failure (`Err`), so a corrupt or
+    /// half-written index is NEVER silently seen as zero accounts and then
+    /// overwritten — which would permanently destroy the whole catalog. The
+    /// lenient `list()` stays for read-only display callers.
+    fn read_index_strict(&self) -> Result<Vec<Account>, String> {
+        let path = self.index_path();
+        match fs::read_to_string(&path) {
+            Ok(contents) => serde_json::from_str(&contents)
+                .map_err(|e| format!("account index is corrupt ({}): {e}", path.display())),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+            Err(e) => Err(format!("read {}: {e}", path.display())),
+        }
+    }
+
     fn validate_reference_source(provider: Provider, source: &AuthSource) -> Result<(), String> {
         let valid = match (provider, source) {
             (Provider::Codex | Provider::Claude, AuthSource::CliProfile { .. }) => true,
@@ -319,11 +364,72 @@ impl AccountStore {
                         team_id: candidate, ..
                     },
                 ) if existing == candidate => Some("xAI team already registered"),
-                (AuthSource::HiggsfieldCli { .. }, AuthSource::HiggsfieldCli { .. }) => {
-                    Some("Higgsfield CLI account already registered")
-                }
+                (
+                    AuthSource::HiggsfieldCli {
+                        expected_identity: existing,
+                    },
+                    AuthSource::HiggsfieldCli {
+                        expected_identity: candidate,
+                    },
+                ) if existing == candidate => Some("Higgsfield CLI account already registered"),
                 _ => None,
             })
+    }
+
+    /// Stable identity keys for a BrowserOAuth account: collect both the provider
+    /// account id and email-shaped label when present. An empty set means the
+    /// identity is unidentifiable and dedup is skipped rather than guessed.
+    /// `AuthSource::BrowserOAuth` carries only a random `credential_id`, so
+    /// re-import/re-login of the SAME identity mints a fresh id — dedup must key
+    /// off the credentials/label, not the source.
+    fn oauth_identity_keys(label: &str, creds: &Credentials) -> Vec<String> {
+        let mut keys = Vec::new();
+        if let Some(id) = creds
+            .account_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            keys.push(format!("id:{}", id.to_ascii_lowercase()));
+        }
+        let label = label.trim();
+        if label.contains('@') {
+            keys.push(format!("email:{}", label.to_ascii_lowercase()));
+        }
+        keys
+    }
+
+    /// Reject re-adding a BrowserOAuth account whose identity already exists for
+    /// the same provider (else re-login/re-import silently creates a duplicate
+    /// polled and shown twice). Compares against each existing OAuth account's
+    /// stored credentials; unidentifiable pairs fall through (no false reject).
+    fn oauth_duplicate(
+        &self,
+        accounts: &[Account],
+        provider: Provider,
+        label: &str,
+        creds: &Credentials,
+    ) -> Option<String> {
+        let new_keys = Self::oauth_identity_keys(label, creds);
+        if new_keys.is_empty() {
+            return None;
+        }
+        for existing in accounts {
+            if existing.provider != provider {
+                continue;
+            }
+            let AuthSource::BrowserOAuth { credential_id } = &existing.auth_source else {
+                continue;
+            };
+            let Some(existing_creds) = self.credentials(credential_id) else {
+                continue;
+            };
+            let existing_keys = Self::oauth_identity_keys(&existing.label, &existing_creds);
+            if new_keys.iter().any(|key| existing_keys.contains(key)) {
+                return Some("account already registered".to_string());
+            }
+        }
+        None
     }
 
     pub fn add_reference(
@@ -334,7 +440,10 @@ impl AccountStore {
     ) -> Result<Account, String> {
         self.initialize_v2()?;
         Self::validate_reference_source(provider, &auth_source)?;
-        let mut accounts = self.list();
+        let _guard = index_mutation_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut accounts = self.read_index_strict()?;
         if let Some(reason) = Self::duplicate_source(&accounts, &auth_source) {
             return Err(reason.to_string());
         }
@@ -387,9 +496,19 @@ impl AccountStore {
                 team_id,
             },
         };
-        let mut accounts = self.list();
+        let _guard = index_mutation_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut accounts = self.read_index_strict()?;
         if let Some(reason) = Self::duplicate_source(&accounts, &auth_source) {
             return Err(reason.to_string());
+        }
+        if matches!(auth_source, AuthSource::BrowserOAuth { .. }) {
+            if let Some(reason) =
+                self.oauth_duplicate(&accounts, provider, &label, &credentials)
+            {
+                return Err(reason.to_string());
+            }
         }
         let account = Account {
             id: account_id,
@@ -444,7 +563,10 @@ impl AccountStore {
     }
 
     pub fn remove(&self, account_id: &str) -> Result<Option<Account>, String> {
-        let mut accounts = self.list();
+        let _guard = index_mutation_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut accounts = self.read_index_strict()?;
         let Some(index) = accounts.iter().position(|account| account.id == account_id) else {
             return Ok(None);
         };
@@ -521,7 +643,12 @@ impl AccountStore {
 
     /// Transitional compile shim for callers migrated in later plan tasks.
     pub fn update_label(&self, id: &str, label: &str) {
-        let mut accounts = self.list();
+        let _guard = index_mutation_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Ok(mut accounts) = self.read_index_strict() else {
+            return;
+        };
         let mut changed = false;
         for account in &mut accounts {
             if account.id == id && account.label != label {
@@ -595,6 +722,109 @@ mod tests {
     #[test]
     fn parse_index_empty_on_empty_string() {
         assert_eq!(parse_index(""), Vec::<Account>::new());
+    }
+
+    #[test]
+    fn corrupt_index_is_not_silently_wiped_by_mutation() {
+        // Regression (B1): a half-written/corrupt index must make mutators fail
+        // loudly, NOT be read as "zero accounts" and overwritten — that would
+        // permanently destroy the entire catalog.
+        let sandbox = TestSandbox::new();
+        let store = sandbox.store();
+        store.initialize_v2().unwrap();
+        store
+            .add(Provider::Codex, "user@example.com".into(), credentials("acct-1"))
+            .unwrap();
+        assert_eq!(store.list().len(), 1);
+
+        fs::write(store.index_path(), "{ this is not valid json").unwrap();
+
+        let result = store.add(Provider::Claude, "other@example.com".into(), credentials("acct-2"));
+        assert!(result.is_err(), "mutation on corrupt index must error, got {result:?}");
+
+        // The corrupt bytes are still present — not clobbered to a fresh list.
+        let raw = fs::read_to_string(store.index_path()).unwrap();
+        assert!(
+            raw.contains("not valid json"),
+            "corrupt index must be left intact, got: {raw}"
+        );
+    }
+
+    #[test]
+    fn atomic_write_leaves_no_temp_files() {
+        // Regression (B1): the atomic temp+rename must not leave stray temp
+        // siblings in the store root after a successful write.
+        let sandbox = TestSandbox::new();
+        let store = sandbox.store();
+        store.initialize_v2().unwrap();
+        store
+            .add(Provider::Codex, "user@example.com".into(), credentials("acct-1"))
+            .unwrap();
+        let leftovers: Vec<_> = fs::read_dir(store.index_path().parent().unwrap())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains(".tmp-"))
+            .collect();
+        assert!(leftovers.is_empty(), "temp files leaked: {leftovers:?}");
+    }
+
+    #[test]
+    fn oauth_reimport_same_identity_is_rejected() {
+        // Regression (M5): re-login/re-import of the same OAuth identity must not
+        // create a duplicate account (polled and displayed twice).
+        let sandbox = TestSandbox::new();
+        let store = sandbox.store();
+        store.initialize_v2().unwrap();
+        store
+            .add(Provider::Codex, "user@example.com".into(), credentials("acct-1"))
+            .unwrap();
+        let second = store.add(Provider::Codex, "user@example.com".into(), credentials("acct-1"));
+        assert!(second.is_err(), "duplicate OAuth identity must be rejected, got {second:?}");
+        assert_eq!(store.list().len(), 1);
+    }
+
+    #[test]
+    fn oauth_email_only_then_id_reimport_is_rejected() {
+        // Regression (M5 follow-up): dedup must be symmetric — a legacy
+        // email-only account must still be recognized as a duplicate when the
+        // SAME identity is re-imported later carrying an account_id (and vice
+        // versa), not just when both sides use the same single key kind.
+        let sandbox = TestSandbox::new();
+        let store = sandbox.store();
+        store.initialize_v2().unwrap();
+        let email_only_creds = Credentials {
+            access_token: "test-only-placeholder".into(),
+            refresh_token: None,
+            account_id: None,
+            expires_at: None,
+        };
+        store
+            .add(Provider::Codex, "user@example.com".into(), email_only_creds)
+            .unwrap();
+        let second = store.add(
+            Provider::Codex,
+            "user@example.com".into(),
+            credentials("acct-1"),
+        );
+        assert!(
+            second.is_err(),
+            "email-only account then id-carrying reimport of the same identity must be rejected, got {second:?}"
+        );
+        assert_eq!(store.list().len(), 1);
+    }
+
+    #[test]
+    fn oauth_distinct_identities_coexist() {
+        let sandbox = TestSandbox::new();
+        let store = sandbox.store();
+        store.initialize_v2().unwrap();
+        store
+            .add(Provider::Codex, "a@example.com".into(), credentials("acct-a"))
+            .unwrap();
+        store
+            .add(Provider::Codex, "b@example.com".into(), credentials("acct-b"))
+            .unwrap();
+        assert_eq!(store.list().len(), 2);
     }
 
     #[test]
@@ -1016,6 +1246,44 @@ mod tests {
 
         assert!(duplicate.is_err());
         assert_eq!(store.list(), vec![first]);
+    }
+
+    #[cfg(feature = "edition-pro")]
+    #[test]
+    fn v2_duplicate_higgsfield_identities_are_rejected_without_overwrite() {
+        let sandbox = TestSandbox::new();
+        let store = sandbox.store();
+        store.initialize_v2().unwrap();
+        let first = store
+            .add_reference(
+                Provider::Higgsfield,
+                "first".into(),
+                AuthSource::HiggsfieldCli {
+                    expected_identity: "hf-user-1".into(),
+                },
+            )
+            .unwrap();
+        let second = store
+            .add_reference(
+                Provider::Higgsfield,
+                "second".into(),
+                AuthSource::HiggsfieldCli {
+                    expected_identity: "hf-user-2".into(),
+                },
+            )
+            .unwrap();
+        let duplicate = store.add_reference(
+            Provider::Higgsfield,
+            "replacement".into(),
+            AuthSource::HiggsfieldCli {
+                expected_identity: "hf-user-1".into(),
+            },
+        );
+
+        assert_eq!(store.list().len(), 2);
+        assert_eq!(first.label, "first");
+        assert_eq!(second.label, "second");
+        assert!(duplicate.is_err());
     }
 
     #[cfg(feature = "edition-pro")]

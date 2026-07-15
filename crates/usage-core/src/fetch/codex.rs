@@ -133,6 +133,9 @@ pub fn parse_app_server_account(value: &Value) -> Result<AppServerAccount, Strin
         .map(|s| s.to_string());
 
     // Reject API-key accounts
+    if id.starts_with("sk-") {
+        return Err("API-key account not supported".to_string());
+    }
     if let Some(ref e) = email {
         if e.starts_with("sk-") {
             return Err("API-key account not supported".to_string());
@@ -218,6 +221,13 @@ mod app_server {
                 "email": "sk-project@openai.com"
             }
         });
+        let result = parse_app_server_account(&value);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_api_key_id_without_email_rejected() {
+        let value = json!({"result": {"id": "sk-abc123"}});
         let result = parse_app_server_account(&value);
         assert!(result.is_err());
     }

@@ -65,8 +65,12 @@ pub fn grok_used_percent_from_changes(changes: &[Value]) -> Option<f64> {
     let mut purchase_limit: Option<i64> = None;
 
     for change in changes.iter().rev() {
-        let origin = change.get("changeOrigin")?.as_str()?;
-        let amount = cents_val(change.get("amount"))?;
+        let Some(origin) = change.get("changeOrigin").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(amount) = cents_val(change.get("amount")) else {
+            continue;
+        };
         match origin {
             "SPEND" => spend_since += amount.max(0),
             "PURCHASE" | "AUTO_PURCHASE" => {
@@ -137,6 +141,18 @@ mod tests {
         let q = parse_grok_prepaid_balance(&v);
         assert!(q.period.is_none());
         assert_eq!(q.detail_suffix.as_deref(), Some("$5.00 left"));
+    }
+
+    #[test]
+    fn malformed_entry_does_not_abort_percent_computation() {
+        let changes = vec![
+            json!({ "changeOrigin": "PURCHASE", "amount": { "val": "-2500" } }),
+            json!({ "changeOrigin": "ADJUSTMENT", "amount": {} }),
+            json!({ "changeOrigin": "SPEND", "amount": { "val": "183" } }),
+        ];
+
+        let percent = grok_used_percent_from_changes(&changes);
+        assert!((percent.unwrap() - 7.32).abs() < 0.1);
     }
 
     #[test]

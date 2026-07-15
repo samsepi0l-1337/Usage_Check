@@ -282,14 +282,16 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
         }
         other if other.starts_with("remove-") => {
             let account_id = other["remove-".len()..].to_string();
-            match app.state::<AccountStore>().remove(&account_id) {
+            let store = app.state::<AccountStore>();
+            let indexed_account = store.list().into_iter().find(|account| account.id == account_id);
+            match store.remove(&account_id) {
                 Ok(Some(removed)) => {
                     poller::evict_last_success(&removed.id);
                     if removed.provider == Provider::Claude {
                         if let AuthSource::CliProfile { profile_root, .. } = &removed.auth_source {
                             let settings_path = profile_root.join("settings.json");
                             if let Err(error) =
-                                claude_statusline::remove_statusline_bridge(&settings_path)
+                                claude_statusline::remove_statusline_bridge(&settings_path, &removed.id)
                             {
                                 eprintln!("remove: bridge teardown failed: {error}");
                             }
@@ -297,7 +299,22 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
                     }
                 }
                 Ok(None) => {}
-                Err(error) => eprintln!("remove: {error}"),
+                Err(error) => {
+                    eprintln!("remove: {error}");
+                    poller::evict_last_success(&account_id);
+                    if let Some(removed) = indexed_account {
+                        if removed.provider == Provider::Claude {
+                            if let AuthSource::CliProfile { profile_root, .. } = &removed.auth_source {
+                                let settings_path = profile_root.join("settings.json");
+                                if let Err(error) =
+                                claude_statusline::remove_statusline_bridge(&settings_path, &account_id)
+                                {
+                                    eprintln!("remove: bridge teardown failed: {error}");
+                                }
+                            }
+                        }
+                    }
+                }
             }
             let app2 = app.clone();
             tauri::async_runtime::spawn(async move {
@@ -347,8 +364,7 @@ fn statusline_bridge_account_id() -> Result<Option<String>, String> {
 fn main() {
     match statusline_bridge_account_id() {
         Ok(Some(account_id)) => {
-            let settings_path = paths::claude_settings_json(&account_id);
-            match claude_statusline::handle_statusline_bridge(&account_id, &settings_path) {
+            match claude_statusline::handle_statusline_bridge(&account_id) {
                 Ok(()) => process::exit(0),
                 Err(error) => {
                     eprintln!("status-line bridge error: {error}");
@@ -425,7 +441,6 @@ fn main() {
             // Initial poll + periodic refresh.
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                refresh_tray(&app_handle).await;
                 let mut interval = tokio::time::interval(POLL_INTERVAL);
                 loop {
                     interval.tick().await;

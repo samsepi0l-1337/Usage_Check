@@ -177,6 +177,35 @@ use super::*;
 
 
     #[test]
+    fn auth_source_stale_restores_pool_breakdown_and_detail_suffix() {
+        // Regression (M1): Agy/Pro accounts carry pool_breakdown/detail_suffix.
+        // A transient error must restore them on stale, not blank them out.
+        let _cache_guard = lock_last_success_cache_tests();
+        clear_last_success_cache();
+        let mut cache = HashMap::new();
+
+        let mut good = auth_source_usage("agy-1", "ok", Some(auth_source_quota(40.0)));
+        good.pool_breakdown = vec![usage_core::fetch::agy::AgyQuotaPool {
+            name: "Gemini".into(),
+            five_hour: Some(auth_source_quota(40.0)),
+            week: Some(auth_source_quota(60.0)),
+        }];
+        good.detail_suffix = Some("$12 left".into());
+        apply_last_success(&mut cache, "agy-1", good);
+
+        // Error path produces an empty snapshot (no pools, no suffix).
+        let mut failed = auth_source_usage("agy-1", "error", None);
+        failed.pool_breakdown = Vec::new();
+        failed.detail_suffix = None;
+        let result = apply_last_success(&mut cache, "agy-1", failed);
+
+        assert_eq!(result.status, "stale");
+        assert_eq!(result.pool_breakdown.len(), 1);
+        assert_eq!(result.pool_breakdown[0].name, "Gemini");
+        assert_eq!(result.detail_suffix.as_deref(), Some("$12 left"));
+    }
+
+    #[test]
     fn auth_source_stale_uses_latest_success() {
         let _cache_guard = lock_last_success_cache_tests();
         clear_last_success_cache();

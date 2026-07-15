@@ -127,7 +127,7 @@ components:
       description: Usage provider category.
     Status:
       type: string
-      enum: [ok, needs_login, rate_limited, error, stale]
+      enum: [ok, needs_login, rate_limited, error, stale, waiting_for_usage, identity_changed, experimental_error, needs_setup]
       description: |
         Freshness/auth status for an account's most recent poll.
         - `ok`: live data fetched successfully.
@@ -135,6 +135,10 @@ components:
         - `rate_limited`: provider returned 429.
         - `error`: network/other failure.
         - `stale`: transient failure; serving the last successful in-memory result.
+        - `waiting_for_usage`: authenticated but no usage windows reported yet.
+        - `identity_changed`: the CLI profile now belongs to a different identity than expected.
+        - `experimental_error`: an experimental (reference/DB) provider probe failed.
+        - `needs_setup`: provider connected but not yet configured (e.g. Higgsfield credits absent).
     Quota:
       type: object
       description: A single usage window (used percent).
