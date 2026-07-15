@@ -1058,37 +1058,6 @@ mod tests {
 
     use usage_core::models::QuotaUsage;
 
-    fn auth_source_usage(id: &str, status: &str, five_hour: Option<QuotaUsage>) -> AccountUsage {
-        let account = Account {
-            id: id.to_string(),
-            provider: Provider::Codex,
-            label: "user@example.com".into(),
-            auth_source: AuthSource::BrowserOAuth {
-                credential_id: format!("credential-{id}"),
-            },
-        };
-        AccountUsage {
-            account,
-            display_name: "user@example.com".into(),
-            plan: Some("Pro".into()),
-            five_hour,
-            week: None,
-            totals: WindowTotals::default(),
-            pool_breakdown: Vec::new(),
-            detail_suffix: None,
-            status: status.to_string(),
-            local_status: None,
-        }
-    }
-
-    fn auth_source_quota(percent: f64) -> QuotaUsage {
-        QuotaUsage {
-            percent,
-            resets_at: None,
-            window_seconds: Some(18_000),
-        }
-    }
-
     #[test]
     fn auth_source_codex_identity_mismatch() {
         assert_eq!(
