@@ -21,7 +21,7 @@ uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 tiny_http = "0.12"
 open = "5"
-sha2 = "0.10"
+sha2 = "0.11"
 base64 = "0.22"
 urlencoding = "2"
 rand = "0.8"
