@@ -8,6 +8,7 @@
 //!
 //! SECURITY: never log/print access_token or refresh_token values.
 
+use std::path::Path;
 #[cfg(any(target_os = "macos", feature = "edition-pro"))]
 use std::process::Command;
 
@@ -45,7 +46,11 @@ fn default_label(provider: Provider) -> String {
 /// helper used to label imports and give Claude an upsert identity.
 fn claude_oauth_account() -> Option<(Option<String>, Option<String>)> {
     let home = paths::home_dir()?;
-    let path = home.join(".claude.json");
+    claude_oauth_account_in(&home)
+}
+
+fn claude_oauth_account_in(root_dir: &Path) -> Option<(Option<String>, Option<String>)> {
+    let path = root_dir.join(".claude.json");
     let data = std::fs::read_to_string(path).ok()?;
     let root: serde_json::Value = serde_json::from_str(&data).ok()?;
     let oauth = root.get("oauthAccount")?;
@@ -63,6 +68,18 @@ fn claude_oauth_account() -> Option<(Option<String>, Option<String>)> {
         return None;
     }
     Some((email, account_id))
+}
+
+/// True iff `profile_root` is the default/unmanaged Claude profile (one of
+/// `paths::claude_config_roots()`). Only the default profile may fall back to the OS-wide
+/// `"Claude Code-credentials"` keychain service; managed per-account profiles must not, or they could
+/// adopt a different identity's token. Compares canonicalized paths, falling back to raw equality.
+fn claude_profile_is_default(profile_root: &std::path::Path) -> bool {
+    let target = std::fs::canonicalize(profile_root).unwrap_or_else(|_| profile_root.to_path_buf());
+    paths::claude_config_roots().into_iter().any(|root| {
+        let root_canon = std::fs::canonicalize(&root).unwrap_or(root);
+        root_canon == target
+    })
 }
 
 /// Loads Claude credentials from Keychain / `.credentials.json`, attaching
@@ -103,6 +120,39 @@ pub fn load_claude_cli_auth() -> Result<ImportedAccount, String> {
         label: email.unwrap_or_else(|| default_label(Provider::Claude)),
         credentials,
     })
+}
+
+/// Reads the credentials for a SPECIFIC Claude profile directory and returns them ONLY when the
+/// profile's identity matches `expected_identity` (email or accountUuid). Identity-safe: never
+/// adopts a different account's credentials. Returns None on identity mismatch or when no creds
+/// are found. SECURITY: never log/print access_token or refresh_token.
+pub fn load_claude_profile_credentials(
+    profile_root: &Path,
+    expected_identity: &str,
+) -> Option<Credentials> {
+    let (email, account_id) = claude_oauth_account_in(profile_root).unwrap_or((None, None));
+    let expected = expected_identity.trim();
+    if !expected.is_empty()
+        && email.as_deref() != Some(expected)
+        && account_id.as_deref() != Some(expected)
+    {
+        return None;
+    }
+
+    let profile_service = paths::claude_keychain_service_name_for(profile_root);
+    let mut credentials = read_claude_from_keychain_service(&profile_service)
+        .or_else(|| {
+            if claude_profile_is_default(profile_root) {
+                read_claude_from_keychain_service("Claude Code-credentials")
+            } else {
+                None
+            }
+        })
+        .or_else(|| read_claude_credentials_file(&profile_root.join(".credentials.json")))?;
+    if credentials.account_id.is_none() {
+        credentials.account_id = account_id;
+    }
+    Some(credentials)
 }
 /// Pure parser for Codex `auth.json` body. Returns `None` when no usable
 /// token is present. Also returns an optional display email from `id_token`.
@@ -254,22 +304,32 @@ fn read_claude_from_keyring_crate(service: &str, account: &str) -> Option<Creden
     credentials_from_secret_blob(&secret)
 }
 
-/// Reads Claude credentials from the OS credential store. Prefer macOS
-/// `security` CLI (Claude Code's own path), then `keyring`, then files.
-/// Never logs the secret payload.
-fn read_claude_from_keychain() -> Option<Credentials> {
-    let service = paths::claude_keychain_service_name();
+fn read_claude_credentials_file(path: &Path) -> Option<Credentials> {
+    let data = std::fs::read_to_string(path).ok()?;
+    let root: serde_json::Value = serde_json::from_str(&data).ok()?;
+    parse_claude_credentials_json(&root)
+}
+
+fn read_claude_from_keychain_service(service: &str) -> Option<Credentials> {
     for account in claude_keychain_accounts() {
-        if let Some(creds) = read_claude_from_macos_security(&service, account.as_deref()) {
+        if let Some(creds) = read_claude_from_macos_security(service, account.as_deref()) {
             return Some(creds);
         }
         if let Some(account) = account.as_deref() {
-            if let Some(creds) = read_claude_from_keyring_crate(&service, account) {
+            if let Some(creds) = read_claude_from_keyring_crate(service, account) {
                 return Some(creds);
             }
         }
     }
     None
+}
+
+/// Reads Claude credentials from the OS credential store. Prefer macOS
+/// `security` CLI (Claude Code's own path), then `keyring`, then files.
+/// Never logs the secret payload.
+fn read_claude_from_keychain() -> Option<Credentials> {
+    let service = paths::claude_keychain_service_name();
+    read_claude_from_keychain_service(&service)
 }
 
 fn parse_expires_at(v: &serde_json::Value) -> Option<chrono::DateTime<Utc>> {
@@ -453,7 +513,12 @@ pub fn load_higgsfield_cli_auth() -> Result<ImportedAccount, String> {
         label: account
             .email
             .unwrap_or_else(|| default_label(Provider::Higgsfield)),
-        credentials: Credentials { access_token: String::new(), refresh_token: None, account_id: None, expires_at: None },
+        credentials: Credentials {
+            access_token: String::new(),
+            refresh_token: None,
+            account_id: None,
+            expires_at: None,
+        },
     })
 }
 
@@ -461,6 +526,7 @@ pub fn load_higgsfield_cli_auth() -> Result<ImportedAccount, String> {
 mod tests {
     use super::*;
     use serde_json::json;
+    use tempfile::TempDir;
 
     #[test]
     fn parses_codex_tokens_block() {
@@ -541,6 +607,86 @@ mod tests {
         });
         let c = parse_claude_credentials_json(&root).unwrap();
         assert_eq!(c.access_token, "flat-at");
+    }
+
+    #[test]
+    fn claude_profile_is_not_default_for_managed_style_directory() {
+        let profile = TempDir::new().expect("create profile directory");
+
+        assert!(!claude_profile_is_default(profile.path()));
+    }
+
+    #[test]
+    fn claude_profile_credentials_do_not_fall_back_to_default_keychain() {
+        let profile = TempDir::new().expect("create profile directory");
+        std::fs::write(
+            profile.path().join(".claude.json"),
+            serde_json::to_string(&json!({
+                "oauthAccount": {
+                    "emailAddress": "managed@example.test",
+                    "accountUuid": "managed-account"
+                }
+            }))
+            .unwrap(),
+        )
+        .expect("write profile identity");
+
+        assert!(load_claude_profile_credentials(profile.path(), "managed@example.test").is_none());
+    }
+
+    #[test]
+    fn claude_profile_credentials_reject_identity_mismatch() {
+        let profile = TempDir::new().expect("create profile directory");
+        std::fs::write(
+            profile.path().join(".claude.json"),
+            serde_json::to_string(&json!({
+                "oauthAccount": {
+                    "emailAddress": "other@example.test",
+                    "accountUuid": "other-account"
+                }
+            }))
+            .unwrap(),
+        )
+        .expect("write profile identity");
+        std::fs::write(
+            profile.path().join(".credentials.json"),
+            serde_json::to_string(&json!({
+                "claudeAiOauth": { "accessToken": "test-access-token" }
+            }))
+            .unwrap(),
+        )
+        .expect("write profile credentials");
+
+        assert!(load_claude_profile_credentials(profile.path(), "expected@example.test").is_none());
+    }
+
+    #[test]
+    fn claude_profile_credentials_accept_matching_identity_from_file() {
+        let profile = TempDir::new().expect("create profile directory");
+        std::fs::write(
+            profile.path().join(".claude.json"),
+            serde_json::to_string(&json!({
+                "oauthAccount": {
+                    "emailAddress": "match@example.test",
+                    "accountUuid": "profile-account"
+                }
+            }))
+            .unwrap(),
+        )
+        .expect("write profile identity");
+        std::fs::write(
+            profile.path().join(".credentials.json"),
+            serde_json::to_string(&json!({
+                "claudeAiOauth": { "accessToken": "test-access-token" }
+            }))
+            .unwrap(),
+        )
+        .expect("write profile credentials");
+
+        let credentials = load_claude_profile_credentials(profile.path(), "match@example.test")
+            .expect("matching profile credentials");
+        assert!(!credentials.access_token.is_empty());
+        assert_eq!(credentials.account_id.as_deref(), Some("profile-account"));
     }
 
     #[test]

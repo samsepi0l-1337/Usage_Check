@@ -8,19 +8,13 @@ use usage_core::fetch::claude::parse_claude_usage;
 use usage_core::models::LocalUsage;
 
 use crate::agy_local;
+use crate::import;
 use crate::store::AccountStore;
 
 use super::http::{fetch_agy_quota_remote, fetch_claude_quota, fetch_codex_quota};
 use super::usage_model::{
-    account_usage_from_agy,
-    assemble_account_usage,
-    claude_fetch_outcome,
-    claude_identity_status,
-    codex_fetch_outcome,
-    codex_identity_status,
-    status_for_failure,
-    AccountUsage,
-    FetchOutcome,
+    account_usage_from_agy, assemble_account_usage, claude_fetch_outcome, claude_identity_status,
+    codex_fetch_outcome, codex_identity_status, status_for_failure, AccountUsage, FetchOutcome,
 };
 
 /// Refresh proactively when the access token expires within this window.
@@ -62,7 +56,8 @@ async fn enrich_agy_identity(store: &AccountStore, account: &Account, creds: &mu
     if !needs_id && !needs_label {
         return;
     }
-    let Some(identity) = crate::oauth::agy_identity_from_access_token(&creds.access_token).await else {
+    let Some(identity) = crate::oauth::agy_identity_from_access_token(&creds.access_token).await
+    else {
         return;
     };
     let mut changed = false;
@@ -142,7 +137,6 @@ pub(super) async fn poll_agy(
     }
 }
 
-
 /// Outcome of reading a CLI-profile provider (Claude snapshot / Codex probe).
 /// Shared by both CLI providers so an identity change is never collapsed into a
 /// generic `needs_login`. `WaitingForUsage` is Claude-snapshot-specific.
@@ -152,7 +146,10 @@ pub(super) enum CliProfileOutcome {
     IdentityChanged,
 }
 
-pub(super) fn read_claude_snapshot_outcome(snapshot_path: &Path, expected_identity: &str) -> CliProfileOutcome {
+pub(super) fn read_claude_snapshot_outcome(
+    snapshot_path: &Path,
+    expected_identity: &str,
+) -> CliProfileOutcome {
     let Ok(bytes) = std::fs::read(snapshot_path) else {
         return CliProfileOutcome::WaitingForUsage;
     };
@@ -180,6 +177,23 @@ pub(super) fn read_claude_snapshot_outcome(snapshot_path: &Path, expected_identi
         plan: None,
         email: (!identity.is_empty()).then(|| identity.to_string()),
     })
+}
+
+/// Polls a Claude CliProfile account: PRIMARY = identity-safe local credentials → live HTTP quota;
+/// FALLBACK = status-line snapshot. Restores pre-30f525d "read local claude values → show usage".
+pub(super) async fn poll_claude_cli_profile(
+    client: &reqwest::Client,
+    profile_root: &Path,
+    expected_identity: &str,
+    snapshot_path: &Path,
+) -> CliProfileOutcome {
+    if let Some(creds) = import::load_claude_profile_credentials(profile_root, expected_identity) {
+        if let Ok(quota) = fetch_claude_quota(client, &creds).await {
+            let email = (!expected_identity.is_empty()).then_some(expected_identity);
+            return CliProfileOutcome::Live(claude_fetch_outcome(quota, email));
+        }
+    }
+    read_claude_snapshot_outcome(snapshot_path, expected_identity)
 }
 
 /// Maps a shared CLI-profile outcome to an `AccountUsage`, stamping the
@@ -274,7 +288,6 @@ pub(super) async fn poll_claude_oauth(
         _ => FetchOutcome::Failed { status: Some(401) },
     }
 }
-
 
 #[cfg(test)]
 #[path = "providers_tests.rs"]

@@ -35,6 +35,35 @@ fn auth_source_claude_snapshot_live() {
     assert_eq!(email.as_deref(), Some("id"));
 }
 
+#[tokio::test]
+async fn claude_cli_profile_falls_back_to_snapshot_without_profile_credentials() {
+    let temp = TempDir::new().expect("create temp directory");
+    let profile_root = temp.path().join("profile");
+    std::fs::create_dir(&profile_root).expect("create empty profile directory");
+    let snapshot = temp.path().join("snapshot.json");
+    std::fs::write(
+        &snapshot,
+        r#"{"identity":"id","rate_limits":{"five_hour":{"utilization":30.0},"seven_day":{"utilization":55.0}}}"#,
+    )
+    .expect("write snapshot");
+
+    let client = reqwest::Client::new();
+    assert!(matches!(
+        poll_claude_cli_profile(&client, &profile_root, "id", &snapshot).await,
+        CliProfileOutcome::Live(FetchOutcome::Live { .. })
+    ));
+    assert!(matches!(
+        poll_claude_cli_profile(
+            &client,
+            &profile_root,
+            "id",
+            &temp.path().join("missing.json"),
+        )
+        .await,
+        CliProfileOutcome::WaitingForUsage
+    ));
+}
+
 #[test]
 fn auth_source_claude_snapshot_identity_mismatch() {
     let temp = TempDir::new().expect("create temp directory");
@@ -50,4 +79,3 @@ fn auth_source_claude_snapshot_identity_mismatch() {
         CliProfileOutcome::IdentityChanged
     ));
 }
-

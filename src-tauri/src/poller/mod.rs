@@ -21,15 +21,11 @@ mod http;
 mod local_scan;
 use local_scan::local_usage_for_provider;
 
-mod usage_model;
 mod providers;
+mod usage_model;
 use providers::{
-    assemble_cli_profile_usage,
-    poll_agy,
-    poll_claude_oauth,
-    poll_codex_cli_profile,
-    poll_codex_oauth,
-    read_claude_snapshot_outcome,
+    assemble_cli_profile_usage, poll_agy, poll_claude_cli_profile, poll_claude_oauth,
+    poll_codex_cli_profile, poll_codex_oauth,
 };
 #[cfg(feature = "edition-pro")]
 mod providers_pro;
@@ -63,8 +59,7 @@ pub async fn poll_all(store: &AccountStore) -> Vec<AccountUsage> {
                         expected_identity,
                         ..
                     } => {
-                        let outcome =
-                            poll_codex_cli_profile(profile_root, expected_identity).await;
+                        let outcome = poll_codex_cli_profile(profile_root, expected_identity).await;
                         assemble_cli_profile_usage(&account, outcome, local)
                     }
                     _ => {
@@ -79,12 +74,17 @@ pub async fn poll_all(store: &AccountStore) -> Vec<AccountUsage> {
                     .unwrap_or_else(|| LocalUsage::none(LocalProvenance::NoLocalProfile));
                 match &account.auth_source {
                     AuthSource::CliProfile {
-                        expected_identity, ..
+                        profile_root,
+                        expected_identity,
+                        ..
                     } => {
-                        let outcome = read_claude_snapshot_outcome(
-                            &paths::claude_statusline_snapshot(&account.id),
+                        let outcome = poll_claude_cli_profile(
+                            &client,
+                            profile_root,
                             expected_identity,
-                        );
+                            &paths::claude_statusline_snapshot(&account.id),
+                        )
+                        .await;
                         assemble_cli_profile_usage(&account, outcome, local)
                     }
                     _ => {

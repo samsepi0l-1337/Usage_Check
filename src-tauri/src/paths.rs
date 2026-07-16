@@ -86,6 +86,16 @@ pub fn claude_credential_files() -> Vec<PathBuf> {
         .collect()
 }
 
+/// Claude keychain service name for an EXPLICIT config dir (per-profile), matching
+/// Claude Code CLI: `Claude Code-credentials-{sha256(dir)[0..8]}`.
+pub fn claude_keychain_service_name_for(config_dir: &std::path::Path) -> String {
+    use sha2::{Digest, Sha256};
+
+    let hash = Sha256::digest(config_dir.to_string_lossy().as_bytes());
+    let short = hex_prefix(hash, 8);
+    format!("Claude Code-credentials-{short}")
+}
+
 /// macOS Keychain / Windows Credential Manager service name used by Claude Code.
 ///
 /// Matches Claude Code CLI: default `Claude Code-credentials`, or
@@ -195,6 +205,16 @@ mod tests {
             assert_eq!(suffix.len(), 8);
             assert!(suffix.chars().all(|c| c.is_ascii_hexdigit()));
         }
+    }
+
+    #[test]
+    fn claude_keychain_service_name_for_is_deterministic() {
+        let path = Path::new("/tmp/x");
+        let name = claude_keychain_service_name_for(path);
+        assert_eq!(name, claude_keychain_service_name_for(path));
+        let suffix = name.strip_prefix("Claude Code-credentials-").unwrap();
+        assert_eq!(suffix.len(), 8);
+        assert!(suffix.chars().all(|c| c.is_ascii_hexdigit()));
     }
 }
 
