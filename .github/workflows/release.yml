@@ -139,7 +139,7 @@ jobs:
 
       - name: Upload macOS artifacts
         if: startsWith(matrix.artifact, 'macos')
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.product_name }}-macos
           path: |
@@ -149,7 +149,7 @@ jobs:
 
       - name: Upload Windows artifacts
         if: startsWith(matrix.artifact, 'windows')
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.product_name }}-windows
           path: |
