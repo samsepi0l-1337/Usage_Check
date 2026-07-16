@@ -38,7 +38,25 @@ pub fn serialize_index(accounts: &[Account]) -> String {
 /// Parse an account index from JSON. Pure function — no I/O.
 /// Returns an empty vec if the input is missing or malformed.
 pub fn parse_index(s: &str) -> Vec<Account> {
-    serde_json::from_str(s).unwrap_or_default()
+    let Ok(values) = serde_json::from_str::<Vec<serde_json::Value>>(s) else {
+        return Vec::new();
+    };
+    values
+        .into_iter()
+        .filter_map(|value| serde_json::from_value::<Account>(value).ok())
+        .collect()
+}
+
+/// Serialize an account index while preserving entries this build cannot
+/// deserialize, such as accounts from another edition or a future provider.
+pub fn serialize_index_preserving(accounts: &[Account], unknown: &[serde_json::Value]) -> String {
+    let mut arr: Vec<serde_json::Value> = accounts
+        .iter()
+        .map(|a| serde_json::to_value(a).unwrap_or(serde_json::Value::Null))
+        .filter(|v| !v.is_null())
+        .collect();
+    arr.extend(unknown.iter().cloned());
+    serde_json::to_string_pretty(&arr).unwrap_or_else(|_| "[]".to_string())
 }
 
 fn set_private_dir_permissions(path: &Path) {
@@ -136,7 +154,10 @@ impl AccountStore {
                 ));
             }
             Ok(metadata) if !metadata.is_dir() => {
-                return Err(format!("store root is not a directory: {}", self.root.display()));
+                return Err(format!(
+                    "store root is not a directory: {}",
+                    self.root.display()
+                ));
             }
             Ok(_) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -286,17 +307,37 @@ impl AccountStore {
         write_private_file(&path, &serialize_index(accounts))
     }
 
-    /// Strict index read for mutators. Distinguishes "no index file yet"
-    /// (`Ok(empty)`) from a read/parse failure (`Err`), so a corrupt or
-    /// half-written index is NEVER silently seen as zero accounts and then
-    /// overwritten — which would permanently destroy the whole catalog. The
-    /// lenient `list()` stays for read-only display callers.
-    fn read_index_strict(&self) -> Result<Vec<Account>, String> {
+    fn save_index_preserving(
+        &self,
+        accounts: &[Account],
+        unknown: &[serde_json::Value],
+    ) -> Result<(), String> {
+        self.ensure_root()?;
+        let path = self.index_path();
+        reject_symlink(&path, "account index")?;
+        write_private_file(&path, &serialize_index_preserving(accounts, unknown))
+    }
+
+    /// Reads the index, partitioning entries into deserializable `Account`s and raw JSON values that this
+    /// build cannot deserialize (e.g. an other-edition/future provider). Preserves the unknown entries so a
+    /// read-modify-write cycle never destroys them. Genuine corruption (not a JSON array) still errors.
+    fn read_index_partitioned(&self) -> Result<(Vec<Account>, Vec<serde_json::Value>), String> {
         let path = self.index_path();
         match fs::read_to_string(&path) {
-            Ok(contents) => serde_json::from_str(&contents)
-                .map_err(|e| format!("account index is corrupt ({}): {e}", path.display())),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+            Ok(contents) => {
+                let values: Vec<serde_json::Value> = serde_json::from_str(&contents)
+                    .map_err(|e| format!("account index is corrupt ({}): {e}", path.display()))?;
+                let mut known = Vec::new();
+                let mut unknown = Vec::new();
+                for v in values {
+                    match serde_json::from_value::<Account>(v.clone()) {
+                        Ok(acc) => known.push(acc),
+                        Err(_) => unknown.push(v),
+                    }
+                }
+                Ok((known, unknown))
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok((Vec::new(), Vec::new())),
             Err(e) => Err(format!("read {}: {e}", path.display())),
         }
     }
@@ -443,7 +484,7 @@ impl AccountStore {
         let _guard = index_mutation_lock()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let mut accounts = self.read_index_strict()?;
+        let (mut accounts, unknown) = self.read_index_partitioned()?;
         if let Some(reason) = Self::duplicate_source(&accounts, &auth_source) {
             return Err(reason.to_string());
         }
@@ -454,7 +495,7 @@ impl AccountStore {
             auth_source,
         };
         accounts.push(account.clone());
-        self.save_index(&accounts)?;
+        self.save_index_preserving(&accounts, &unknown)?;
         Ok(account)
     }
 
@@ -499,14 +540,12 @@ impl AccountStore {
         let _guard = index_mutation_lock()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let mut accounts = self.read_index_strict()?;
+        let (mut accounts, unknown) = self.read_index_partitioned()?;
         if let Some(reason) = Self::duplicate_source(&accounts, &auth_source) {
             return Err(reason.to_string());
         }
         if matches!(auth_source, AuthSource::BrowserOAuth { .. }) {
-            if let Some(reason) =
-                self.oauth_duplicate(&accounts, provider, &label, &credentials)
-            {
+            if let Some(reason) = self.oauth_duplicate(&accounts, provider, &label, &credentials) {
                 return Err(reason.to_string());
             }
         }
@@ -521,7 +560,7 @@ impl AccountStore {
             .map_err(|e| format!("serialize credentials: {e}"))?;
         write_private_file(&credential_path, &json)?;
         accounts.push(account.clone());
-        if let Err(error) = self.save_index(&accounts) {
+        if let Err(error) = self.save_index_preserving(&accounts, &unknown) {
             let _ = fs::remove_file(&credential_path);
             return Err(error);
         }
@@ -566,12 +605,12 @@ impl AccountStore {
         let _guard = index_mutation_lock()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let mut accounts = self.read_index_strict()?;
+        let (mut accounts, unknown) = self.read_index_partitioned()?;
         let Some(index) = accounts.iter().position(|account| account.id == account_id) else {
             return Ok(None);
         };
         let removed = accounts.remove(index);
-        self.save_index(&accounts)?;
+        self.save_index_preserving(&accounts, &unknown)?;
 
         if let Some(credential_id) = Self::secret_credential_id(&removed.auth_source) {
             let still_referenced = accounts.iter().any(|account| {
@@ -646,7 +685,7 @@ impl AccountStore {
         let _guard = index_mutation_lock()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let Ok(mut accounts) = self.read_index_strict() else {
+        let Ok((mut accounts, unknown)) = self.read_index_partitioned() else {
             return;
         };
         let mut changed = false;
@@ -657,7 +696,7 @@ impl AccountStore {
             }
         }
         if changed {
-            let _ = self.save_index(&accounts);
+            let _ = self.save_index_preserving(&accounts, &unknown);
         }
     }
 }
@@ -724,6 +763,101 @@ mod tests {
         assert_eq!(parse_index(""), Vec::<Account>::new());
     }
 
+    fn known_account(id: &str) -> Account {
+        Account {
+            id: id.into(),
+            provider: Provider::Codex,
+            label: "known@example.com".into(),
+            auth_source: AuthSource::CliProfile {
+                profile_root: "/profiles/codex-known".into(),
+                ownership: ProfileOwnership::External,
+                expected_identity: "known@example.com".into(),
+            },
+        }
+    }
+
+    fn unknown_account() -> serde_json::Value {
+        serde_json::json!({
+            "id": "unknown-account",
+            "provider": "__nope__",
+            "label": "unknown@example.com",
+            "auth_source": { "kind": "unknown_source" }
+        })
+    }
+
+    fn write_mixed_index(store: &AccountStore, known: &Account) {
+        store.initialize_v2().unwrap();
+        let entries = vec![serde_json::to_value(known).unwrap(), unknown_account()];
+        fs::write(
+            store.index_path(),
+            serde_json::to_string_pretty(&entries).unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn list_skips_unknown_provider_entries() {
+        let sandbox = TestSandbox::new();
+        let store = sandbox.store();
+        let known = known_account("known-account");
+        write_mixed_index(&store, &known);
+
+        assert_eq!(store.list(), vec![known]);
+    }
+
+    #[test]
+    fn mutation_preserves_unknown_provider_entries() {
+        let sandbox = TestSandbox::new();
+        let store = sandbox.store();
+        let known = known_account("known-account");
+        write_mixed_index(&store, &known);
+
+        store
+            .add_reference(
+                Provider::Claude,
+                "new@example.com".into(),
+                AuthSource::CliProfile {
+                    profile_root: "/profiles/claude-new".into(),
+                    ownership: ProfileOwnership::External,
+                    expected_identity: "new@example.com".into(),
+                },
+            )
+            .unwrap();
+
+        let values: Vec<serde_json::Value> =
+            serde_json::from_str(&fs::read_to_string(store.index_path()).unwrap()).unwrap();
+        assert!(values.contains(&unknown_account()));
+        assert!(values
+            .iter()
+            .any(|value| value["label"] == "new@example.com"));
+    }
+
+    #[test]
+    fn remove_preserves_unknown_provider_entries() {
+        let sandbox = TestSandbox::new();
+        let store = sandbox.store();
+        let known = known_account("known-account");
+        write_mixed_index(&store, &known);
+
+        assert_eq!(store.remove(&known.id).unwrap(), Some(known));
+
+        let values: Vec<serde_json::Value> =
+            serde_json::from_str(&fs::read_to_string(store.index_path()).unwrap()).unwrap();
+        assert_eq!(values, vec![unknown_account()]);
+    }
+
+    #[test]
+    fn partitioned_read_rejects_genuine_corruption() {
+        let sandbox = TestSandbox::new();
+        let store = sandbox.store();
+        store.initialize_v2().unwrap();
+
+        for contents in ["garbage", "{}"] {
+            fs::write(store.index_path(), contents).unwrap();
+            assert!(store.read_index_partitioned().is_err());
+        }
+    }
+
     #[test]
     fn corrupt_index_is_not_silently_wiped_by_mutation() {
         // Regression (B1): a half-written/corrupt index must make mutators fail
@@ -733,14 +867,25 @@ mod tests {
         let store = sandbox.store();
         store.initialize_v2().unwrap();
         store
-            .add(Provider::Codex, "user@example.com".into(), credentials("acct-1"))
+            .add(
+                Provider::Codex,
+                "user@example.com".into(),
+                credentials("acct-1"),
+            )
             .unwrap();
         assert_eq!(store.list().len(), 1);
 
         fs::write(store.index_path(), "{ this is not valid json").unwrap();
 
-        let result = store.add(Provider::Claude, "other@example.com".into(), credentials("acct-2"));
-        assert!(result.is_err(), "mutation on corrupt index must error, got {result:?}");
+        let result = store.add(
+            Provider::Claude,
+            "other@example.com".into(),
+            credentials("acct-2"),
+        );
+        assert!(
+            result.is_err(),
+            "mutation on corrupt index must error, got {result:?}"
+        );
 
         // The corrupt bytes are still present — not clobbered to a fresh list.
         let raw = fs::read_to_string(store.index_path()).unwrap();
@@ -758,7 +903,11 @@ mod tests {
         let store = sandbox.store();
         store.initialize_v2().unwrap();
         store
-            .add(Provider::Codex, "user@example.com".into(), credentials("acct-1"))
+            .add(
+                Provider::Codex,
+                "user@example.com".into(),
+                credentials("acct-1"),
+            )
             .unwrap();
         let leftovers: Vec<_> = fs::read_dir(store.index_path().parent().unwrap())
             .unwrap()
@@ -776,10 +925,21 @@ mod tests {
         let store = sandbox.store();
         store.initialize_v2().unwrap();
         store
-            .add(Provider::Codex, "user@example.com".into(), credentials("acct-1"))
+            .add(
+                Provider::Codex,
+                "user@example.com".into(),
+                credentials("acct-1"),
+            )
             .unwrap();
-        let second = store.add(Provider::Codex, "user@example.com".into(), credentials("acct-1"));
-        assert!(second.is_err(), "duplicate OAuth identity must be rejected, got {second:?}");
+        let second = store.add(
+            Provider::Codex,
+            "user@example.com".into(),
+            credentials("acct-1"),
+        );
+        assert!(
+            second.is_err(),
+            "duplicate OAuth identity must be rejected, got {second:?}"
+        );
         assert_eq!(store.list().len(), 1);
     }
 
@@ -819,10 +979,18 @@ mod tests {
         let store = sandbox.store();
         store.initialize_v2().unwrap();
         store
-            .add(Provider::Codex, "a@example.com".into(), credentials("acct-a"))
+            .add(
+                Provider::Codex,
+                "a@example.com".into(),
+                credentials("acct-a"),
+            )
             .unwrap();
         store
-            .add(Provider::Codex, "b@example.com".into(), credentials("acct-b"))
+            .add(
+                Provider::Codex,
+                "b@example.com".into(),
+                credentials("acct-b"),
+            )
             .unwrap();
         assert_eq!(store.list().len(), 2);
     }
@@ -894,7 +1062,10 @@ mod tests {
         let result = AccountStore::new_at(linked_root).initialize_v2();
 
         assert!(result.is_err());
-        assert_eq!(fs::read_to_string(outside.join("accounts.json")).unwrap(), "legacy");
+        assert_eq!(
+            fs::read_to_string(outside.join("accounts.json")).unwrap(),
+            "legacy"
+        );
         assert_eq!(
             fs::read_to_string(outside.join("credentials").join("legacy.json")).unwrap(),
             "keep"
@@ -936,7 +1107,11 @@ mod tests {
         let outside = sandbox.root.join("outside-credentials");
         fs::create_dir_all(&outside).unwrap();
         fs::write(outside.join("sentinel"), "keep").unwrap();
-        symlink(&outside, sandbox.root.join("UsageCheck").join("credentials")).unwrap();
+        symlink(
+            &outside,
+            sandbox.root.join("UsageCheck").join("credentials"),
+        )
+        .unwrap();
 
         let result = store.add_secret(
             Provider::Grok,
@@ -948,7 +1123,10 @@ mod tests {
         );
 
         assert!(result.is_err());
-        assert_eq!(fs::read_to_string(outside.join("sentinel")).unwrap(), "keep");
+        assert_eq!(
+            fs::read_to_string(outside.join("sentinel")).unwrap(),
+            "keep"
+        );
         assert_eq!(fs::read_dir(outside).unwrap().count(), 1);
     }
 
@@ -1000,7 +1178,10 @@ mod tests {
         let AuthSource::XaiManagement { credential_id, .. } = &account.auth_source else {
             panic!("Grok compatibility add must use xAI Management credentials")
         };
-        assert_eq!(store.credentials(credential_id), Some(credentials("team-compat")));
+        assert_eq!(
+            store.credentials(credential_id),
+            Some(credentials("team-compat"))
+        );
     }
 
     #[cfg(feature = "edition-pro")]
