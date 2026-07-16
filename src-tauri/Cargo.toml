@@ -25,7 +25,7 @@ sha2 = "0.10"
 base64 = "0.22"
 urlencoding = "2"
 rand = "0.8"
-rusqlite = { version = "0.32", features = ["bundled"], optional = true }
+rusqlite = { version = "0.40", features = ["bundled"], optional = true }
 arboard = { version = "3", optional = true }
 tauri-plugin-autostart = "2"
 
