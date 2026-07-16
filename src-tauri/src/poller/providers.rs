@@ -187,7 +187,25 @@ pub(super) async fn poll_claude_cli_profile(
     expected_identity: &str,
     snapshot_path: &Path,
 ) -> CliProfileOutcome {
-    if let Some(creds) = import::load_claude_profile_credentials(profile_root, expected_identity) {
+    // The credential read hits the OS keychain (security CLI / keyring crate), which can block on an
+    // authorization prompt. Run it off the async worker and bound it, so a stalled read degrades to the
+    // snapshot fallback instead of freezing the whole sequential poll.
+    let creds = {
+        let root = profile_root.to_path_buf();
+        let ident = expected_identity.to_string();
+        match tokio::time::timeout(
+            Duration::from_secs(5),
+            tokio::task::spawn_blocking(move || {
+                import::load_claude_profile_credentials(&root, &ident)
+            }),
+        )
+        .await
+        {
+            Ok(Ok(creds)) => creds,
+            _ => None,
+        }
+    };
+    if let Some(creds) = creds {
         if let Ok(quota) = fetch_claude_quota(client, &creds).await {
             let email = (!expected_identity.is_empty()).then_some(expected_identity);
             return CliProfileOutcome::Live(claude_fetch_outcome(quota, email));

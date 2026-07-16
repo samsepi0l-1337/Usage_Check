@@ -39,7 +39,11 @@ use last_success::{apply_last_success, last_success_cache};
 
 /// Builds the full per-account usage snapshot.
 pub async fn poll_all(store: &AccountStore) -> Vec<AccountUsage> {
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
     let accounts = store.list();
     let mut out = Vec::with_capacity(accounts.len());
     let now = Utc::now();

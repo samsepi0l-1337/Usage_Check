@@ -70,6 +70,40 @@ fn claude_oauth_account_in(root_dir: &Path) -> Option<(Option<String>, Option<St
     Some((email, account_id))
 }
 
+/// Reads (email, accountUuid, organizationUuid) from `<root_dir>/.claude.json`
+/// `oauthAccount`. Pure file I/O; returns an empty identity set on any read or
+/// parse failure.
+fn claude_oauth_identity_set_in(
+    root_dir: &Path,
+) -> (Option<String>, Option<String>, Option<String>) {
+    let path = root_dir.join(".claude.json");
+    let Ok(data) = std::fs::read_to_string(path) else {
+        return (None, None, None);
+    };
+    let Ok(root) = serde_json::from_str::<serde_json::Value>(&data) else {
+        return (None, None, None);
+    };
+    let Some(oauth) = root.get("oauthAccount") else {
+        return (None, None, None);
+    };
+    let email = oauth
+        .get("emailAddress")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let account_id = oauth
+        .get("accountUuid")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let org_uuid = oauth
+        .get("organizationUuid")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    (email, account_id, org_uuid)
+}
+
 /// True iff `profile_root` is the default/unmanaged Claude profile (one of
 /// `paths::claude_config_roots()`). Only the default profile may fall back to the OS-wide
 /// `"Claude Code-credentials"` keychain service; managed per-account profiles must not, or they could
@@ -123,18 +157,19 @@ pub fn load_claude_cli_auth() -> Result<ImportedAccount, String> {
 }
 
 /// Reads the credentials for a SPECIFIC Claude profile directory and returns them ONLY when the
-/// profile's identity matches `expected_identity` (email or accountUuid). Identity-safe: never
-/// adopts a different account's credentials. Returns None on identity mismatch or when no creds
-/// are found. SECURITY: never log/print access_token or refresh_token.
+/// profile's identity matches `expected_identity` (email, accountUuid, or organizationUuid).
+/// Identity-safe: never adopts a different account's credentials. Returns None on identity mismatch
+/// or when no creds are found. SECURITY: never log/print access_token or refresh_token.
 pub fn load_claude_profile_credentials(
     profile_root: &Path,
     expected_identity: &str,
 ) -> Option<Credentials> {
-    let (email, account_id) = claude_oauth_account_in(profile_root).unwrap_or((None, None));
+    let (email, account_id, org_uuid) = claude_oauth_identity_set_in(profile_root);
     let expected = expected_identity.trim();
     if !expected.is_empty()
         && email.as_deref() != Some(expected)
         && account_id.as_deref() != Some(expected)
+        && org_uuid.as_deref() != Some(expected)
     {
         return None;
     }
@@ -642,7 +677,8 @@ mod tests {
             serde_json::to_string(&json!({
                 "oauthAccount": {
                     "emailAddress": "other@example.test",
-                    "accountUuid": "other-account"
+                    "accountUuid": "other-account",
+                    "organizationUuid": "other-organization"
                 }
             }))
             .unwrap(),
@@ -685,6 +721,36 @@ mod tests {
 
         let credentials = load_claude_profile_credentials(profile.path(), "match@example.test")
             .expect("matching profile credentials");
+        assert!(!credentials.access_token.is_empty());
+        assert_eq!(credentials.account_id.as_deref(), Some("profile-account"));
+    }
+
+    #[test]
+    fn claude_profile_credentials_accept_matching_organization_uuid_from_file() {
+        let profile = TempDir::new().expect("create profile directory");
+        std::fs::write(
+            profile.path().join(".claude.json"),
+            serde_json::to_string(&json!({
+                "oauthAccount": {
+                    "emailAddress": "org-match@example.test",
+                    "accountUuid": "profile-account",
+                    "organizationUuid": "profile-organization"
+                }
+            }))
+            .unwrap(),
+        )
+        .expect("write profile identity");
+        std::fs::write(
+            profile.path().join(".credentials.json"),
+            serde_json::to_string(&json!({
+                "claudeAiOauth": { "accessToken": "test-access-token" }
+            }))
+            .unwrap(),
+        )
+        .expect("write profile credentials");
+
+        let credentials = load_claude_profile_credentials(profile.path(), "profile-organization")
+            .expect("organization-matching profile credentials");
         assert!(!credentials.access_token.is_empty());
         assert_eq!(credentials.account_id.as_deref(), Some("profile-account"));
     }
