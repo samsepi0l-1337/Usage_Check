@@ -86,6 +86,20 @@ fn parse_claude_status(text: &str) -> Result<(String, String), String> {
     Ok((identity, plan))
 }
 
+/// Reads Claude identity directly from `<profile_dir>/.claude.json` (no `claude` binary, no runtime).
+/// Preserves the historical precedence: organizationUuid (the CLI's `orgId`) preferred, else the
+/// lowercased/trimmed email. Returns `(identity, plan)` with an unknown plan because subscription
+/// type is not present in `oauthAccount`.
+fn read_claude_identity_from_json(profile_dir: &Path) -> Option<(String, String)> {
+    let (email, _account_uuid, org_uuid) = crate::import::claude_oauth_identity_set_in(profile_dir);
+    let identity = org_uuid.filter(|s| !s.is_empty()).or_else(|| {
+        email
+            .map(|email| email.trim().to_lowercase())
+            .filter(|s| !s.is_empty())
+    })?;
+    Some((identity, "unknown".to_string()))
+}
+
 /// Claude CLI adapter
 #[derive(Debug, Clone)]
 pub struct ClaudeCliAdapter;
@@ -179,6 +193,10 @@ impl ProviderAdapter for ClaudeCliAdapter {
 
 /// Probe a Claude directory (sync wrapper around async probe)
 fn probe_claude_dir(profile_dir: &Path) -> Result<(String, String), String> {
+    if let Some(found) = read_claude_identity_from_json(profile_dir) {
+        return Ok(found);
+    }
+
     let profile_str = profile_dir.to_string_lossy().to_string();
 
     let claude_exe =
@@ -235,6 +253,51 @@ fn probe_claude_dir(profile_dir: &Path) -> Result<(String, String), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_read_claude_identity_from_json_prefers_organization_uuid() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(".claude.json"),
+            r#"{"oauthAccount":{"emailAddress":"User@Example.COM","organizationUuid":"org-abc","accountUuid":"acc-1"}}"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            read_claude_identity_from_json(dir.path()),
+            Some(("org-abc".to_string(), "unknown".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_read_claude_identity_from_json_falls_back_to_normalized_email() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(".claude.json"),
+            r#"{"oauthAccount":{"emailAddress":"  Foo@Bar.COM "}}"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            read_claude_identity_from_json(dir.path()),
+            Some(("foo@bar.com".to_string(), "unknown".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_read_claude_identity_from_json_returns_none_without_file() {
+        let dir = tempfile::tempdir().unwrap();
+
+        assert_eq!(read_claude_identity_from_json(dir.path()), None);
+    }
+
+    #[test]
+    fn test_read_claude_identity_from_json_returns_none_without_oauth_account() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".claude.json"), r#"{}"#).unwrap();
+
+        assert_eq!(read_claude_identity_from_json(dir.path()), None);
+    }
 
     #[test]
     fn test_parse_claude_status_with_org_id() {

@@ -73,7 +73,7 @@ fn claude_oauth_account_in(root_dir: &Path) -> Option<(Option<String>, Option<St
 /// Reads (email, accountUuid, organizationUuid) from `<root_dir>/.claude.json`
 /// `oauthAccount`. Pure file I/O; returns an empty identity set on any read or
 /// parse failure.
-fn claude_oauth_identity_set_in(
+pub(crate) fn claude_oauth_identity_set_in(
     root_dir: &Path,
 ) -> (Option<String>, Option<String>, Option<String>) {
     let path = root_dir.join(".claude.json");
