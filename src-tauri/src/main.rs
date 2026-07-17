@@ -149,20 +149,12 @@ fn cli_coordinator_setup(app: &AppHandle, provider: Provider) {
         let coordinator = CliAuthCoordinator::new(adapter, launcher, RetrySchedule::production());
         match coordinator.execute().await {
             Ok(account) => {
-                let auth_source = match account.auth_source {
-                    AuthSource::CliProfile {
-                        profile_root,
-                        ownership,
-                        ..
-                    } => AuthSource::CliProfile {
-                        profile_root,
-                        ownership,
-                        expected_identity: account.label.clone(),
-                    },
-                    other => other,
-                };
                 let store = app2.state::<AccountStore>();
-                match store.add_reference(account.provider, account.label.clone(), auth_source) {
+                match store.add_reference(
+                    account.provider,
+                    account.label.clone(),
+                    account.auth_source,
+                ) {
                     Ok(saved) => {
                         if saved.provider == Provider::Claude {
                             if let AuthSource::CliProfile { profile_root, .. } = &saved.auth_source
@@ -283,16 +275,20 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
         other if other.starts_with("remove-") => {
             let account_id = other["remove-".len()..].to_string();
             let store = app.state::<AccountStore>();
-            let indexed_account = store.list().into_iter().find(|account| account.id == account_id);
+            let indexed_account = store
+                .list()
+                .into_iter()
+                .find(|account| account.id == account_id);
             match store.remove(&account_id) {
                 Ok(Some(removed)) => {
                     poller::evict_last_success(&removed.id);
                     if removed.provider == Provider::Claude {
                         if let AuthSource::CliProfile { profile_root, .. } = &removed.auth_source {
                             let settings_path = profile_root.join("settings.json");
-                            if let Err(error) =
-                                claude_statusline::remove_statusline_bridge(&settings_path, &removed.id)
-                            {
+                            if let Err(error) = claude_statusline::remove_statusline_bridge(
+                                &settings_path,
+                                &removed.id,
+                            ) {
                                 eprintln!("remove: bridge teardown failed: {error}");
                             }
                         }
@@ -304,11 +300,14 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
                     poller::evict_last_success(&account_id);
                     if let Some(removed) = indexed_account {
                         if removed.provider == Provider::Claude {
-                            if let AuthSource::CliProfile { profile_root, .. } = &removed.auth_source {
+                            if let AuthSource::CliProfile { profile_root, .. } =
+                                &removed.auth_source
+                            {
                                 let settings_path = profile_root.join("settings.json");
-                                if let Err(error) =
-                                claude_statusline::remove_statusline_bridge(&settings_path, &account_id)
-                                {
+                                if let Err(error) = claude_statusline::remove_statusline_bridge(
+                                    &settings_path,
+                                    &account_id,
+                                ) {
                                     eprintln!("remove: bridge teardown failed: {error}");
                                 }
                             }
@@ -363,15 +362,13 @@ fn statusline_bridge_account_id() -> Result<Option<String>, String> {
 
 fn main() {
     match statusline_bridge_account_id() {
-        Ok(Some(account_id)) => {
-            match claude_statusline::handle_statusline_bridge(&account_id) {
-                Ok(()) => process::exit(0),
-                Err(error) => {
-                    eprintln!("status-line bridge error: {error}");
-                    process::exit(1);
-                }
+        Ok(Some(account_id)) => match claude_statusline::handle_statusline_bridge(&account_id) {
+            Ok(()) => process::exit(0),
+            Err(error) => {
+                eprintln!("status-line bridge error: {error}");
+                process::exit(1);
             }
-        }
+        },
         Ok(None) => {}
         Err(error) => {
             eprintln!("status-line bridge argument error: {error}");
@@ -399,8 +396,13 @@ fn main() {
                 let _ = window.close();
             }
 
-            // Collapse duplicate CLI/OAuth imports of the same account.
-            AccountStore::new().dedupe();
+            // Re-anchor existing Claude accounts on the unique accountUuid (best-effort, idempotent).
+            if let Err(error) = app
+                .state::<AccountStore>()
+                .migrate_claude_identity_anchors()
+            {
+                eprintln!("startup: claude identity migration skipped: {error}");
+            }
 
             let initial = tray_menu::build_menu(app.handle(), &[])?;
 
@@ -469,27 +471,48 @@ mod tests {
 
     #[test]
     fn browser_oauth_always_routes_to_oauth() {
-        assert_eq!(classify_auth_action(Provider::Codex, AuthMethod::BrowserOAuth), AuthAction::Oauth);
-        assert_eq!(classify_auth_action(Provider::Claude, AuthMethod::BrowserOAuth), AuthAction::Oauth);
-        assert_eq!(classify_auth_action(Provider::Agy, AuthMethod::BrowserOAuth), AuthAction::Oauth);
+        assert_eq!(
+            classify_auth_action(Provider::Codex, AuthMethod::BrowserOAuth),
+            AuthAction::Oauth
+        );
+        assert_eq!(
+            classify_auth_action(Provider::Claude, AuthMethod::BrowserOAuth),
+            AuthAction::Oauth
+        );
+        assert_eq!(
+            classify_auth_action(Provider::Agy, AuthMethod::BrowserOAuth),
+            AuthAction::Oauth
+        );
     }
 
     #[test]
     fn cli_routes_codex_and_claude_to_coordinator() {
-        assert_eq!(classify_auth_action(Provider::Codex, AuthMethod::Cli), AuthAction::CliCoordinator);
-        assert_eq!(classify_auth_action(Provider::Claude, AuthMethod::Cli), AuthAction::CliCoordinator);
+        assert_eq!(
+            classify_auth_action(Provider::Codex, AuthMethod::Cli),
+            AuthAction::CliCoordinator
+        );
+        assert_eq!(
+            classify_auth_action(Provider::Claude, AuthMethod::Cli),
+            AuthAction::CliCoordinator
+        );
     }
 
     #[test]
     fn cli_routes_non_coordinator_providers_to_import() {
         // Agy has no CLI capability in the registry, but the classifier is total:
         // any non-Codex/Claude provider under Cli must fall through to Import.
-        assert_eq!(classify_auth_action(Provider::Agy, AuthMethod::Cli), AuthAction::Import);
+        assert_eq!(
+            classify_auth_action(Provider::Agy, AuthMethod::Cli),
+            AuthAction::Import
+        );
     }
 
     #[test]
     fn local_database_and_env_route_to_import() {
-        assert_eq!(classify_auth_action(Provider::Codex, AuthMethod::LocalDatabase), AuthAction::Import);
+        assert_eq!(
+            classify_auth_action(Provider::Codex, AuthMethod::LocalDatabase),
+            AuthAction::Import
+        );
         assert_eq!(
             classify_auth_action(Provider::Codex, AuthMethod::ManagementKeyEnvironment),
             AuthAction::Import
@@ -507,7 +530,10 @@ mod tests {
     #[cfg(feature = "edition-pro")]
     #[test]
     fn pro_providers_route_per_capability() {
-        assert_eq!(classify_auth_action(Provider::Cursor, AuthMethod::LocalDatabase), AuthAction::Import);
+        assert_eq!(
+            classify_auth_action(Provider::Cursor, AuthMethod::LocalDatabase),
+            AuthAction::Import
+        );
         assert_eq!(
             classify_auth_action(Provider::Grok, AuthMethod::ManagementKeyClipboard),
             AuthAction::GrokClipboard
@@ -516,7 +542,10 @@ mod tests {
             classify_auth_action(Provider::Grok, AuthMethod::ManagementKeyEnvironment),
             AuthAction::Import
         );
-        assert_eq!(classify_auth_action(Provider::Higgsfield, AuthMethod::Cli), AuthAction::Import);
+        assert_eq!(
+            classify_auth_action(Provider::Higgsfield, AuthMethod::Cli),
+            AuthAction::Import
+        );
     }
 
     // Registry-consistency: every (provider, method) actually wired into the tray registry
@@ -532,10 +561,16 @@ mod tests {
                     Provider::Codex | Provider::Claude => AuthAction::CliCoordinator,
                     _ => AuthAction::Import,
                 },
-                AuthMethod::LocalDatabase | AuthMethod::ManagementKeyEnvironment => AuthAction::Import,
+                AuthMethod::LocalDatabase | AuthMethod::ManagementKeyEnvironment => {
+                    AuthAction::Import
+                }
                 AuthMethod::ManagementKeyClipboard => AuthAction::GrokClipboard,
             };
-            assert_eq!(action, expected, "spec {:?}/{:?} misrouted", spec.provider, spec.method);
+            assert_eq!(
+                action, expected,
+                "spec {:?}/{:?} misrouted",
+                spec.provider, spec.method
+            );
         }
     }
 }

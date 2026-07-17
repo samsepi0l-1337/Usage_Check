@@ -39,7 +39,11 @@ fn candidate_bin_dirs() -> Vec<PathBuf> {
 /// Resolve the Claude executable to an absolute path, searching a PATH superset so it
 /// is found even from a GUI process with a minimal PATH.
 fn which_claude() -> Option<PathBuf> {
-    let bin = if cfg!(windows) { "claude.exe" } else { "claude" };
+    let bin = if cfg!(windows) {
+        "claude.exe"
+    } else {
+        "claude"
+    };
     for dir in candidate_bin_dirs() {
         let candidate = dir.join(bin);
         if candidate.is_file() {
@@ -49,8 +53,8 @@ fn which_claude() -> Option<PathBuf> {
     None
 }
 
-/// Parse Claude auth status --json output to extract identity and plan
-fn parse_claude_status(text: &str) -> Result<(String, String), String> {
+/// Parse Claude auth status --json output to extract anchor, display label, and plan.
+fn parse_claude_status(text: &str) -> Result<(String, String, String), String> {
     let obj: Value = serde_json::from_str(text).map_err(|e| format!("JSON parse error: {}", e))?;
 
     // Must have loggedIn: true
@@ -63,18 +67,22 @@ fn parse_claude_status(text: &str) -> Result<(String, String), String> {
         return Err("not logged in".to_string());
     }
 
-    // Identity: prefer orgId, fallback to normalized email
-    let identity = obj
+    let email = obj
+        .get("email")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty());
+    let org_id = obj
         .get("orgId")
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
-        .map(|s| s.to_string())
-        .or_else(|| {
-            obj.get("email")
-                .and_then(|v| v.as_str())
-                .map(|s| s.trim().to_lowercase())
-        })
+        .map(str::to_string);
+    // The binary status fallback has no accountUuid, so use orgId as its anchor.
+    let anchor = org_id
+        .clone()
+        .or_else(|| email.clone())
         .ok_or_else(|| "missing identity (orgId or email)".to_string())?;
+    let label = email.or(org_id).expect("anchor requires identity");
 
     // Plan: subscriptionType
     let plan = obj
@@ -83,21 +91,26 @@ fn parse_claude_status(text: &str) -> Result<(String, String), String> {
         .unwrap_or("unknown")
         .to_string();
 
-    Ok((identity, plan))
+    Ok((anchor, label, plan))
 }
 
 /// Reads Claude identity directly from `<profile_dir>/.claude.json` (no `claude` binary, no runtime).
-/// Preserves the historical precedence: organizationUuid (the CLI's `orgId`) preferred, else the
-/// lowercased/trimmed email. Returns `(identity, plan)` with an unknown plan because subscription
-/// type is not present in `oauthAccount`.
-fn read_claude_identity_from_json(profile_dir: &Path) -> Option<(String, String)> {
-    let (email, _account_uuid, org_uuid) = crate::import::claude_oauth_identity_set_in(profile_dir);
-    let identity = org_uuid.filter(|s| !s.is_empty()).or_else(|| {
-        email
-            .map(|email| email.trim().to_lowercase())
-            .filter(|s| !s.is_empty())
-    })?;
-    Some((identity, "unknown".to_string()))
+/// Uses the unique accountUuid as the anchor when available, and returns a normalized email label.
+/// Returns `(anchor, label, plan)` with an unknown plan because subscription type is not present in
+/// `oauthAccount`.
+fn read_claude_identity_from_json(profile_dir: &Path) -> Option<(String, String, String)> {
+    let (email, account_uuid, org_uuid) = crate::import::claude_oauth_identity_set_in(profile_dir);
+    let email_norm = email
+        .map(|email| email.trim().to_lowercase())
+        .filter(|s| !s.is_empty());
+    let account_uuid = account_uuid.filter(|s| !s.is_empty());
+    let org_uuid = org_uuid.filter(|s| !s.is_empty());
+    let anchor = account_uuid
+        .clone()
+        .or_else(|| org_uuid.clone())
+        .or_else(|| email_norm.clone())?;
+    let label = email_norm.or(account_uuid).or(org_uuid)?;
+    Some((anchor, label, "unknown".to_string()))
 }
 
 /// Claude CLI adapter
@@ -108,15 +121,15 @@ impl ProviderAdapter for ClaudeCliAdapter {
     fn probe(&self) -> Result<Option<Account>, String> {
         // Try default CLAUDE_CONFIG_DIR first
         if let Some(default_dir) = crate::paths::default_claude_config_dir_checked() {
-            if let Ok((identity, _plan)) = probe_claude_dir(&default_dir) {
+            if let Ok((anchor, label, _plan)) = probe_claude_dir(&default_dir) {
                 return Ok(Some(Account {
-                    id: format!("claude-{}", identity),
+                    id: format!("claude-{anchor}"),
                     provider: Provider::Claude,
-                    label: identity.clone(),
+                    label,
                     auth_source: AuthSource::CliProfile {
                         profile_root: default_dir,
                         ownership: ProfileOwnership::External,
-                        expected_identity: identity,
+                        expected_identity: anchor,
                     },
                 }));
             }
@@ -124,15 +137,15 @@ impl ProviderAdapter for ClaudeCliAdapter {
 
         // Try managed root
         if let Ok(managed_dir) = crate::paths::claude_managed_root("default") {
-            if let Ok((identity, _plan)) = probe_claude_dir(&managed_dir) {
+            if let Ok((anchor, label, _plan)) = probe_claude_dir(&managed_dir) {
                 return Ok(Some(Account {
-                    id: format!("claude-{}", identity),
+                    id: format!("claude-{anchor}"),
                     provider: Provider::Claude,
-                    label: identity.clone(),
+                    label,
                     auth_source: AuthSource::CliProfile {
                         profile_root: managed_dir,
                         ownership: ProfileOwnership::Managed,
-                        expected_identity: identity,
+                        expected_identity: anchor,
                     },
                 }));
             }
@@ -168,17 +181,17 @@ impl ProviderAdapter for ClaudeCliAdapter {
             AuthSource::CliProfile {
                 profile_root,
                 ownership,
-                expected_identity,
+                expected_identity: _,
             } => {
-                let (identity, _plan) = probe_claude_dir(&profile_root)?;
+                let (anchor, label, _plan) = probe_claude_dir(&profile_root)?;
                 Ok(Account {
-                    id: format!("claude-{identity}"),
+                    id: format!("claude-{anchor}"),
                     provider: Provider::Claude,
-                    label: identity.clone(),
+                    label,
                     auth_source: AuthSource::CliProfile {
                         profile_root,
                         ownership,
-                        expected_identity,
+                        expected_identity: anchor,
                     },
                 })
             }
@@ -192,7 +205,7 @@ impl ProviderAdapter for ClaudeCliAdapter {
 }
 
 /// Probe a Claude directory (sync wrapper around async probe)
-fn probe_claude_dir(profile_dir: &Path) -> Result<(String, String), String> {
+fn probe_claude_dir(profile_dir: &Path) -> Result<(String, String, String), String> {
     if let Some(found) = read_claude_identity_from_json(profile_dir) {
         return Ok(found);
     }
@@ -255,7 +268,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_read_claude_identity_from_json_prefers_organization_uuid() {
+    fn test_read_claude_identity_from_json_prefers_account_uuid_and_email_label() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join(".claude.json"),
@@ -265,7 +278,30 @@ mod tests {
 
         assert_eq!(
             read_claude_identity_from_json(dir.path()),
-            Some(("org-abc".to_string(), "unknown".to_string()))
+            Some((
+                "acc-1".to_string(),
+                "user@example.com".to_string(),
+                "unknown".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn test_read_claude_identity_from_json_falls_back_to_org_uuid_with_email_label() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(".claude.json"),
+            r#"{"oauthAccount":{"emailAddress":"  Foo@Bar.COM ","organizationUuid":"org-abc"}}"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            read_claude_identity_from_json(dir.path()),
+            Some((
+                "org-abc".to_string(),
+                "foo@bar.com".to_string(),
+                "unknown".to_string()
+            ))
         );
     }
 
@@ -280,7 +316,11 @@ mod tests {
 
         assert_eq!(
             read_claude_identity_from_json(dir.path()),
-            Some(("foo@bar.com".to_string(), "unknown".to_string()))
+            Some((
+                "foo@bar.com".to_string(),
+                "foo@bar.com".to_string(),
+                "unknown".to_string()
+            ))
         );
     }
 
@@ -302,16 +342,18 @@ mod tests {
     #[test]
     fn test_parse_claude_status_with_org_id() {
         let json = r#"{"loggedIn":true,"orgId":"org-123","email":"user@example.com","subscriptionType":"pro"}"#;
-        let (identity, plan) = parse_claude_status(json).unwrap();
-        assert_eq!(identity, "org-123");
+        let (anchor, label, plan) = parse_claude_status(json).unwrap();
+        assert_eq!(anchor, "org-123");
+        assert_eq!(label, "user@example.com");
         assert_eq!(plan, "pro");
     }
 
     #[test]
     fn test_parse_claude_status_fallback_email() {
         let json = r#"{"loggedIn":true,"email":"  User@Example.COM  ","subscriptionType":"free"}"#;
-        let (identity, plan) = parse_claude_status(json).unwrap();
-        assert_eq!(identity, "user@example.com");
+        let (anchor, label, plan) = parse_claude_status(json).unwrap();
+        assert_eq!(anchor, "user@example.com");
+        assert_eq!(label, "user@example.com");
         assert_eq!(plan, "free");
     }
 

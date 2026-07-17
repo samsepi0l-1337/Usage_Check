@@ -284,10 +284,6 @@ impl AccountStore {
         write_private_file(&marker, "2\n")
     }
 
-    /// Transitional compile shim. Schema v2 rejects duplicates while adding
-    /// each explicit source, so token/account-ID dedupe no longer exists.
-    pub fn dedupe(&self) {}
-
     /// Reads the account index. Returns an empty vec if absent/unreadable.
     pub fn list(&self) -> Vec<Account> {
         fs::read_to_string(self.index_path())
@@ -497,6 +493,68 @@ impl AccountStore {
         accounts.push(account.clone());
         self.save_index_preserving(&accounts, &unknown)?;
         Ok(account)
+    }
+
+    /// Best-effort startup migration: re-anchor existing Claude CliProfile accounts from the shared
+    /// organizationUuid (or email) to the UNIQUE accountUuid, and refresh the label to the account email,
+    /// by reading each account's `<profile_root>/.claude.json`. Non-destructive: an account whose
+    /// `.claude.json` is unreadable or has no accountUuid is left exactly as-is. Preserves unknown index
+    /// entries and holds the index mutation lock. Returns the number of accounts changed.
+    pub fn migrate_claude_identity_anchors(&self) -> Result<usize, String> {
+        self.initialize_v2()?;
+        let _guard = index_mutation_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let (mut accounts, unknown) = self.read_index_partitioned()?;
+        let mut changed = 0usize;
+
+        for account in &mut accounts {
+            if account.provider != Provider::Claude {
+                continue;
+            }
+            let Some((uuid, email)) = (match &account.auth_source {
+                AuthSource::CliProfile { profile_root, .. } => {
+                    let (email, account_uuid, _org) =
+                        crate::import::claude_oauth_identity_set_in(profile_root);
+                    account_uuid.filter(|s| !s.is_empty()).map(|uuid| {
+                        (
+                            uuid,
+                            email
+                                .map(|mail| mail.trim().to_lowercase())
+                                .filter(|mail| !mail.is_empty()),
+                        )
+                    })
+                }
+                _ => None,
+            }) else {
+                continue;
+            };
+
+            let mut touched = false;
+            if let AuthSource::CliProfile {
+                expected_identity, ..
+            } = &mut account.auth_source
+            {
+                if *expected_identity != uuid {
+                    *expected_identity = uuid;
+                    touched = true;
+                }
+            }
+            if let Some(email) = email {
+                if account.label != email {
+                    account.label = email;
+                    touched = true;
+                }
+            }
+            if touched {
+                changed += 1;
+            }
+        }
+
+        if changed > 0 {
+            self.save_index_preserving(&accounts, &unknown)?;
+        }
+        Ok(changed)
     }
 
     pub fn add_secret(
@@ -795,6 +853,40 @@ mod tests {
         .unwrap();
     }
 
+    fn claude_reference(profile_root: PathBuf, expected_identity: &str, label: &str) -> Account {
+        Account {
+            id: "claude-account".into(),
+            provider: Provider::Claude,
+            label: label.into(),
+            auth_source: AuthSource::CliProfile {
+                profile_root,
+                ownership: ProfileOwnership::External,
+                expected_identity: expected_identity.into(),
+            },
+        }
+    }
+
+    fn write_claude_oauth_identity(
+        profile_root: &Path,
+        email: &str,
+        account_uuid: Option<&str>,
+        organization_uuid: &str,
+    ) {
+        fs::create_dir_all(profile_root).unwrap();
+        let mut oauth_account = serde_json::json!({
+            "emailAddress": email,
+            "organizationUuid": organization_uuid,
+        });
+        if let Some(account_uuid) = account_uuid {
+            oauth_account["accountUuid"] = serde_json::Value::String(account_uuid.into());
+        }
+        fs::write(
+            profile_root.join(".claude.json"),
+            serde_json::json!({ "oauthAccount": oauth_account }).to_string(),
+        )
+        .unwrap();
+    }
+
     #[test]
     fn list_skips_unknown_provider_entries() {
         let sandbox = TestSandbox::new();
@@ -830,6 +922,83 @@ mod tests {
         assert!(values
             .iter()
             .any(|value| value["label"] == "new@example.com"));
+    }
+
+    #[test]
+    fn migrate_claude_identity_anchors_upgrades_anchor_and_label() {
+        let sandbox = TestSandbox::new();
+        let store = sandbox.store();
+        let profile_root = sandbox.root.join("claude-profile");
+        write_claude_oauth_identity(&profile_root, "me@x.io", Some("acc-9"), "org-z");
+        let account = claude_reference(profile_root, "org-z", "org-z");
+        store.initialize_v2().unwrap();
+        store.save_index(std::slice::from_ref(&account)).unwrap();
+
+        assert_eq!(store.migrate_claude_identity_anchors().unwrap(), 1);
+        let migrated = store.account(&account.id).unwrap();
+        let AuthSource::CliProfile {
+            expected_identity, ..
+        } = migrated.auth_source
+        else {
+            panic!("migrated account must remain a Claude CLI profile");
+        };
+        assert_eq!(expected_identity, "acc-9");
+        assert_eq!(migrated.label, "me@x.io");
+    }
+
+    #[test]
+    fn migrate_claude_identity_anchors_skips_profiles_without_account_uuid() {
+        let sandbox = TestSandbox::new();
+        let store = sandbox.store();
+        let profile_root = sandbox.root.join("claude-profile");
+        write_claude_oauth_identity(&profile_root, "me@x.io", None, "org-z");
+        let account = claude_reference(profile_root, "org-z", "org-z");
+        store.initialize_v2().unwrap();
+        store.save_index(std::slice::from_ref(&account)).unwrap();
+
+        assert_eq!(store.migrate_claude_identity_anchors().unwrap(), 0);
+        assert_eq!(store.account(&account.id), Some(account));
+    }
+
+    #[test]
+    fn migrate_claude_identity_anchors_preserves_unknown_entries() {
+        let sandbox = TestSandbox::new();
+        let store = sandbox.store();
+        let profile_root = sandbox.root.join("claude-profile");
+        write_claude_oauth_identity(&profile_root, "me@x.io", Some("acc-9"), "org-z");
+        let account = claude_reference(profile_root, "org-z", "org-z");
+        write_mixed_index(&store, &account);
+
+        assert_eq!(store.migrate_claude_identity_anchors().unwrap(), 1);
+        let values: Vec<serde_json::Value> =
+            serde_json::from_str(&fs::read_to_string(store.index_path()).unwrap()).unwrap();
+        assert!(values.contains(&unknown_account()));
+    }
+
+    #[test]
+    fn migrate_claude_identity_anchors_is_idempotent_and_ignores_non_claude() {
+        let sandbox = TestSandbox::new();
+        let store = sandbox.store();
+        let profile_root = sandbox.root.join("claude-profile");
+        write_claude_oauth_identity(&profile_root, "me@x.io", Some("acc-9"), "org-z");
+        let migrated = claude_reference(profile_root, "acc-9", "me@x.io");
+        let non_claude = Account {
+            id: "codex-account".into(),
+            provider: Provider::Codex,
+            label: "codex@example.com".into(),
+            auth_source: AuthSource::CliProfile {
+                profile_root: sandbox.root.join("codex-profile"),
+                ownership: ProfileOwnership::External,
+                expected_identity: "codex@example.com".into(),
+            },
+        };
+        store.initialize_v2().unwrap();
+        store
+            .save_index(&[migrated.clone(), non_claude.clone()])
+            .unwrap();
+
+        assert_eq!(store.migrate_claude_identity_anchors().unwrap(), 0);
+        assert_eq!(store.list(), vec![migrated, non_claude]);
     }
 
     #[test]
