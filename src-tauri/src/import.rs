@@ -434,13 +434,22 @@ pub fn load_grok_env_auth() -> Result<ImportedAccount, String> {
     if team_id.trim().is_empty() {
         return Err("XAI_TEAM_ID is empty".into());
     }
-    Ok(grok_imported_account(&key, &team_id))
+    grok_imported_account(&key, &team_id)
 }
 
 #[cfg(feature = "edition-pro")]
-fn grok_imported_account(key: &str, team_id: &str) -> ImportedAccount {
+fn grok_imported_account(key: &str, team_id: &str) -> Result<ImportedAccount, String> {
+    use usage_core::fetch::grok::is_valid_team_id;
+
     let team_id = team_id.trim();
-    ImportedAccount {
+    if !is_valid_team_id(team_id) {
+        return Err(format!(
+            "'{team_id}' is not a valid xAI team id (must be a single token with no spaces) — \
+             management-key validation failed and the pasted/`XAI_TEAM_ID` fallback isn't a team id. \
+             Paste your xAI Management Key (and team id on its own line), or set XAI_TEAM_ID."
+        ));
+    }
+    Ok(ImportedAccount {
         label: format!("Grok · team {team_id}"),
         credentials: Credentials {
             access_token: key.trim().to_string(),
@@ -448,7 +457,7 @@ fn grok_imported_account(key: &str, team_id: &str) -> ImportedAccount {
             account_id: Some(team_id.to_string()),
             expires_at: None,
         },
-    }
+    })
 }
 
 #[cfg(feature = "edition-pro")]
@@ -506,7 +515,7 @@ pub async fn import_grok_from_clipboard() -> Result<ImportedAccount, String> {
     }
 
     match validate_grok_management_key(&key).await {
-        Ok(team_id) => Ok(grok_imported_account(&key, &team_id)),
+        Ok(team_id) => grok_imported_account(&key, &team_id),
         Err(validation_err) => {
             let team_id = pasted_team
                 .or_else(|| {
@@ -520,7 +529,7 @@ pub async fn import_grok_from_clipboard() -> Result<ImportedAccount, String> {
                          set XAI_TEAM_ID, or use Import Grok (env vars)"
                     )
                 })?;
-            Ok(grok_imported_account(&key, &team_id))
+            grok_imported_account(&key, &team_id)
         }
     }
 }
@@ -824,6 +833,28 @@ mod tests {
         let (key_only, team_none) = parse_grok_paste("KEY789");
         assert_eq!(key_only, "KEY789");
         assert!(team_none.is_none());
+    }
+
+    #[test]
+    #[cfg(feature = "edition-pro")]
+    fn grok_imported_account_accepts_valid_team_id() {
+        let imported = grok_imported_account("  test-mgmt-key  ", "team-abc").unwrap();
+        assert_eq!(imported.label, "Grok · team team-abc");
+        assert_eq!(imported.credentials.account_id.as_deref(), Some("team-abc"));
+        assert_eq!(imported.credentials.access_token, "test-mgmt-key");
+    }
+
+    #[test]
+    #[cfg(feature = "edition-pro")]
+    fn grok_imported_account_rejects_invalid_team_id() {
+        let err = grok_imported_account(
+            "test-mgmt-key",
+            "Translated Report (Full Report Below)",
+        )
+        .unwrap_err();
+        assert!(err.contains("team id"), "{err}");
+        assert!(grok_imported_account("test-mgmt-key", "").is_err());
+        assert!(grok_imported_account("test-mgmt-key", "  ").is_err());
     }
 
     #[test]

@@ -26,6 +26,15 @@ pub fn team_id_from_validation(root: &Value) -> Option<String> {
         .map(str::to_string)
 }
 
+/// True iff `team_id` is a plausible xAI team/scope id: non-empty after trimming and containing no
+/// internal whitespace. xAI team/scope ids are single tokens (UUID-like or `team-…`); clipboard prose
+/// (e.g. "Translated Report (Full Report Below)") has spaces and must be rejected so a malformed
+/// `/teams/{team_id}/…` request can never be built.
+pub fn is_valid_team_id(team_id: &str) -> bool {
+    let trimmed = team_id.trim();
+    !trimmed.is_empty() && !trimmed.chars().any(char::is_whitespace)
+}
+
 /// Parses clipboard paste text into `(management_key, optional_team_id)`.
 ///
 /// Accepts a single key line, or key + team ID on separate non-empty lines.
@@ -169,6 +178,23 @@ mod tests {
     fn team_id_falls_back_to_deprecated_team_id() {
         let v = json!({ "teamId": "legacy-only" });
         assert_eq!(team_id_from_validation(&v).as_deref(), Some("legacy-only"));
+    }
+
+    #[test]
+    fn validates_plausible_team_ids() {
+        assert!(is_valid_team_id("team-abc123"));
+        assert!(is_valid_team_id("550e8400-e29b-41d4-a716-446655440000"));
+        assert!(is_valid_team_id("scope_9f..."));
+        assert!(is_valid_team_id("  team-abc  "));
+    }
+
+    #[test]
+    fn rejects_invalid_team_ids() {
+        assert!(!is_valid_team_id("Translated Report (Full Report Below)"));
+        assert!(!is_valid_team_id(""));
+        assert!(!is_valid_team_id("   "));
+        assert!(!is_valid_team_id("a b"));
+        assert!(!is_valid_team_id("line1\nline2"));
     }
 
     #[test]
