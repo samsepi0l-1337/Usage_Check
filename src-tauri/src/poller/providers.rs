@@ -206,11 +206,26 @@ pub(super) async fn poll_claude_cli_profile(
         }
     };
     if let Some(creds) = creds {
-        if let Ok(quota) = fetch_claude_quota(client, &creds).await {
-            let email = (!expected_identity.is_empty()).then_some(expected_identity);
-            return CliProfileOutcome::Live(claude_fetch_outcome(quota, email));
+        match fetch_claude_quota(client, &creds).await {
+            Ok(quota) => {
+                let email = (!expected_identity.is_empty()).then_some(expected_identity);
+                return CliProfileOutcome::Live(claude_fetch_outcome(quota, email));
+            }
+            Err(status) => {
+                // Credentials are valid but the live fetch failed (e.g. 429). Prefer a fresh snapshot if
+                // one exists; otherwise surface the transient failure (carrying its HTTP status) so the
+                // last-success cache can serve the previous good value as `stale`, instead of regressing a
+                // working account to `waiting_for_usage`. Mirrors the codex CLI-profile failure mapping.
+                return match read_claude_snapshot_outcome(snapshot_path, expected_identity) {
+                    CliProfileOutcome::WaitingForUsage => {
+                        CliProfileOutcome::Live(FetchOutcome::Failed { status })
+                    }
+                    other => other,
+                };
+            }
         }
     }
+    // No usable credentials: pure snapshot fallback (unchanged).
     read_claude_snapshot_outcome(snapshot_path, expected_identity)
 }
 

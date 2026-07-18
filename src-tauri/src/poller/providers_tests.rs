@@ -1,5 +1,31 @@
 use super::*;
 use tempfile::TempDir;
+
+#[test]
+fn cli_profile_rate_limited_failure_is_assembled_as_rate_limited() {
+    let account = usage_core::account::Account {
+        id: "claude-cli".into(),
+        provider: usage_core::account::Provider::Claude,
+        label: "user@example.com".into(),
+        auth_source: usage_core::account::AuthSource::CliProfile {
+            profile_root: std::path::PathBuf::from("/profile"),
+            ownership: usage_core::account::ProfileOwnership::External,
+            expected_identity: "user@example.com".into(),
+        },
+    };
+    let local = LocalUsage::none(usage_core::models::LocalProvenance::NoLocalProfile);
+
+    let usage = assemble_cli_profile_usage(
+        &account,
+        CliProfileOutcome::Live(FetchOutcome::Failed { status: Some(429) }),
+        local,
+    );
+
+    assert_eq!(usage.status, "rate_limited");
+    assert_eq!(usage.five_hour, None);
+    assert_eq!(usage.week, None);
+}
+
 #[test]
 fn auth_source_claude_snapshot_missing_is_waiting() {
     use std::path::Path;
