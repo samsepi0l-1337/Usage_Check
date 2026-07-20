@@ -18,7 +18,8 @@ rows, Add/Remove account actions, Refresh, and Quit.
 - **UsageCheck Pro** adds **Cursor** (local, Experimental), **Grok** (xAI API
   management-key credits, not consumer SuperGrok), and **Higgsfield**
   (credits via CLI).
-- A background poll refreshes the tray menu every 60 seconds.
+- A background poll refreshes the tray menu every 60 seconds (override with
+  `USAGECHECK_POLL_SECS=<seconds>`, clamped to 15–3600).
 
 ## Free vs Pro editions
 

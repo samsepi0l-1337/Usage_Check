@@ -104,3 +104,24 @@ fn registry_specs_classify_as_expected() {
         );
     }
 }
+
+#[test]
+fn poll_interval_defaults_when_unset_or_invalid() {
+    assert_eq!(poll_interval_secs(None), DEFAULT_POLL_SECS);
+    assert_eq!(poll_interval_secs(Some("")), DEFAULT_POLL_SECS);
+    assert_eq!(poll_interval_secs(Some("abc")), DEFAULT_POLL_SECS);
+    assert_eq!(poll_interval_secs(Some("-5")), DEFAULT_POLL_SECS);
+}
+
+#[test]
+fn poll_interval_parses_and_trims_valid_values() {
+    assert_eq!(poll_interval_secs(Some("120")), 120);
+    assert_eq!(poll_interval_secs(Some("  90  ")), 90);
+}
+
+#[test]
+fn poll_interval_clamps_out_of_range() {
+    assert_eq!(poll_interval_secs(Some("1")), MIN_POLL_SECS);
+    assert_eq!(poll_interval_secs(Some("0")), MIN_POLL_SECS);
+    assert_eq!(poll_interval_secs(Some("999999")), MAX_POLL_SECS);
+}

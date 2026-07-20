@@ -41,8 +41,26 @@ use store::AccountStore;
 #[allow(unused_imports)]
 pub(crate) use menu_actions::{classify_auth_action, AuthAction};
 
-/// Interval between background usage-poll ticks that refresh the tray menu.
-const POLL_INTERVAL: Duration = Duration::from_secs(60);
+/// Default seconds between background usage-poll ticks that refresh the tray.
+const DEFAULT_POLL_SECS: u64 = 60;
+/// Lower/upper clamp for a user-configured poll interval.
+const MIN_POLL_SECS: u64 = 15;
+const MAX_POLL_SECS: u64 = 3600;
+
+/// Resolves the background poll interval from `raw` (the `USAGECHECK_POLL_SECS`
+/// env value): a valid integer is clamped to `[MIN_POLL_SECS, MAX_POLL_SECS]`;
+/// anything missing/invalid falls back to [`DEFAULT_POLL_SECS`].
+fn poll_interval_secs(raw: Option<&str>) -> u64 {
+    raw.and_then(|s| s.trim().parse::<u64>().ok())
+        .map(|secs| secs.clamp(MIN_POLL_SECS, MAX_POLL_SECS))
+        .unwrap_or(DEFAULT_POLL_SECS)
+}
+
+/// Background poll interval, honoring `USAGECHECK_POLL_SECS`.
+fn poll_interval() -> Duration {
+    let raw = std::env::var("USAGECHECK_POLL_SECS").ok();
+    Duration::from_secs(poll_interval_secs(raw.as_deref()))
+}
 
 /// Builds a simple 22×22 bar-chart tray glyph as raw RGBA (no PNG decoder
 /// feature required).
@@ -161,7 +179,7 @@ fn main() {
             // Initial poll + periodic refresh.
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                let mut interval = tokio::time::interval(POLL_INTERVAL);
+                let mut interval = tokio::time::interval(poll_interval());
                 loop {
                     interval.tick().await;
                     menu_actions::refresh_tray(&app_handle).await;
