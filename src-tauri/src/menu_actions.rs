@@ -193,6 +193,14 @@ pub(crate) fn dispatch_auth_action(app: &AppHandle, provider: Provider, method: 
 pub(crate) fn handle_menu_event(app: &AppHandle, id: &str) {
     match id {
         "quit" => app.exit(0),
+        "about" => {}
+        "open-api" => {
+            if let Some(url) = crate::api::public_url() {
+                if let Err(error) = open::that(&url) {
+                    eprintln!("open-api: failed to open {url}: {error}");
+                }
+            }
+        }
         "refresh" => {
             let app2 = app.clone();
             tauri::async_runtime::spawn(async move {

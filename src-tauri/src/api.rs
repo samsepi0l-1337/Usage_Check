@@ -324,6 +324,20 @@ fn is_disabled() -> bool {
     )
 }
 
+/// Localhost base URL for the API on `port` (pure; testable).
+fn format_base_url(port: u16) -> String {
+    format!("http://127.0.0.1:{port}/")
+}
+
+/// The localhost base URL other tools/the tray can open, or `None` when the
+/// API is disabled via env.
+pub(crate) fn public_url() -> Option<String> {
+    if is_disabled() {
+        return None;
+    }
+    Some(format_base_url(configured_port()))
+}
+
 /// Starts the localhost API server on a dedicated thread. No-op when disabled
 /// via env. Bind failures are logged (not fatal) so the tray still runs.
 pub fn spawn(state: ApiState) {

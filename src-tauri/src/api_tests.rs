@@ -120,6 +120,12 @@ fn health_reports_account_count() {
     assert!(v["updated_at"].is_string());
 }
 #[test]
+fn base_url_uses_localhost_and_port() {
+    assert_eq!(format_base_url(5178), "http://127.0.0.1:5178/");
+    assert_eq!(format_base_url(9000), "http://127.0.0.1:9000/");
+}
+
+#[test]
 fn metrics_endpoint_serves_prometheus_text() {
     let state = state_with(&[
         sample(Provider::Codex, "a", Some(42.5), None),

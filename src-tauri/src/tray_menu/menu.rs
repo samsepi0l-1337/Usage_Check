@@ -138,6 +138,24 @@ pub fn build_menu(app: &AppHandle, usages: &[AccountUsage]) -> tauri::Result<Men
         None::<&str>,
     )?)?;
     menu.append(&PredefinedMenuItem::separator(app)?)?;
+    // Informational version row (disabled) + a shortcut to open the local API.
+    menu.append(&MenuItem::with_id(
+        app,
+        "about",
+        format!("{} v{}", edition::product_name(), env!("CARGO_PKG_VERSION")),
+        false,
+        None::<&str>,
+    )?)?;
+    if crate::api::public_url().is_some() {
+        menu.append(&MenuItem::with_id(
+            app,
+            "open-api",
+            "Open Usage API",
+            true,
+            None::<&str>,
+        )?)?;
+    }
+    menu.append(&PredefinedMenuItem::separator(app)?)?;
     menu.append(&MenuItem::with_id(
         app,
         "quit",

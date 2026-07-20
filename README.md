@@ -217,6 +217,11 @@ The tray shows one of these per account (see `src-tauri/src/poller.rs`):
 - `needs_setup` — the CLI or its JSON output is unavailable (e.g. Higgsfield
   CLI not installed).
 
+The tray menu also shows an informational **`<Product Name> v<version>`** row
+(`UsageCheck-Free` or `UsageCheck-Pro` depending on edition) and, unless the
+API is disabled, an **Open Usage API** item that opens the local API index
+(`http://127.0.0.1:<port>/`) in your browser.
+
 Right-click (or use the tray menu) → **Quit UsageCheck** to exit. Accounts can
 be removed individually via the tray's **Remove** submenu; removing a CLI
 Claude account also tears down the status-line bridge from that profile's
