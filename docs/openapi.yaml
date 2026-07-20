@@ -124,6 +124,22 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/AccountsResponse"
+  /v1/alerts:
+    get:
+      tags: [usage]
+      summary: Near-limit alerts
+      description: >
+        Every account/window (and agy pool/window) whose used-percent is at or
+        above the alert threshold (percent; default 90, override with the
+        USAGECHECK_ALERT_THRESHOLD env var, clamped 0–100).
+      operationId: getAlerts
+      responses:
+        "200":
+          description: Windows at or above the threshold
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AlertsResponse"
   /v1/usage.csv:
     get:
       tags: [usage]
@@ -281,6 +297,35 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Account"
+    Alert:
+      type: object
+      required: [provider, account, window, used_percent]
+      properties:
+        provider:
+          $ref: "#/components/schemas/Provider"
+        account:
+          type: string
+        window:
+          type: string
+          enum: ["5h", "7d"]
+        pool:
+          type: [string, "null"]
+          description: agy pool name, when the alert is for a pool window.
+        used_percent:
+          type: number
+    AlertsResponse:
+      type: object
+      required: [threshold, count, alerts]
+      properties:
+        threshold:
+          type: number
+          example: 90
+        count:
+          type: integer
+        alerts:
+          type: array
+          items:
+            $ref: "#/components/schemas/Alert"
     AccountUsage:
       type: object
       required: [id, provider, auth_kind, display_name, status, pools, token_totals]

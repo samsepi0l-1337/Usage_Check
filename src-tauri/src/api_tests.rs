@@ -140,6 +140,22 @@ fn accounts_endpoint_lists_inventory_with_auth_kind() {
 }
 
 #[test]
+fn alerts_endpoint_reports_near_limit_accounts() {
+    std::env::remove_var("USAGECHECK_ALERT_THRESHOLD");
+    let state = state_with(&[
+        sample(Provider::Codex, "hot", Some(96.0), None),
+        sample(Provider::Claude, "cool", Some(20.0), None),
+    ]);
+    let reply = route(&state, "GET", "/v1/alerts");
+    assert_eq!(reply.status, 200);
+    let v: serde_json::Value = serde_json::from_str(&reply.body).unwrap();
+    assert_eq!(v["threshold"], 90.0);
+    assert_eq!(v["count"], 1);
+    assert_eq!(v["alerts"][0]["account"], "hot@example.com");
+    assert!(!reply.body.contains("cool"));
+}
+
+#[test]
 fn usage_dto_includes_auth_kind() {
     let dto = AccountUsageDto::from_usage(&sample(Provider::Codex, "a", Some(1.0), None));
     assert_eq!(dto.auth_kind, "cli_profile");

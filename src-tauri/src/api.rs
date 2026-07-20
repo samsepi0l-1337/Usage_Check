@@ -246,6 +246,12 @@ fn route(state: &ApiState, method: &str, path: &str) -> Reply {
             let resp = state.usage_response();
             serialize(&crate::api_accounts::accounts_response(&resp))
         }
+        "/v1/alerts" => {
+            let resp = state.usage_response();
+            let raw = std::env::var("USAGECHECK_ALERT_THRESHOLD").ok();
+            let threshold = crate::api_alerts::alert_threshold(raw.as_deref());
+            serialize(&crate::api_alerts::alerts_response(&resp, threshold))
+        }
         "/v1/usage.csv" => Reply {
             status: 200,
             content_type: crate::api_csv::CSV_CONTENT_TYPE,
@@ -299,7 +305,7 @@ fn serialize<T: Serialize>(value: &T) -> Reply {
 
 fn index_body() -> String {
     format!(
-        r#"{{"service":"usagecheck-local-api","version":"{}","endpoints":["GET /health","GET /v1/usage","GET /v1/usage/{{provider}}","GET /v1/accounts","GET /v1/usage.csv","GET /metrics","GET /openapi.yaml"]}}"#,
+        r#"{{"service":"usagecheck-local-api","version":"{}","endpoints":["GET /health","GET /v1/usage","GET /v1/usage/{{provider}}","GET /v1/accounts","GET /v1/alerts","GET /v1/usage.csv","GET /metrics","GET /openapi.yaml"]}}"#,
         env!("CARGO_PKG_VERSION")
     )
 }

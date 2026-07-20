@@ -262,6 +262,8 @@ snapshot the tray renders, so it never makes extra provider calls per request.
 - **Never** returns access tokens, refresh tokens, or other credentials.
 - Enabled by default. Disable with `USAGECHECK_API_DISABLE=1`.
 - Default port `5178`; override with `USAGECHECK_API_PORT=<port>`.
+- `GET /v1/alerts` near-limit threshold defaults to `90`%; override with
+  `USAGECHECK_ALERT_THRESHOLD=<percent>` (clamped 0–100).
 
 Endpoints:
 
@@ -271,6 +273,7 @@ Endpoints:
 | `GET /v1/usage`           | Usage snapshot for all accounts               |
 | `GET /v1/usage/{provider}`| Filtered to `codex` \| `claude` \| `agy`      |
 | `GET /v1/accounts`        | Inventory: id/provider/name/status/`auth_kind` |
+| `GET /v1/alerts`          | Windows at/above the alert threshold (near limit) |
 | `GET /v1/usage.csv`       | Flat CSV: one row per account/window (+pools) |
 | `GET /metrics`            | Prometheus text-format `used_percent` gauges  |
 | `GET /openapi.yaml`       | The OpenAPI 3.1 spec for this API             |
