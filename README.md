@@ -262,6 +262,10 @@ snapshot the tray renders, so it never makes extra provider calls per request.
 - **Never** returns access tokens, refresh tokens, or other credentials.
 - Enabled by default. Disable with `USAGECHECK_API_DISABLE=1`.
 - Default port `5178`; override with `USAGECHECK_API_PORT=<port>`.
+- Optional bearer-token auth: set `USAGECHECK_API_TOKEN=<token>` to require
+  `Authorization: Bearer <token>` on every endpoint except the
+  liveness/discovery paths (`/health`, `/`) — i.e. `/v1/*`, `/metrics`, and
+  `/openapi.yaml`. Unset ⇒ open (localhost-only bind is the default protection).
 - `GET /v1/alerts` near-limit threshold defaults to `90`%; override with
   `USAGECHECK_ALERT_THRESHOLD=<percent>` (clamped 0–100).
 

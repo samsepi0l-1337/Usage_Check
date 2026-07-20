@@ -15,7 +15,6 @@ use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use tiny_http::{Header, Response, Server};
 
 use usage_core::account::Provider;
 use usage_core::fetch::agy::AgyQuotaPool;
@@ -209,13 +208,13 @@ impl ApiState {
 // ---------------------------------------------------------------------------
 
 /// A resolved route + the JSON/YAML body and status to serve.
-struct Reply {
-    status: u16,
-    content_type: &'static str,
-    body: String,
+pub(crate) struct Reply {
+    pub(crate) status: u16,
+    pub(crate) content_type: &'static str,
+    pub(crate) body: String,
 }
 
-fn json(status: u16, body: String) -> Reply {
+pub(crate) fn json(status: u16, body: String) -> Reply {
     Reply {
         status,
         content_type: "application/json",
@@ -225,7 +224,7 @@ fn json(status: u16, body: String) -> Reply {
 
 /// Resolves a request `(method, path)` into a response. Pure: takes the state
 /// by reference and does no I/O, so it is unit-testable.
-fn route(state: &ApiState, method: &str, path: &str) -> Reply {
+pub(crate) fn route(state: &ApiState, method: &str, path: &str) -> Reply {
     if method != "GET" {
         return json(
             405,
@@ -327,7 +326,7 @@ fn health_body(state: &ApiState) -> String {
 
 /// Resolves the configured port: `USAGECHECK_API_PORT` if a valid port,
 /// else [`DEFAULT_PORT`].
-fn configured_port() -> u16 {
+pub(crate) fn configured_port() -> u16 {
     std::env::var("USAGECHECK_API_PORT")
         .ok()
         .and_then(|s| s.trim().parse::<u16>().ok())
@@ -336,7 +335,7 @@ fn configured_port() -> u16 {
 }
 
 /// True unless `USAGECHECK_API_DISABLE` is set to a truthy value.
-fn is_disabled() -> bool {
+pub(crate) fn is_disabled() -> bool {
     matches!(
         std::env::var("USAGECHECK_API_DISABLE").ok().as_deref(),
         Some("1") | Some("true") | Some("yes")
@@ -355,41 +354,6 @@ pub(crate) fn public_url() -> Option<String> {
         return None;
     }
     Some(format_base_url(configured_port()))
-}
-
-/// Starts the localhost API server on a dedicated thread. No-op when disabled
-/// via env. Bind failures are logged (not fatal) so the tray still runs.
-pub fn spawn(state: ApiState) {
-    if is_disabled() {
-        return;
-    }
-    let port = configured_port();
-    std::thread::Builder::new()
-        .name("usagecheck-api".into())
-        .spawn(move || {
-            let addr = format!("127.0.0.1:{port}");
-            let server = match Server::http(&addr) {
-                Ok(s) => s,
-                Err(e) => {
-                    eprintln!("api: failed to bind {addr}: {e} (is another instance running?)");
-                    return;
-                }
-            };
-            for request in server.incoming_requests() {
-                // Strip any query string before routing.
-                let path = request.url().split('?').next().unwrap_or("/").to_string();
-                let method = request.method().as_str().to_string();
-                let reply = route(&state, &method, &path);
-                let header =
-                    Header::from_bytes(&b"Content-Type"[..], reply.content_type.as_bytes())
-                        .expect("static content-type header is valid");
-                let response = Response::from_string(reply.body)
-                    .with_status_code(reply.status)
-                    .with_header(header);
-                let _ = request.respond(response);
-            }
-        })
-        .expect("failed to spawn usagecheck-api thread");
 }
 
 #[cfg(test)]

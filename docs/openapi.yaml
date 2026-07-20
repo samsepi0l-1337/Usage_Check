@@ -21,14 +21,25 @@ info:
     - The server binds to `127.0.0.1` only and is never exposed off-host.
     - No credentials, access tokens, or refresh tokens are ever returned.
     - The API is read-only (GET only).
+    - Optional bearer-token auth: set `USAGECHECK_API_TOKEN=<token>` to require
+      `Authorization: Bearer <token>` on every endpoint except the
+      liveness/discovery paths (`/health`, `/`) — i.e. `/v1/*`, `/metrics`, and
+      `/openapi.yaml`. When unset, the API is open (localhost-only bind is the
+      default guard).
 
     ## Enabling / configuring
     - Enabled by default when the tray app runs.
     - `USAGECHECK_API_DISABLE=1` disables the server.
     - `USAGECHECK_API_PORT=<port>` overrides the default port (`5178`).
+    - `USAGECHECK_API_TOKEN=<token>` enables bearer-token auth (see Security).
 servers:
   - url: http://127.0.0.1:5178
     description: Default local bind (override with USAGECHECK_API_PORT)
+# Auth is optional: bearerAuth is enforced only when USAGECHECK_API_TOKEN is
+# set. The empty `{}` requirement expresses "or no auth" (the default).
+security:
+  - bearerAuth: []
+  - {}
 tags:
   - name: meta
     description: Service metadata and discovery
@@ -187,6 +198,13 @@ paths:
               schema:
                 type: string
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: >
+        Optional. Required on data endpoints only when USAGECHECK_API_TOKEN is
+        set; the liveness/discovery paths (/health, /) never require it.
   schemas:
     Provider:
       type: string

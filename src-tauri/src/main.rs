@@ -23,9 +23,11 @@ mod agy_local;
 mod api;
 mod api_accounts;
 mod api_alerts;
+mod api_auth;
 mod api_csv;
 mod api_health;
 mod api_metrics;
+mod api_server;
 mod claude_cli;
 mod claude_statusline;
 mod cli_auth;
@@ -179,7 +181,7 @@ fn main() {
 
             // Local HTTP API (localhost-only) for other agents / MCP / skills.
             // Disabled via USAGECHECK_API_DISABLE=1; port via USAGECHECK_API_PORT.
-            api::spawn(app.state::<api::ApiState>().inner().clone());
+            api_server::spawn(app.state::<api::ApiState>().inner().clone());
 
             // Initial poll + periodic refresh.
             let app_handle = app.handle().clone();

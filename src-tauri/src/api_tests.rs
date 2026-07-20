@@ -224,7 +224,7 @@ fn live_server_round_trip() {
     std::env::set_var("USAGECHECK_API_PORT", "5199");
     std::env::remove_var("USAGECHECK_API_DISABLE");
     let state = state_with(&[sample(Provider::Codex, "a", Some(42.0), None)]);
-    spawn(state);
+    crate::api_server::spawn(state);
     std::thread::sleep(std::time::Duration::from_millis(300));
     let mut stream = TcpStream::connect("127.0.0.1:5199").unwrap();
     stream
