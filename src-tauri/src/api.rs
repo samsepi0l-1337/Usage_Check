@@ -189,12 +189,15 @@ impl ApiState {
         resp
     }
 
-    fn account_count(&self) -> usize {
-        self.inner.lock().map(|g| g.accounts.len()).unwrap_or(0)
-    }
-
-    fn updated_at(&self) -> Option<DateTime<Utc>> {
-        self.inner.lock().ok().and_then(|g| g.updated_at)
+    /// Snapshot inputs for `/health`: publish timestamp + each account's status.
+    fn health_inputs(&self) -> (Option<DateTime<Utc>>, Vec<String>) {
+        match self.inner.lock() {
+            Ok(g) => (
+                g.updated_at,
+                g.accounts.iter().map(|a| a.status.clone()).collect(),
+            ),
+            Err(_) => (None, Vec::new()),
+        }
     }
 }
 
@@ -295,15 +298,13 @@ fn index_body() -> String {
 }
 
 fn health_body(state: &ApiState) -> String {
-    let updated_at = match state.updated_at() {
-        Some(ts) => format!("\"{}\"", ts.to_rfc3339()),
-        None => "null".to_string(),
-    };
-    format!(
-        r#"{{"status":"ok","version":"{}","updated_at":{},"account_count":{}}}"#,
+    let (updated_at, statuses) = state.health_inputs();
+    let status_refs: Vec<&str> = statuses.iter().map(String::as_str).collect();
+    crate::api_health::health_body(
         env!("CARGO_PKG_VERSION"),
         updated_at,
-        state.account_count()
+        &status_refs,
+        Utc::now(),
     )
 }
 

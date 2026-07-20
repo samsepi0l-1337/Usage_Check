@@ -267,7 +267,7 @@ Endpoints:
 
 | Method & path             | Description                                   |
 | ------------------------- | --------------------------------------------- |
-| `GET /health`             | Service status, version, last-updated, count  |
+| `GET /health`             | Status, version, last-updated, snapshot age, per-status counts |
 | `GET /v1/usage`           | Usage snapshot for all accounts               |
 | `GET /v1/usage/{provider}`| Filtered to `codex` \| `claude` \| `agy`      |
 | `GET /v1/usage.csv`       | Flat CSV: one row per account/window (+pools) |

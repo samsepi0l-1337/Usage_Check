@@ -118,6 +118,9 @@ fn health_reports_account_count() {
     assert_eq!(v["status"], "ok");
     assert_eq!(v["account_count"], 1);
     assert!(v["updated_at"].is_string());
+    // Enriched fields: freshly published snapshot is ~0s stale, one ok account.
+    assert!(v["stale_seconds"].is_number());
+    assert_eq!(v["status_counts"]["ok"], 1);
 }
 #[test]
 fn csv_endpoint_serves_text_csv() {

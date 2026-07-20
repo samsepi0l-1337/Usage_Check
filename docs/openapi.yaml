@@ -64,7 +64,9 @@ paths:
                 status: ok
                 version: "0.1.1"
                 updated_at: "2026-07-10T03:41:00Z"
+                stale_seconds: 12
                 account_count: 3
+                status_counts: { ok: 2, stale: 1 }
   /v1/usage:
     get:
       tags: [usage]
@@ -334,9 +336,19 @@ components:
         updated_at:
           type: [string, "null"]
           format: date-time
+        stale_seconds:
+          type: [integer, "null"]
+          description: Age of the served snapshot in seconds; null before the first poll.
+          example: 12
         account_count:
           type: integer
           example: 3
+        status_counts:
+          type: object
+          additionalProperties:
+            type: integer
+          description: Count of accounts by status string.
+          example: { ok: 2, stale: 1 }
     Error:
       type: object
       required: [error, message]

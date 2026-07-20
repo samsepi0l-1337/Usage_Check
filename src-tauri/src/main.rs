@@ -22,6 +22,7 @@ use usage_core::{
 mod agy_local;
 mod api;
 mod api_csv;
+mod api_health;
 mod api_metrics;
 mod claude_cli;
 mod claude_statusline;
