@@ -270,6 +270,7 @@ Endpoints:
 | `GET /health`             | Status, version, last-updated, snapshot age, per-status counts |
 | `GET /v1/usage`           | Usage snapshot for all accounts               |
 | `GET /v1/usage/{provider}`| Filtered to `codex` \| `claude` \| `agy`      |
+| `GET /v1/accounts`        | Inventory: id/provider/name/status/`auth_kind` |
 | `GET /v1/usage.csv`       | Flat CSV: one row per account/window (+pools) |
 | `GET /metrics`            | Prometheus text-format `used_percent` gauges  |
 | `GET /openapi.yaml`       | The OpenAPI 3.1 spec for this API             |

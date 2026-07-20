@@ -15,6 +15,7 @@ fn dto(provider: Provider, name: &str, five: Option<f64>, week: Option<f64>) -> 
     AccountUsageDto {
         id: name.into(),
         provider,
+        auth_kind: "cli_profile",
         display_name: name.into(),
         plan: None,
         status: "ok".into(),

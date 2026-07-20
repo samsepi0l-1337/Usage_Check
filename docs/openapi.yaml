@@ -109,6 +109,21 @@ paths:
               example:
                 error: unknown_provider
                 message: "unknown provider 'foo' (expected codex, claude, or agy)"
+  /v1/accounts:
+    get:
+      tags: [usage]
+      summary: Account inventory
+      description: >
+        A lightweight list of configured accounts with a non-secret auth-method
+        label (`auth_kind`), without the full usage payload.
+      operationId: getAccounts
+      responses:
+        "200":
+          description: Configured accounts
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccountsResponse"
   /v1/usage.csv:
     get:
       tags: [usage]
@@ -238,9 +253,37 @@ components:
           type: integer
           format: int64
           example: 0
+    AuthKind:
+      type: string
+      enum: [cli_profile, browser_oauth, cursor_database, xai_key, higgsfield_cli]
+      description: Non-secret label for how an account authenticates.
+    Account:
+      type: object
+      required: [id, provider, display_name, status, auth_kind]
+      properties:
+        id:
+          type: string
+        provider:
+          $ref: "#/components/schemas/Provider"
+        display_name:
+          type: string
+        status:
+          $ref: "#/components/schemas/Status"
+        auth_kind:
+          $ref: "#/components/schemas/AuthKind"
+    AccountsResponse:
+      type: object
+      required: [count, accounts]
+      properties:
+        count:
+          type: integer
+        accounts:
+          type: array
+          items:
+            $ref: "#/components/schemas/Account"
     AccountUsage:
       type: object
-      required: [id, provider, display_name, status, pools, token_totals]
+      required: [id, provider, auth_kind, display_name, status, pools, token_totals]
       properties:
         id:
           type: string
@@ -248,6 +291,8 @@ components:
           example: "6f1c2b8e-0a1d-4c33-9f6e-2b7c9d0e1a22"
         provider:
           $ref: "#/components/schemas/Provider"
+        auth_kind:
+          $ref: "#/components/schemas/AuthKind"
         display_name:
           type: string
           description: Email or plan-aware account name.

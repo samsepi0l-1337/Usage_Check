@@ -95,6 +95,8 @@ impl TokenTotalsDto {
 pub struct AccountUsageDto {
     pub id: String,
     pub provider: Provider,
+    /// Non-secret label for how the account authenticates (e.g. cli_profile).
+    pub auth_kind: &'static str,
     pub display_name: String,
     pub plan: Option<String>,
     pub status: String,
@@ -112,6 +114,7 @@ impl AccountUsageDto {
         AccountUsageDto {
             id: u.account.id.clone(),
             provider: u.account.provider,
+            auth_kind: crate::api_accounts::auth_kind(&u.account.auth_source),
             display_name: u.display_name.clone(),
             plan: u.plan.clone(),
             status: u.status.clone(),
@@ -239,6 +242,10 @@ fn route(state: &ApiState, method: &str, path: &str) -> Reply {
             body: OPENAPI_YAML.to_string(),
         },
         "/v1/usage" => serialize(&state.usage_response()),
+        "/v1/accounts" => {
+            let resp = state.usage_response();
+            serialize(&crate::api_accounts::accounts_response(&resp))
+        }
         "/v1/usage.csv" => Reply {
             status: 200,
             content_type: crate::api_csv::CSV_CONTENT_TYPE,
@@ -292,7 +299,7 @@ fn serialize<T: Serialize>(value: &T) -> Reply {
 
 fn index_body() -> String {
     format!(
-        r#"{{"service":"usagecheck-local-api","version":"{}","endpoints":["GET /health","GET /v1/usage","GET /v1/usage/{{provider}}","GET /v1/usage.csv","GET /metrics","GET /openapi.yaml"]}}"#,
+        r#"{{"service":"usagecheck-local-api","version":"{}","endpoints":["GET /health","GET /v1/usage","GET /v1/usage/{{provider}}","GET /v1/accounts","GET /v1/usage.csv","GET /metrics","GET /openapi.yaml"]}}"#,
         env!("CARGO_PKG_VERSION")
     )
 }

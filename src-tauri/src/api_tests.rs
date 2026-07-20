@@ -123,6 +123,29 @@ fn health_reports_account_count() {
     assert_eq!(v["status_counts"]["ok"], 1);
 }
 #[test]
+fn accounts_endpoint_lists_inventory_with_auth_kind() {
+    let state = state_with(&[
+        sample(Provider::Codex, "a", Some(10.0), None),
+        sample(Provider::Agy, "b", None, Some(5.0)),
+    ]);
+    let reply = route(&state, "GET", "/v1/accounts");
+    assert_eq!(reply.status, 200);
+    let v: serde_json::Value = serde_json::from_str(&reply.body).unwrap();
+    assert_eq!(v["count"], 2);
+    assert_eq!(v["accounts"][0]["provider"], "codex");
+    // Codex sample uses a CliProfile auth source.
+    assert_eq!(v["accounts"][0]["auth_kind"], "cli_profile");
+    assert_eq!(v["accounts"][1]["auth_kind"], "browser_oauth");
+    assert!(!reply.body.contains("access_token"));
+}
+
+#[test]
+fn usage_dto_includes_auth_kind() {
+    let dto = AccountUsageDto::from_usage(&sample(Provider::Codex, "a", Some(1.0), None));
+    assert_eq!(dto.auth_kind, "cli_profile");
+}
+
+#[test]
 fn csv_endpoint_serves_text_csv() {
     let state = state_with(&[sample(Provider::Codex, "a", Some(42.5), None)]);
     let reply = route(&state, "GET", "/v1/usage.csv");
