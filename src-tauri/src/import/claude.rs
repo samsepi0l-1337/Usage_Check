@@ -1,46 +1,13 @@
-//! Import credentials from CLI config files.
-//!
-//! Codex: `~/.codex/auth.json` (or `$CODEX_HOME/auth.json`)
-//! Claude: macOS Keychain / Windows Credential Manager service
-//!   `Claude Code-credentials` (preferred), then
-//!   `~/.claude/.credentials.json` (or `$CLAUDE_CONFIG_DIR/...`)
-//! Agy: not imported from CLI token DBs — use browser OAuth (`add-agy-oauth`).
-//!
-//! SECURITY: never log/print access_token or refresh_token values.
-
 use std::path::Path;
-#[cfg(any(target_os = "macos", feature = "edition-pro"))]
+#[cfg(target_os = "macos")]
 use std::process::Command;
 
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{TimeZone, Utc};
 use usage_core::account::{Credentials, Provider};
 
-use crate::oauth::chatgpt_account_id_from_id_token;
 use crate::paths;
 
-/// Result of a CLI import: credentials plus a human-readable label
-/// (email when available).
-#[derive(Clone, Debug)]
-pub struct ImportedAccount {
-    pub credentials: Credentials,
-    pub label: String,
-}
-
-/// Extracts `email` from a JWT payload (Codex id_token). Pure — never logs.
-pub fn email_from_jwt(jwt: &str) -> Option<String> {
-    let payload_b64 = jwt.split('.').nth(1)?;
-    let bytes = URL_SAFE_NO_PAD.decode(payload_b64).ok()?;
-    let root: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
-    root.get("email")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-}
-
-fn default_label(provider: Provider) -> String {
-    provider.display_name().to_string()
-}
+use super::{default_label, ImportedAccount};
 
 /// Reads `~/.claude.json` `oauthAccount` (email + accountUuid). Pure file I/O
 /// helper used to label imports and give Claude an upsert identity.
@@ -108,7 +75,7 @@ pub(crate) fn claude_oauth_identity_set_in(
 /// `paths::claude_config_roots()`). Only the default profile may fall back to the OS-wide
 /// `"Claude Code-credentials"` keychain service; managed per-account profiles must not, or they could
 /// adopt a different identity's token. Compares canonicalized paths, falling back to raw equality.
-fn claude_profile_is_default(profile_root: &std::path::Path) -> bool {
+pub(crate) fn claude_profile_is_default(profile_root: &std::path::Path) -> bool {
     let target = std::fs::canonicalize(profile_root).unwrap_or_else(|_| profile_root.to_path_buf());
     paths::claude_config_roots().into_iter().any(|root| {
         let root_canon = std::fs::canonicalize(&root).unwrap_or(root);
@@ -188,63 +155,6 @@ pub fn load_claude_profile_credentials(
         credentials.account_id = account_id;
     }
     Some(credentials)
-}
-/// Pure parser for Codex `auth.json` body. Returns `None` when no usable
-/// token is present. Also returns an optional display email from `id_token`.
-pub fn parse_codex_auth_json(root: &serde_json::Value) -> Option<(Credentials, Option<String>)> {
-    if let Some(tokens) = root.get("tokens") {
-        let access = tokens.get("access_token")?.as_str()?.to_string();
-        if access.is_empty() {
-            return None;
-        }
-        let account_id = tokens
-            .get("account_id")
-            .and_then(|v| v.as_str())
-            .map(str::to_string)
-            .or_else(|| {
-                tokens
-                    .get("id_token")
-                    .and_then(|v| v.as_str())
-                    .and_then(chatgpt_account_id_from_id_token)
-            });
-        let refresh_token = tokens
-            .get("refresh_token")
-            .and_then(|v| v.as_str())
-            .map(str::to_string);
-        let expires_at = tokens
-            .get("expires_at")
-            .and_then(parse_expires_at)
-            .or_else(|| tokens.get("expires").and_then(parse_expires_at));
-        let email = tokens
-            .get("id_token")
-            .and_then(|v| v.as_str())
-            .and_then(email_from_jwt);
-        return Some((
-            Credentials {
-                access_token: access,
-                refresh_token,
-                account_id,
-                expires_at,
-            },
-            email,
-        ));
-    }
-
-    // Fallback: OPENAI_API_KEY style (API key as bearer — may not work for
-    // wham/usage, but matches the Swift reader's behavior).
-    let access = root.get("OPENAI_API_KEY")?.as_str()?.to_string();
-    if access.is_empty() {
-        return None;
-    }
-    Some((
-        Credentials {
-            access_token: access,
-            refresh_token: None,
-            account_id: None,
-            expires_at: None,
-        },
-        None,
-    ))
 }
 
 /// Pure parser for Claude credentials JSON (file or Keychain password blob).
@@ -367,7 +277,7 @@ fn read_claude_from_keychain() -> Option<Credentials> {
     read_claude_from_keychain_service(&service)
 }
 
-fn parse_expires_at(v: &serde_json::Value) -> Option<chrono::DateTime<Utc>> {
+pub(crate) fn parse_expires_at(v: &serde_json::Value) -> Option<chrono::DateTime<Utc>> {
     if let Some(n) = v.as_f64() {
         let secs = if n > 10_000_000_000.0 { n / 1000.0 } else { n };
         return Utc.timestamp_opt(secs as i64, 0).single();
@@ -379,193 +289,3 @@ fn parse_expires_at(v: &serde_json::Value) -> Option<chrono::DateTime<Utc>> {
     }
     None
 }
-/// Loads Codex credentials from `~/.codex/auth.json` (or `$CODEX_HOME`).
-pub fn load_codex_cli_auth() -> Result<ImportedAccount, String> {
-    let path =
-        paths::codex_auth_file().ok_or_else(|| "could not resolve home directory".to_string())?;
-    let data = std::fs::read_to_string(&path).map_err(|_| {
-        format!(
-            "Codex auth not found at {} — run `codex login` first",
-            path.display()
-        )
-    })?;
-    let root: serde_json::Value =
-        serde_json::from_str(&data).map_err(|_| "Codex auth.json is not valid JSON".to_string())?;
-    let (credentials, email) = parse_codex_auth_json(&root)
-        .ok_or_else(|| "Codex auth.json has no usable access_token".to_string())?;
-    Ok(ImportedAccount {
-        label: email.unwrap_or_else(|| default_label(Provider::Codex)),
-        credentials,
-    })
-}
-
-/// Loads credentials for `provider` from the local CLI config.
-/// Agy has no CLI auth import — use browser OAuth (`add-agy-oauth`).
-pub fn import_from_cli(provider: Provider) -> Result<ImportedAccount, String> {
-    match provider {
-        Provider::Agy => Err(
-            "Antigravity is not imported from local CLI token DBs — use Login Antigravity (browser)"
-                .into(),
-        ),
-        Provider::Codex => load_codex_cli_auth(),
-        Provider::Claude => load_claude_cli_auth(),
-        #[cfg(feature = "edition-pro")]
-        Provider::Cursor => crate::cursor_local::load_cursor_local_auth(),
-        #[cfg(feature = "edition-pro")]
-        Provider::Grok => load_grok_env_auth(),
-        #[cfg(feature = "edition-pro")]
-        Provider::Higgsfield => load_higgsfield_cli_auth(),
-    }
-}
-
-#[cfg(feature = "edition-pro")]
-/// xAI Management API credentials from `XAI_MGMT_KEY` + `XAI_TEAM_ID`.
-pub fn load_grok_env_auth() -> Result<ImportedAccount, String> {
-    let key = std::env::var("XAI_MGMT_KEY")
-        .or_else(|_| std::env::var("XAI_MANAGEMENT_KEY"))
-        .map_err(|_| {
-            "set XAI_MGMT_KEY (or XAI_MANAGEMENT_KEY) with your xAI Management Key".to_string()
-        })?;
-    if key.trim().is_empty() {
-        return Err("XAI_MGMT_KEY is empty".into());
-    }
-    let team_id = std::env::var("XAI_TEAM_ID")
-        .map_err(|_| "set XAI_TEAM_ID with your xAI team ID".to_string())?;
-    if team_id.trim().is_empty() {
-        return Err("XAI_TEAM_ID is empty".into());
-    }
-    grok_imported_account(&key, &team_id)
-}
-
-#[cfg(feature = "edition-pro")]
-fn grok_imported_account(key: &str, team_id: &str) -> Result<ImportedAccount, String> {
-    use usage_core::fetch::grok::is_valid_team_id;
-
-    let team_id = team_id.trim();
-    if !is_valid_team_id(team_id) {
-        return Err(format!(
-            "'{team_id}' is not a valid xAI team id (must be a single token with no spaces) — \
-             management-key validation failed and the pasted/`XAI_TEAM_ID` fallback isn't a team id. \
-             Paste your xAI Management Key (and team id on its own line), or set XAI_TEAM_ID."
-        ));
-    }
-    Ok(ImportedAccount {
-        label: format!("Grok · team {team_id}"),
-        credentials: Credentials {
-            access_token: key.trim().to_string(),
-            refresh_token: None,
-            account_id: Some(team_id.to_string()),
-            expires_at: None,
-        },
-    })
-}
-
-#[cfg(feature = "edition-pro")]
-fn read_clipboard_text() -> Result<String, String> {
-    arboard::Clipboard::new()
-        .map_err(|e| format!("clipboard unavailable: {e}"))?
-        .get_text()
-        .map_err(|_| {
-            "clipboard has no text — copy your xAI Management Key, then try again".to_string()
-        })
-}
-
-#[cfg(feature = "edition-pro")]
-/// Validates a Management Key via the official xAI endpoint and resolves team ID.
-pub async fn validate_grok_management_key(key: &str) -> Result<String, String> {
-    use usage_core::fetch::grok::team_id_from_validation;
-
-    let client = reqwest::Client::new();
-    let resp = client
-        .get("https://management-api.x.ai/auth/management-keys/validation")
-        .header("Accept", "application/json")
-        .header("User-Agent", "UsageCheck")
-        .bearer_auth(key.trim())
-        .send()
-        .await
-        .map_err(|e| format!("management key validation request failed: {e}"))?;
-    if !resp.status().is_success() {
-        return Err(format!(
-            "management key validation failed (HTTP {})",
-            resp.status()
-        ));
-    }
-    let body: serde_json::Value = resp
-        .json()
-        .await
-        .map_err(|_| "management key validation response is not valid JSON".to_string())?;
-    team_id_from_validation(&body)
-        .ok_or_else(|| "validation succeeded but response has no team/scope id".to_string())
-}
-
-#[cfg(feature = "edition-pro")]
-/// Imports Grok from the system clipboard: validates the Management Key, or
-/// falls back to a pasted team ID / `XAI_TEAM_ID` when validation cannot
-/// resolve scope.
-pub async fn import_grok_from_clipboard() -> Result<ImportedAccount, String> {
-    use usage_core::fetch::grok::parse_grok_paste;
-
-    let text = read_clipboard_text()?;
-    let (key, pasted_team) = parse_grok_paste(&text);
-    if key.is_empty() {
-        return Err(
-            "clipboard is empty — copy your xAI Management Key, then choose Import Grok (clipboard)"
-                .into(),
-        );
-    }
-
-    match validate_grok_management_key(&key).await {
-        Ok(team_id) => grok_imported_account(&key, &team_id),
-        Err(validation_err) => {
-            let team_id = pasted_team
-                .or_else(|| {
-                    std::env::var("XAI_TEAM_ID")
-                        .ok()
-                        .filter(|s| !s.trim().is_empty())
-                })
-                .ok_or_else(|| {
-                    format!(
-                        "{validation_err} — paste key and team ID on separate lines, \
-                         set XAI_TEAM_ID, or use Import Grok (env vars)"
-                    )
-                })?;
-            grok_imported_account(&key, &team_id)
-        }
-    }
-}
-
-#[cfg(feature = "edition-pro")]
-/// Higgsfield CLI account reference from `higgsfield account status --json`.
-pub fn load_higgsfield_cli_auth() -> Result<ImportedAccount, String> {
-    use usage_core::fetch::higgsfield::parse_higgsfield_account;
-
-    let output = Command::new("higgsfield")
-        .args(["account", "status", "--json"])
-        .output()
-        .map_err(|_| {
-            "Higgsfield CLI unavailable — run `higgsfield auth login` first".to_string()
-        })?;
-    if !output.status.success() {
-        return Err(
-            "Higgsfield CLI status command failed — run `higgsfield auth login` first".into(),
-        );
-    }
-    let root: serde_json::Value = serde_json::from_slice(&output.stdout)
-        .map_err(|_| "Higgsfield CLI status output is not valid JSON".to_string())?;
-    let account = parse_higgsfield_account(&root);
-    Ok(ImportedAccount {
-        label: account
-            .email
-            .unwrap_or_else(|| default_label(Provider::Higgsfield)),
-        credentials: Credentials {
-            access_token: String::new(),
-            refresh_token: None,
-            account_id: None,
-            expires_at: None,
-        },
-    })
-}
-
-#[cfg(test)]
-#[path = "import_tests.rs"]
-mod tests;
