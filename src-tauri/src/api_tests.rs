@@ -120,6 +120,22 @@ fn health_reports_account_count() {
     assert!(v["updated_at"].is_string());
 }
 #[test]
+fn metrics_endpoint_serves_prometheus_text() {
+    let state = state_with(&[
+        sample(Provider::Codex, "a", Some(42.5), None),
+        sample(Provider::Claude, "b", Some(10.0), Some(3.0)),
+    ]);
+    let reply = route(&state, "GET", "/metrics");
+    assert_eq!(reply.status, 200);
+    assert!(reply.content_type.starts_with("text/plain"));
+    assert!(reply.body.contains("usagecheck_account_count 2"));
+    assert!(reply
+        .body
+        .contains("usagecheck_used_percent{provider=\"codex\",account=\"a@example.com\",window=\"5h\"} 42.5"));
+    assert!(!reply.body.contains("access_token"));
+}
+
+#[test]
 fn non_get_is_405() {
     let state = state_with(&[]);
     let reply = route(&state, "POST", "/v1/usage");

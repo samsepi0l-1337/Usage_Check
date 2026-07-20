@@ -265,6 +265,7 @@ Endpoints:
 | `GET /health`             | Service status, version, last-updated, count  |
 | `GET /v1/usage`           | Usage snapshot for all accounts               |
 | `GET /v1/usage/{provider}`| Filtered to `codex` \| `claude` \| `agy`      |
+| `GET /metrics`            | Prometheus text-format `used_percent` gauges  |
 | `GET /openapi.yaml`       | The OpenAPI 3.1 spec for this API             |
 
 All quota figures are **used percent** (`0` = unused, `100` = exhausted),
@@ -278,6 +279,7 @@ Try it:
 curl -s http://127.0.0.1:5178/health
 curl -s http://127.0.0.1:5178/v1/usage | jq
 curl -s http://127.0.0.1:5178/v1/usage/codex | jq
+curl -s http://127.0.0.1:5178/metrics        # Prometheus scrape target
 ```
 
 An MCP server or agent skill can wrap this by fetching `/v1/usage` (or a

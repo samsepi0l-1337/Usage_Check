@@ -107,6 +107,23 @@ paths:
               example:
                 error: unknown_provider
                 message: "unknown provider 'foo' (expected codex, claude, or agy)"
+  /metrics:
+    get:
+      tags: [meta]
+      summary: Prometheus metrics
+      description: >
+        Usage snapshot in Prometheus text-exposition format
+        (text/plain; version=0.0.4): a `usagecheck_account_count` gauge plus one
+        `usagecheck_used_percent` gauge per account/window (and per agy pool),
+        labeled by provider/account. Suitable as a scrape target.
+      operationId: getMetrics
+      responses:
+        "200":
+          description: Prometheus text-format metrics
+          content:
+            text/plain:
+              schema:
+                type: string
   /openapi.yaml:
     get:
       tags: [meta]
