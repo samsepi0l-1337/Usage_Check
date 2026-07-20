@@ -221,7 +221,8 @@ When any account is at or above the alert threshold (default 90%, configurable
 via `USAGECHECK_ALERT_THRESHOLD`), a **⚠ N account(s) near limit** banner
 appears at the top of the tray menu.
 
-The tray menu also shows an informational **`<Product Name> v<version>`** row
+The tray menu also shows an informational **`Updated HH:MM:SS`** row (the last
+poll time, local clock), a **`<Product Name> v<version>`** row
 (`UsageCheck-Free` or `UsageCheck-Pro` depending on edition) and, unless the
 API is disabled, an **Open Usage API** item that opens the local API index
 (`http://127.0.0.1:<port>/`) in your browser.

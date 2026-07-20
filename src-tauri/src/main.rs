@@ -147,7 +147,7 @@ fn main() {
                 eprintln!("startup: claude identity migration skipped: {error}");
             }
 
-            let initial = tray_menu::build_menu(app.handle(), &[])?;
+            let initial = tray_menu::build_menu(app.handle(), &[], None)?;
 
             // macOS + Windows: left-click opens the native usage menu
             // (same Docker-style UX; no separate popup window).

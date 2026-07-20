@@ -1,3 +1,4 @@
+use chrono::{DateTime, Local, Utc};
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem, Submenu},
     AppHandle, Wry,
@@ -94,8 +95,18 @@ pub(crate) fn near_limit_count(usages: &[AccountUsage], threshold: f64) -> usize
         .count()
 }
 
-/// Builds the full tray menu from the latest usage snapshot.
-pub fn build_menu(app: &AppHandle, usages: &[AccountUsage]) -> tauri::Result<Menu<Wry>> {
+/// Formats a poll timestamp as a local `Updated HH:MM:SS` label.
+pub(crate) fn updated_label(updated_at: DateTime<Utc>) -> String {
+    format!("Updated {}", updated_at.with_timezone(&Local).format("%H:%M:%S"))
+}
+
+/// Builds the full tray menu from the latest usage snapshot. `updated_at` is the
+/// poll time shown as an informational row (None for the pre-first-poll menu).
+pub fn build_menu(
+    app: &AppHandle,
+    usages: &[AccountUsage],
+    updated_at: Option<DateTime<Utc>>,
+) -> tauri::Result<Menu<Wry>> {
     let menu = Menu::new(app)?;
 
     // Prominent near-limit banner (disabled row) when any account is at/above
@@ -185,7 +196,16 @@ pub fn build_menu(app: &AppHandle, usages: &[AccountUsage]) -> tauri::Result<Men
         None::<&str>,
     )?)?;
     menu.append(&PredefinedMenuItem::separator(app)?)?;
-    // Informational version row (disabled) + a shortcut to open the local API.
+    // Informational last-updated + version rows (disabled) + open-API shortcut.
+    if let Some(ts) = updated_at {
+        menu.append(&MenuItem::with_id(
+            app,
+            "updated",
+            updated_label(ts),
+            false,
+            None::<&str>,
+        )?)?;
+    }
     menu.append(&MenuItem::with_id(
         app,
         "about",
@@ -214,8 +234,8 @@ pub fn build_menu(app: &AppHandle, usages: &[AccountUsage]) -> tauri::Result<Men
     Ok(menu)
 }
 
-pub fn apply_menu(app: &AppHandle, usages: &[AccountUsage]) {
-    let Ok(menu) = build_menu(app, usages) else {
+pub fn apply_menu(app: &AppHandle, usages: &[AccountUsage], updated_at: Option<DateTime<Utc>>) {
+    let Ok(menu) = build_menu(app, usages, updated_at) else {
         eprintln!("tray: failed to build menu");
         return;
     };

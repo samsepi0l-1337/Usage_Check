@@ -91,6 +91,19 @@
     }
 
     #[test]
+    fn updated_label_formats_local_hms() {
+        use chrono::TimeZone;
+        let ts = chrono::Utc.timestamp_opt(1_700_000_000, 0).single().unwrap();
+        let label = updated_label(ts);
+        assert!(label.starts_with("Updated "));
+        // HH:MM:SS after the prefix (8 chars, colon-separated).
+        let time = label.trim_start_matches("Updated ");
+        let parts: Vec<&str> = time.split(':').collect();
+        assert_eq!(parts.len(), 3, "expected HH:MM:SS, got {time}");
+        assert!(parts.iter().all(|p| p.len() == 2 && p.chars().all(|c| c.is_ascii_digit())));
+    }
+
+    #[test]
     fn near_limit_count_counts_accounts_at_or_above_threshold() {
         let usages = vec![
             usage(Provider::Codex, Some(95.0), None),  // near

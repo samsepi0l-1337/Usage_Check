@@ -14,13 +14,14 @@ pub(crate) async fn refresh_tray(app: &AppHandle) {
     // Synchronous (no `.await`), so the managed-state guard never crosses a
     // suspension point.
     app.state::<crate::api::ApiState>().publish(&snapshot);
+    let updated_at = Some(chrono::Utc::now());
     let app2 = app.clone();
     let _ = app.run_on_main_thread(move || {
         // Runs inside tao's `extern "C"` `send_event`; a panic unwinding across
         // that FFI frame triggers `panic_cannot_unwind` → process abort. Contain it
         // so a malformed snapshot can never take the whole app down.
         if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            crate::tray_menu::apply_menu(&app2, &snapshot);
+            crate::tray_menu::apply_menu(&app2, &snapshot, updated_at);
         }))
         .is_err()
         {
