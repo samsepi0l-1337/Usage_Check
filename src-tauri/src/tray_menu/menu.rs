@@ -62,9 +62,56 @@ fn append_vendor_section(
     Ok(())
 }
 
+/// Highest finite used-percent across an account's windows (5h/week and every
+/// agy pool window), or `None` when the account has no finite usage sample.
+pub(crate) fn account_max_percent(usage: &AccountUsage) -> Option<f64> {
+    let mut windows: Vec<f64> = Vec::new();
+    if let Some(q) = &usage.five_hour {
+        windows.push(q.percent);
+    }
+    if let Some(q) = &usage.week {
+        windows.push(q.percent);
+    }
+    for pool in &usage.pool_breakdown {
+        if let Some(q) = &pool.five_hour {
+            windows.push(q.percent);
+        }
+        if let Some(q) = &pool.week {
+            windows.push(q.percent);
+        }
+    }
+    windows
+        .into_iter()
+        .filter(|p| p.is_finite())
+        .fold(None, |acc, p| Some(acc.map_or(p, |m: f64| m.max(p))))
+}
+
+/// Number of accounts whose highest window is at or above `threshold`.
+pub(crate) fn near_limit_count(usages: &[AccountUsage], threshold: f64) -> usize {
+    usages
+        .iter()
+        .filter(|u| account_max_percent(u).is_some_and(|p| p >= threshold))
+        .count()
+}
+
 /// Builds the full tray menu from the latest usage snapshot.
 pub fn build_menu(app: &AppHandle, usages: &[AccountUsage]) -> tauri::Result<Menu<Wry>> {
     let menu = Menu::new(app)?;
+
+    // Prominent near-limit banner (disabled row) when any account is at/above
+    // the alert threshold (USAGECHECK_ALERT_THRESHOLD, default 90%).
+    let threshold = crate::api_alerts::current_alert_threshold();
+    let near = near_limit_count(usages, threshold);
+    if near > 0 {
+        menu.append(&MenuItem::with_id(
+            app,
+            "near-limit",
+            format!("⚠ {near} account(s) near limit (≥{threshold:.0}%)"),
+            false,
+            None::<&str>,
+        )?)?;
+        menu.append(&PredefinedMenuItem::separator(app)?)?;
+    }
 
     if usages.is_empty() {
         menu.append(&MenuItem::with_id(

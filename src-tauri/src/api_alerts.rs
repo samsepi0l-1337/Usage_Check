@@ -22,6 +22,12 @@ pub(crate) fn alert_threshold(raw: Option<&str>) -> f64 {
         .unwrap_or(DEFAULT_ALERT_THRESHOLD)
 }
 
+/// Resolves the alert threshold from the live `USAGECHECK_ALERT_THRESHOLD` env
+/// value. Single source shared by the `/v1/alerts` route and the tray banner.
+pub(crate) fn current_alert_threshold() -> f64 {
+    alert_threshold(std::env::var("USAGECHECK_ALERT_THRESHOLD").ok().as_deref())
+}
+
 #[derive(Serialize)]
 struct Alert<'a> {
     provider: Provider,

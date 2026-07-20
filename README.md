@@ -217,6 +217,10 @@ The tray shows one of these per account (see `src-tauri/src/poller.rs`):
 - `needs_setup` — the CLI or its JSON output is unavailable (e.g. Higgsfield
   CLI not installed).
 
+When any account is at or above the alert threshold (default 90%, configurable
+via `USAGECHECK_ALERT_THRESHOLD`), a **⚠ N account(s) near limit** banner
+appears at the top of the tray menu.
+
 The tray menu also shows an informational **`<Product Name> v<version>`** row
 (`UsageCheck-Free` or `UsageCheck-Pro` depending on edition) and, unless the
 API is disabled, an **Open Usage API** item that opens the local API index

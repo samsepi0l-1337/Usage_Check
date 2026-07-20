@@ -247,8 +247,7 @@ pub(crate) fn route(state: &ApiState, method: &str, path: &str) -> Reply {
         }
         "/v1/alerts" => {
             let resp = state.usage_response();
-            let raw = std::env::var("USAGECHECK_ALERT_THRESHOLD").ok();
-            let threshold = crate::api_alerts::alert_threshold(raw.as_deref());
+            let threshold = crate::api_alerts::current_alert_threshold();
             serialize(&crate::api_alerts::alerts_response(&resp, threshold))
         }
         "/v1/usage.csv" => Reply {
