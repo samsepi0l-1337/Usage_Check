@@ -270,6 +270,7 @@ Endpoints:
 | `GET /health`             | Service status, version, last-updated, count  |
 | `GET /v1/usage`           | Usage snapshot for all accounts               |
 | `GET /v1/usage/{provider}`| Filtered to `codex` \| `claude` \| `agy`      |
+| `GET /v1/usage.csv`       | Flat CSV: one row per account/window (+pools) |
 | `GET /metrics`            | Prometheus text-format `used_percent` gauges  |
 | `GET /openapi.yaml`       | The OpenAPI 3.1 spec for this API             |
 
@@ -284,6 +285,7 @@ Try it:
 curl -s http://127.0.0.1:5178/health
 curl -s http://127.0.0.1:5178/v1/usage | jq
 curl -s http://127.0.0.1:5178/v1/usage/codex | jq
+curl -s http://127.0.0.1:5178/v1/usage.csv    # CSV for spreadsheets
 curl -s http://127.0.0.1:5178/metrics        # Prometheus scrape target
 ```
 

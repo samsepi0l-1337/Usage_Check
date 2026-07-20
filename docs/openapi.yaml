@@ -107,6 +107,23 @@ paths:
               example:
                 error: unknown_provider
                 message: "unknown provider 'foo' (expected codex, claude, or agy)"
+  /v1/usage.csv:
+    get:
+      tags: [usage]
+      summary: Usage as CSV
+      description: >
+        The current usage snapshot as CSV (text/csv). Header:
+        `provider,account,plan,status,window,pool,used_percent`, then one row
+        per account/window (and per agy pool/window). Fields with commas,
+        quotes, or newlines are RFC-4180 quoted.
+      operationId: getUsageCsv
+      responses:
+        "200":
+          description: CSV export
+          content:
+            text/csv:
+              schema:
+                type: string
   /metrics:
     get:
       tags: [meta]

@@ -120,6 +120,17 @@ fn health_reports_account_count() {
     assert!(v["updated_at"].is_string());
 }
 #[test]
+fn csv_endpoint_serves_text_csv() {
+    let state = state_with(&[sample(Provider::Codex, "a", Some(42.5), None)]);
+    let reply = route(&state, "GET", "/v1/usage.csv");
+    assert_eq!(reply.status, 200);
+    assert!(reply.content_type.starts_with("text/csv"));
+    assert!(reply.body.starts_with("provider,account,plan,status,window,pool,used_percent\n"));
+    assert!(reply.body.contains("codex,a@example.com,,ok,5h,,42.5"));
+    assert!(!reply.body.contains("access_token"));
+}
+
+#[test]
 fn base_url_uses_localhost_and_port() {
     assert_eq!(format_base_url(5178), "http://127.0.0.1:5178/");
     assert_eq!(format_base_url(9000), "http://127.0.0.1:9000/");

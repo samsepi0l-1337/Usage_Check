@@ -236,6 +236,11 @@ fn route(state: &ApiState, method: &str, path: &str) -> Reply {
             body: OPENAPI_YAML.to_string(),
         },
         "/v1/usage" => serialize(&state.usage_response()),
+        "/v1/usage.csv" => Reply {
+            status: 200,
+            content_type: crate::api_csv::CSV_CONTENT_TYPE,
+            body: crate::api_csv::csv_body(&state.usage_response()),
+        },
         "/metrics" => Reply {
             status: 200,
             content_type: crate::api_metrics::METRICS_CONTENT_TYPE,
@@ -284,7 +289,7 @@ fn serialize<T: Serialize>(value: &T) -> Reply {
 
 fn index_body() -> String {
     format!(
-        r#"{{"service":"usagecheck-local-api","version":"{}","endpoints":["GET /health","GET /v1/usage","GET /v1/usage/{{provider}}","GET /metrics","GET /openapi.yaml"]}}"#,
+        r#"{{"service":"usagecheck-local-api","version":"{}","endpoints":["GET /health","GET /v1/usage","GET /v1/usage/{{provider}}","GET /v1/usage.csv","GET /metrics","GET /openapi.yaml"]}}"#,
         env!("CARGO_PKG_VERSION")
     )
 }
