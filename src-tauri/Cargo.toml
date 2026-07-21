@@ -21,11 +21,11 @@ uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 tiny_http = "0.12"
 open = "5"
-sha2 = "0.10"
+sha2 = "0.11"
 base64 = "0.22"
 urlencoding = "2"
-rand = "0.8"
-rusqlite = { version = "0.32", features = ["bundled"], optional = true }
+rand = "0.10"
+rusqlite = { version = "0.40", features = ["bundled"], optional = true }
 arboard = { version = "3", optional = true }
 tauri-plugin-autostart = "2"
 

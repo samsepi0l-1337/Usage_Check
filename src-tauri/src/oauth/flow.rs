@@ -1,5 +1,5 @@
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use rand::RngCore;
+use rand::Rng;
 use sha2::{Digest, Sha256};
 use tiny_http::Server;
 
@@ -9,7 +9,7 @@ use super::ProviderOAuth;
 /// its S256 code challenge. Pure function — no I/O, no logging.
 pub fn make_pkce() -> (String, String) {
     let mut bytes = [0u8; 64];
-    rand::thread_rng().fill_bytes(&mut bytes);
+    rand::rng().fill_bytes(&mut bytes);
     let verifier = URL_SAFE_NO_PAD.encode(bytes);
 
     let mut hasher = Sha256::new();
@@ -24,7 +24,7 @@ pub fn make_pkce() -> (String, String) {
 /// callback. Pure function — no I/O.
 pub fn make_state() -> String {
     let mut bytes = [0u8; 24];
-    rand::thread_rng().fill_bytes(&mut bytes);
+    rand::rng().fill_bytes(&mut bytes);
     URL_SAFE_NO_PAD.encode(bytes)
 }
 
