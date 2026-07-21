@@ -50,10 +50,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Setup Node
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v7
         with:
           node-version: 22
 
@@ -139,7 +139,7 @@ jobs:
 
       - name: Upload macOS artifacts
         if: startsWith(matrix.artifact, 'macos')
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.product_name }}-macos
           path: |
@@ -149,7 +149,7 @@ jobs:
 
       - name: Upload Windows artifacts
         if: startsWith(matrix.artifact, 'windows')
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.product_name }}-windows
           path: |
@@ -163,12 +163,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download artifacts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           path: dist
 
       - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           # Artifacts keep bundle subdirs (dmg/, nsis/, msi/) from upload paths.
           files: |
