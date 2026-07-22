@@ -1,5 +1,33 @@
 use super::*;
+use serde_json::json;
+use std::ffi::OsString;
+use std::path::Path;
 use tempfile::TempDir;
+
+struct ClaudeConfigDirGuard(Option<OsString>);
+
+impl ClaudeConfigDirGuard {
+    fn set(path: &Path) -> Self {
+        let previous = std::env::var_os("CLAUDE_CONFIG_DIR");
+        std::env::set_var("CLAUDE_CONFIG_DIR", path);
+        Self(previous)
+    }
+
+    fn unset() -> Self {
+        let previous = std::env::var_os("CLAUDE_CONFIG_DIR");
+        std::env::remove_var("CLAUDE_CONFIG_DIR");
+        Self(previous)
+    }
+}
+
+impl Drop for ClaudeConfigDirGuard {
+    fn drop(&mut self) {
+        match self.0.take() {
+            Some(previous) => std::env::set_var("CLAUDE_CONFIG_DIR", previous),
+            None => std::env::remove_var("CLAUDE_CONFIG_DIR"),
+        }
+    }
+}
 
 #[test]
 fn cli_profile_rate_limited_failure_is_assembled_as_rate_limited() {
@@ -62,7 +90,12 @@ fn auth_source_claude_snapshot_live() {
 }
 
 #[tokio::test]
+#[allow(clippy::await_holding_lock)] // Process-wide env mutation must remain serialized.
 async fn claude_cli_profile_falls_back_to_snapshot_without_profile_credentials() {
+    let _lock = crate::import::CLAUDE_CONFIG_DIR_ENV_LOCK
+        .lock()
+        .expect("environment lock");
+    let _config = ClaudeConfigDirGuard::unset();
     let temp = TempDir::new().expect("create temp directory");
     let store = crate::store::AccountStore::new_at(temp.path().join("store"));
     let account_id = uuid::Uuid::new_v4().to_string();
@@ -100,6 +133,96 @@ async fn claude_cli_profile_falls_back_to_snapshot_without_profile_credentials()
         .await,
         CliProfileOutcome::WaitingForUsage
     ));
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)] // Process-wide env mutation must remain serialized.
+async fn claude_cli_profile_caches_matching_live_credentials_unchanged_before_snapshot_fallback() {
+    let _lock = crate::import::CLAUDE_CONFIG_DIR_ENV_LOCK
+        .lock()
+        .expect("environment lock");
+    let temp = TempDir::new().expect("create temp directory");
+    let config_root = temp.path().join("default-claude");
+    std::fs::create_dir(&config_root).expect("create default Claude config directory");
+    let _config = ClaudeConfigDirGuard::set(&config_root);
+    let expected_identity = "live-account";
+    let live_access_token = "live-access-token";
+    let live_refresh_token = "live-refresh-token";
+    let expires_at_ms = (Utc::now().timestamp() + 3_600) * 1_000;
+    std::fs::write(
+        config_root.join(".claude.json"),
+        serde_json::to_string(&json!({
+            "oauthAccount": {
+                "emailAddress": "live@example.test",
+                "accountUuid": expected_identity,
+                "organizationUuid": "live-organization"
+            }
+        }))
+        .unwrap(),
+    )
+    .expect("write default Claude identity");
+    std::fs::write(
+        config_root.join(".credentials.json"),
+        serde_json::to_string(&json!({
+            "claudeAiOauth": {
+                "accessToken": live_access_token,
+                "refreshToken": live_refresh_token,
+                "expiresAt": expires_at_ms
+            }
+        }))
+        .unwrap(),
+    )
+    .expect("write default Claude credentials");
+
+    let store = crate::store::AccountStore::new_at(temp.path().join("store"));
+    let account_id = uuid::Uuid::new_v4().to_string();
+    let profile_root = temp.path().join("managed-profile");
+    std::fs::create_dir(&profile_root).expect("create managed profile directory");
+    let snapshot = temp.path().join("snapshot.json");
+    std::fs::write(
+        &snapshot,
+        serde_json::to_string(&json!({
+            "identity": expected_identity,
+            "rate_limits": {
+                "five_hour": { "utilization": 30.0 },
+                "seven_day": { "utilization": 55.0 }
+            }
+        }))
+        .unwrap(),
+    )
+    .expect("write snapshot");
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_millis(1))
+        .build()
+        .expect("build bounded test client");
+
+    let CliProfileOutcome::Live(FetchOutcome::Live {
+        five_hour, week, ..
+    }) = poll_claude_cli_profile(
+        &store,
+        &account_id,
+        &client,
+        &profile_root,
+        expected_identity,
+        &snapshot,
+    )
+    .await
+    else {
+        panic!("expected snapshot fallback after the fake live-token fetch fails");
+    };
+
+    assert_eq!(five_hour.map(|quota| quota.percent), Some(30.0));
+    assert_eq!(week.map(|quota| quota.percent), Some(55.0));
+    let cached = store
+        .cli_profile_credentials(&account_id)
+        .expect("live credentials cached before fetch fallback");
+    assert_eq!(cached.access_token, live_access_token);
+    assert_eq!(cached.refresh_token, None);
+    assert_eq!(cached.account_id.as_deref(), Some(expected_identity));
+    assert_eq!(
+        cached.expires_at.map(|expiry| expiry.timestamp_millis()),
+        Some(expires_at_ms)
+    );
 }
 
 #[test]

@@ -157,6 +157,40 @@ pub fn load_claude_profile_credentials(
     Some(credentials)
 }
 
+/// Identity-safe read of the live default Claude Code login credentials.
+/// Returns credentials only when a default config root's `.claude.json`
+/// identity matches the non-empty `expected_identity`. The live keychain is
+/// read-only; callers must never refresh, rotate, or write these credentials.
+pub fn load_claude_default_login_credentials(expected_identity: &str) -> Option<Credentials> {
+    let expected = expected_identity.trim();
+    if expected.is_empty() {
+        return None;
+    }
+
+    for root in paths::claude_config_roots() {
+        let (email, account_id, org_uuid) = claude_oauth_identity_set_in(&root);
+        if email.as_deref() != Some(expected)
+            && account_id.as_deref() != Some(expected)
+            && org_uuid.as_deref() != Some(expected)
+        {
+            continue;
+        }
+
+        let Some(mut credentials) =
+            read_claude_from_keychain_service(&paths::claude_keychain_service_name())
+                .or_else(|| read_claude_credentials_file(&root.join(".credentials.json")))
+        else {
+            continue;
+        };
+        if credentials.account_id.is_none() {
+            credentials.account_id = account_id;
+        }
+        return Some(credentials);
+    }
+
+    None
+}
+
 /// Pure parser for Claude credentials JSON (file or Keychain password blob).
 /// Accepts either `{ "claudeAiOauth": { ... } }` or a flat `{ "accessToken": ... }`
 /// object (Claude Code uses both shapes).

@@ -20,10 +20,13 @@ mod grok;
 #[cfg(feature = "edition-pro")]
 mod higgsfield;
 
+#[cfg(test)]
+pub(crate) static CLAUDE_CONFIG_DIR_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[allow(unused_imports)]
 pub(crate) use claude::{
-    load_claude_profile_credentials, claude_oauth_identity_set_in, load_claude_cli_auth,
-    parse_claude_credentials_json,
+    claude_oauth_identity_set_in, load_claude_cli_auth, load_claude_default_login_credentials,
+    load_claude_profile_credentials, parse_claude_credentials_json,
 };
 #[cfg(test)]
 use claude::claude_profile_is_default;

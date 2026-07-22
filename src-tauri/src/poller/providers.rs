@@ -200,6 +200,22 @@ async fn seed_claude_creds_from_keychain(
     }
 }
 
+/// Identity-checked live-default-login read, bounded so a stalled auth prompt
+/// degrades gracefully. Returned credentials retain live-keychain provenance
+/// and must never be passed to the refresh flow.
+async fn load_live_claude_creds_from_keychain(expected_identity: &str) -> Option<Credentials> {
+    let ident = expected_identity.to_string();
+    match tokio::time::timeout(
+        Duration::from_secs(5),
+        tokio::task::spawn_blocking(move || import::load_claude_default_login_credentials(&ident)),
+    )
+    .await
+    {
+        Ok(Ok(creds)) => creds.filter(|c| !c.access_token.is_empty()),
+        _ => None,
+    }
+}
+
 /// Refreshes near/at expiry (v0.1.0 `maybe_refresh`) persisting the rotated copy
 /// to the app-owned cache, then fetches live quota. Keychain never written.
 /// `Ok(Live)` on 2xx; `Err(status)` on fetch failure (caller maps to snapshot).
@@ -235,9 +251,22 @@ async fn refresh_and_fetch_claude(
     }
 }
 
-/// Polls a Claude CliProfile account through an app-owned refreshable copy.
-/// Restores the v0.1.0 refresh behavior while keeping the Claude Code keychain
-/// read-only; live-fetch auth failures re-seed once before snapshot fallback.
+fn claude_snapshot_after_fetch_failure(
+    snapshot_path: &Path,
+    expected_identity: &str,
+    status: Option<u16>,
+) -> CliProfileOutcome {
+    match read_claude_snapshot_outcome(snapshot_path, expected_identity) {
+        CliProfileOutcome::WaitingForUsage => {
+            CliProfileOutcome::Live(FetchOutcome::Failed { status })
+        }
+        other => other,
+    }
+}
+
+/// Polls a Claude CliProfile account by first riding an identity-matching live
+/// Claude Code login read-only, then falling back to the app-owned refreshable
+/// copy and snapshot paths.
 pub(super) async fn poll_claude_cli_profile(
     store: &AccountStore,
     account_id: &str,
@@ -246,14 +275,58 @@ pub(super) async fn poll_claude_cli_profile(
     expected_identity: &str,
     snapshot_path: &Path,
 ) -> CliProfileOutcome {
-    let creds = match store
-        .cli_profile_credentials(account_id)
-        .filter(|c| !c.access_token.is_empty())
-    {
+    // Step A: ride the identity-matching Claude Code login read-only. This
+    // credential is never sent through `refresh_and_fetch_claude`.
+    let live_creds = load_live_claude_creds_from_keychain(expected_identity).await;
+    let mut live_fetch_status = None;
+    if let Some(live) = live_creds.as_ref().filter(|credentials| {
+        credentials
+            .expires_at
+            .as_ref()
+            .is_none_or(|expires_at| expires_at > &Utc::now())
+    }) {
+        // Cache the live token WITHOUT its refresh_token so the app-owned path can never rotate a
+        // grant Claude Code CLI owns (read-only-ride invariant, structural).
+        let cached_live = Credentials {
+            refresh_token: None,
+            ..live.clone()
+        };
+        match store.set_cli_profile_credentials(account_id, &cached_live) {
+            Ok(()) => {}
+            Err(error) => {
+                eprintln!("failed to persist cli-token-cache/{account_id}.json: {error}")
+            }
+        }
+        match fetch_claude_quota(client, live).await {
+            Ok(quota) => {
+                let email = (!expected_identity.is_empty()).then_some(expected_identity);
+                return CliProfileOutcome::Live(claude_fetch_outcome(quota, email));
+            }
+            Err(status) => live_fetch_status = Some(status),
+        }
+    }
+
+    // Step B: retain the app-owned cache/seed/refresh flow. When a matching
+    // live login exists, do not reinterpret the just-cached live token as an
+    // app-owned refreshable copy. A distinct per-profile credential may still
+    // seed the existing app-owned path.
+    let cached = if live_creds.is_some() {
+        None
+    } else {
+        store
+            .cli_profile_credentials(account_id)
+            .filter(|c| !c.access_token.is_empty())
+    };
+    let creds = match cached {
         Some(cached) => Some(cached),
         None => {
-            let seeded =
-                seed_claude_creds_from_keychain(profile_root, expected_identity).await;
+            let seeded = seed_claude_creds_from_keychain(profile_root, expected_identity)
+                .await
+                .filter(|seed| {
+                    live_creds
+                        .as_ref()
+                        .is_none_or(|live| seed.access_token.as_str() != live.access_token.as_str())
+                });
             if let Some(seed) = &seeded {
                 match store.set_cli_profile_credentials(account_id, seed) {
                     Ok(()) => {}
@@ -273,7 +346,13 @@ pub(super) async fn poll_claude_cli_profile(
             Err(status) => {
                 if matches!(status, Some(401) | Some(403)) {
                     if let Some(reseed) =
-                        seed_claude_creds_from_keychain(profile_root, expected_identity).await
+                        seed_claude_creds_from_keychain(profile_root, expected_identity)
+                            .await
+                            .filter(|seed| {
+                                live_creds.as_ref().is_none_or(|live| {
+                                    seed.access_token.as_str() != live.access_token.as_str()
+                                })
+                            })
                     {
                         match store.set_cli_profile_credentials(account_id, &reseed) {
                             Ok(()) => {}
@@ -295,16 +374,20 @@ pub(super) async fn poll_claude_cli_profile(
                         }
                     }
                 }
-                return match read_claude_snapshot_outcome(snapshot_path, expected_identity) {
-                    CliProfileOutcome::WaitingForUsage => {
-                        CliProfileOutcome::Live(FetchOutcome::Failed { status })
-                    }
-                    other => other,
-                };
+                return claude_snapshot_after_fetch_failure(
+                    snapshot_path,
+                    expected_identity,
+                    status,
+                );
             }
         }
     }
-    read_claude_snapshot_outcome(snapshot_path, expected_identity)
+    match live_fetch_status {
+        Some(status) => {
+            claude_snapshot_after_fetch_failure(snapshot_path, expected_identity, status)
+        }
+        None => read_claude_snapshot_outcome(snapshot_path, expected_identity),
+    }
 }
 
 /// Maps a shared CLI-profile outcome to an `AccountUsage`, stamping the

@@ -1,6 +1,53 @@
 use super::*;
 use serde_json::json;
+use std::ffi::OsString;
+use std::path::Path;
 use tempfile::TempDir;
+
+struct ClaudeConfigDirGuard(Option<OsString>);
+
+impl ClaudeConfigDirGuard {
+    fn set(path: &Path) -> Self {
+        let previous = std::env::var_os("CLAUDE_CONFIG_DIR");
+        std::env::set_var("CLAUDE_CONFIG_DIR", path);
+        Self(previous)
+    }
+}
+
+impl Drop for ClaudeConfigDirGuard {
+    fn drop(&mut self) {
+        match self.0.take() {
+            Some(previous) => std::env::set_var("CLAUDE_CONFIG_DIR", previous),
+            None => std::env::remove_var("CLAUDE_CONFIG_DIR"),
+        }
+    }
+}
+
+fn write_claude_default_login(root: &Path) {
+    std::fs::write(
+        root.join(".claude.json"),
+        serde_json::to_string(&json!({
+            "oauthAccount": {
+                "emailAddress": "live@example.test",
+                "accountUuid": "live-account",
+                "organizationUuid": "live-organization"
+            }
+        }))
+        .unwrap(),
+    )
+    .expect("write default Claude identity");
+    std::fs::write(
+        root.join(".credentials.json"),
+        serde_json::to_string(&json!({
+            "claudeAiOauth": {
+                "accessToken": "live-access-token",
+                "refreshToken": "live-refresh-token"
+            }
+        }))
+        .unwrap(),
+    )
+    .expect("write default Claude credentials");
+}
 
 #[test]
 fn parses_codex_tokens_block() {
@@ -192,6 +239,51 @@ fn claude_profile_credentials_accept_matching_organization_uuid_from_file() {
         .expect("organization-matching profile credentials");
     assert!(!credentials.access_token.is_empty());
     assert_eq!(credentials.account_id.as_deref(), Some("profile-account"));
+}
+
+#[test]
+fn claude_default_login_credentials_accept_each_matching_identity_from_file() {
+    let _lock = crate::import::CLAUDE_CONFIG_DIR_ENV_LOCK
+        .lock()
+        .expect("environment lock");
+    let config_root = TempDir::new().expect("create default Claude config directory");
+    let _config = ClaudeConfigDirGuard::set(config_root.path());
+    write_claude_default_login(config_root.path());
+
+    for expected_identity in ["live@example.test", "live-account", "live-organization"] {
+        let credentials = load_claude_default_login_credentials(expected_identity)
+            .expect("identity-matching default Claude credentials");
+        assert_eq!(credentials.access_token, "live-access-token");
+        assert_eq!(
+            credentials.refresh_token.as_deref(),
+            Some("live-refresh-token")
+        );
+        assert_eq!(credentials.account_id.as_deref(), Some("live-account"));
+    }
+}
+
+#[test]
+fn claude_default_login_credentials_reject_identity_mismatch() {
+    let _lock = crate::import::CLAUDE_CONFIG_DIR_ENV_LOCK
+        .lock()
+        .expect("environment lock");
+    let config_root = TempDir::new().expect("create default Claude config directory");
+    let _config = ClaudeConfigDirGuard::set(config_root.path());
+    write_claude_default_login(config_root.path());
+
+    assert!(load_claude_default_login_credentials("different-account").is_none());
+}
+
+#[test]
+fn claude_default_login_credentials_reject_empty_expected_identity() {
+    let _lock = crate::import::CLAUDE_CONFIG_DIR_ENV_LOCK
+        .lock()
+        .expect("environment lock");
+    let config_root = TempDir::new().expect("create default Claude config directory");
+    let _config = ClaudeConfigDirGuard::set(config_root.path());
+    write_claude_default_login(config_root.path());
+
+    assert!(load_claude_default_login_credentials("  ").is_none());
 }
 
 #[test]
