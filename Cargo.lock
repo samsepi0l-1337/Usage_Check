@@ -4323,7 +4323,7 @@ dependencies = [
 
 [[package]]
 name = "usage-app"
-version = "0.1.23"
+version = "0.1.24"
 dependencies = [
  "arboard",
  "base64 0.22.1",
