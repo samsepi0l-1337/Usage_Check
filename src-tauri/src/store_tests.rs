@@ -253,6 +253,37 @@ fn remove_preserves_unknown_provider_entries() {
 }
 
 #[test]
+fn remove_deletes_cli_profile_token_cache() {
+    let sandbox = TestSandbox::new();
+    let store = sandbox.store();
+    let account = store
+        .add_reference(
+            Provider::Claude,
+            "claude@example.com".into(),
+            AuthSource::CliProfile {
+                profile_root: "/profiles/claude".into(),
+                ownership: ProfileOwnership::External,
+                expected_identity: "claude@example.com".into(),
+            },
+        )
+        .unwrap();
+    store
+        .set_cli_profile_credentials(&account.id, &credentials("x"))
+        .unwrap();
+    let cache_path = sandbox
+        .root
+        .join("UsageCheck")
+        .join("cli-token-cache")
+        .join(format!("{}.json", account.id));
+    assert!(cache_path.exists());
+
+    assert_eq!(store.remove(&account.id).unwrap(), Some(account.clone()));
+
+    assert!(store.cli_profile_credentials(&account.id).is_none());
+    assert!(!cache_path.exists());
+}
+
+#[test]
 fn partitioned_read_rejects_genuine_corruption() {
     let sandbox = TestSandbox::new();
     let store = sandbox.store();

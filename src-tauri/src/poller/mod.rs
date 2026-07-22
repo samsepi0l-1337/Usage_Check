@@ -83,6 +83,8 @@ pub async fn poll_all(store: &AccountStore) -> Vec<AccountUsage> {
                         ..
                     } => {
                         let outcome = poll_claude_cli_profile(
+                            store,
+                            &account.id,
                             &client,
                             profile_root,
                             expected_identity,

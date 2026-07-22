@@ -179,43 +179,122 @@ pub(super) fn read_claude_snapshot_outcome(
     })
 }
 
-/// Polls a Claude CliProfile account: PRIMARY = identity-safe local credentials → live HTTP quota;
-/// FALLBACK = status-line snapshot. Restores pre-30f525d "read local claude values → show usage".
+/// Identity-checked keychain read, bounded so a stalled auth prompt degrades
+/// gracefully (keychain read runs off the async worker, 5s ceiling).
+async fn seed_claude_creds_from_keychain(
+    profile_root: &Path,
+    expected_identity: &str,
+) -> Option<Credentials> {
+    let root = profile_root.to_path_buf();
+    let ident = expected_identity.to_string();
+    match tokio::time::timeout(
+        Duration::from_secs(5),
+        tokio::task::spawn_blocking(move || {
+            import::load_claude_profile_credentials(&root, &ident)
+        }),
+    )
+    .await
+    {
+        Ok(Ok(creds)) => creds.filter(|c| !c.access_token.is_empty()),
+        _ => None,
+    }
+}
+
+/// Refreshes near/at expiry (v0.1.0 `maybe_refresh`) persisting the rotated copy
+/// to the app-owned cache, then fetches live quota. Keychain never written.
+/// `Ok(Live)` on 2xx; `Err(status)` on fetch failure (caller maps to snapshot).
+async fn refresh_and_fetch_claude(
+    store: &AccountStore,
+    account_id: &str,
+    client: &reqwest::Client,
+    mut creds: Credentials,
+    expected_identity: &str,
+    force_refresh: bool,
+) -> Result<CliProfileOutcome, Option<u16>> {
+    if (force_refresh && creds.refresh_token.is_some())
+        || crate::oauth::should_refresh(creds.expires_at, Utc::now(), REFRESH_THRESHOLD)
+    {
+        if let Ok(refreshed) =
+            crate::oauth::refresh_access_token(Provider::Claude, &creds).await
+        {
+            match store.set_cli_profile_credentials(account_id, &refreshed) {
+                Ok(()) => {}
+                Err(error) => {
+                    eprintln!("failed to persist cli-token-cache/{account_id}.json: {error}")
+                }
+            }
+            creds = refreshed;
+        }
+    }
+    match fetch_claude_quota(client, &creds).await {
+        Ok(quota) => {
+            let email = (!expected_identity.is_empty()).then_some(expected_identity);
+            Ok(CliProfileOutcome::Live(claude_fetch_outcome(quota, email)))
+        }
+        Err(status) => Err(status),
+    }
+}
+
+/// Polls a Claude CliProfile account through an app-owned refreshable copy.
+/// Restores the v0.1.0 refresh behavior while keeping the Claude Code keychain
+/// read-only; live-fetch auth failures re-seed once before snapshot fallback.
 pub(super) async fn poll_claude_cli_profile(
+    store: &AccountStore,
+    account_id: &str,
     client: &reqwest::Client,
     profile_root: &Path,
     expected_identity: &str,
     snapshot_path: &Path,
 ) -> CliProfileOutcome {
-    // The credential read hits the OS keychain (security CLI / keyring crate), which can block on an
-    // authorization prompt. Run it off the async worker and bound it, so a stalled read degrades to the
-    // snapshot fallback instead of freezing the whole sequential poll.
-    let creds = {
-        let root = profile_root.to_path_buf();
-        let ident = expected_identity.to_string();
-        match tokio::time::timeout(
-            Duration::from_secs(5),
-            tokio::task::spawn_blocking(move || {
-                import::load_claude_profile_credentials(&root, &ident)
-            }),
-        )
-        .await
-        {
-            Ok(Ok(creds)) => creds,
-            _ => None,
+    let creds = match store
+        .cli_profile_credentials(account_id)
+        .filter(|c| !c.access_token.is_empty())
+    {
+        Some(cached) => Some(cached),
+        None => {
+            let seeded =
+                seed_claude_creds_from_keychain(profile_root, expected_identity).await;
+            if let Some(seed) = &seeded {
+                match store.set_cli_profile_credentials(account_id, seed) {
+                    Ok(()) => {}
+                    Err(error) => {
+                        eprintln!("failed to persist cli-token-cache/{account_id}.json: {error}")
+                    }
+                }
+            }
+            seeded
         }
     };
     if let Some(creds) = creds {
-        match fetch_claude_quota(client, &creds).await {
-            Ok(quota) => {
-                let email = (!expected_identity.is_empty()).then_some(expected_identity);
-                return CliProfileOutcome::Live(claude_fetch_outcome(quota, email));
-            }
+        match refresh_and_fetch_claude(store, account_id, client, creds, expected_identity, false)
+            .await
+        {
+            Ok(outcome) => return outcome,
             Err(status) => {
-                // Credentials are valid but the live fetch failed (e.g. 429). Prefer a fresh snapshot if
-                // one exists; otherwise surface the transient failure (carrying its HTTP status) so the
-                // last-success cache can serve the previous good value as `stale`, instead of regressing a
-                // working account to `waiting_for_usage`. Mirrors the codex CLI-profile failure mapping.
+                if matches!(status, Some(401) | Some(403)) {
+                    if let Some(reseed) =
+                        seed_claude_creds_from_keychain(profile_root, expected_identity).await
+                    {
+                        match store.set_cli_profile_credentials(account_id, &reseed) {
+                            Ok(()) => {}
+                            Err(error) => eprintln!(
+                                "failed to persist cli-token-cache/{account_id}.json: {error}"
+                            ),
+                        }
+                        if let Ok(outcome) = refresh_and_fetch_claude(
+                            store,
+                            account_id,
+                            client,
+                            reseed,
+                            expected_identity,
+                            true,
+                        )
+                        .await
+                        {
+                            return outcome;
+                        }
+                    }
+                }
                 return match read_claude_snapshot_outcome(snapshot_path, expected_identity) {
                     CliProfileOutcome::WaitingForUsage => {
                         CliProfileOutcome::Live(FetchOutcome::Failed { status })
@@ -225,7 +304,6 @@ pub(super) async fn poll_claude_cli_profile(
             }
         }
     }
-    // No usable credentials: pure snapshot fallback (unchanged).
     read_claude_snapshot_outcome(snapshot_path, expected_identity)
 }
 

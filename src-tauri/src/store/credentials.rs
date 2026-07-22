@@ -6,6 +6,14 @@ use usage_core::account::{Account, AuthSource, Credentials, Provider};
 use super::index::index_mutation_lock;
 use super::{reject_symlink, set_private_dir_permissions, write_private_file, AccountStore, SecretSource, CREDS_DIR};
 
+/// App-owned refreshable token cache for CLI-profile accounts, keyed by
+/// `account_id`. Restores the v0.1.0 model: the app owns a COPY of the imported
+/// CLI credentials and rotates it in its OWN store, so an expired-but-refreshable
+/// CLI login shows live usage instead of `needs_login`. The Claude Code keychain
+/// is never written. Dedicated subdir so it never interacts with the
+/// credential-id lifecycle (index / account removal).
+const CLI_TOKEN_CACHE_DIR: &str = "cli-token-cache";
+
 impl AccountStore {
     pub(super) fn credential_path(&self, credential_id: &str) -> Result<PathBuf, String> {
         uuid::Uuid::parse_str(credential_id).map_err(|_| "invalid credential id".to_string())?;
@@ -135,6 +143,56 @@ impl AccountStore {
         let path = self.credential_path_for_read(credential_id).ok()?;
         let json = fs::read_to_string(path).ok()?;
         serde_json::from_str(&json).ok()
+    }
+
+    /// Reads the app-owned refreshable token copy for a CLI-profile account
+    /// (keyed by `account_id`). `None` when absent/unreadable/invalid id.
+    /// SECURITY: never log the returned tokens.
+    pub fn cli_profile_credentials(&self, account_id: &str) -> Option<Credentials> {
+        uuid::Uuid::parse_str(account_id).ok()?;
+        let path = self
+            .root
+            .join(CLI_TOKEN_CACHE_DIR)
+            .join(format!("{account_id}.json"));
+        reject_symlink(&path, "cli token cache file").ok()?;
+        let json = fs::read_to_string(&path).ok()?;
+        serde_json::from_str(&json).ok()
+    }
+
+    /// Persists the app-owned refreshable token copy (0600, atomic private write via
+    /// `write_private_file`). The Claude Code keychain is never touched.
+    pub fn set_cli_profile_credentials(
+        &self,
+        account_id: &str,
+        credentials: &Credentials,
+    ) -> Result<(), String> {
+        uuid::Uuid::parse_str(account_id).map_err(|_| "invalid account id".to_string())?;
+        let directory = self.root.join(CLI_TOKEN_CACHE_DIR);
+        reject_symlink(&directory, "cli token cache directory")?;
+        let path = directory.join(format!("{account_id}.json"));
+        reject_symlink(&path, "cli token cache file")?;
+        let json = serde_json::to_string_pretty(credentials)
+            .map_err(|e| format!("serialize credentials: {e}"))?;
+        write_private_file(&path, &json)
+    }
+
+    pub(super) fn remove_cli_profile_credentials(&self, account_id: &str) {
+        if uuid::Uuid::parse_str(account_id).is_err() {
+            return;
+        }
+        let path = self
+            .root
+            .join(CLI_TOKEN_CACHE_DIR)
+            .join(format!("{account_id}.json"));
+        if let Err(error) = reject_symlink(&path, "cli token cache file") {
+            eprintln!("failed to remove {}: {error}", path.display());
+            return;
+        }
+        match fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => eprintln!("failed to remove {}: {error}", path.display()),
+        }
     }
 
     pub fn update_credentials(

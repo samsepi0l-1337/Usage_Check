@@ -64,6 +64,8 @@ fn auth_source_claude_snapshot_live() {
 #[tokio::test]
 async fn claude_cli_profile_falls_back_to_snapshot_without_profile_credentials() {
     let temp = TempDir::new().expect("create temp directory");
+    let store = crate::store::AccountStore::new_at(temp.path().join("store"));
+    let account_id = uuid::Uuid::new_v4().to_string();
     let profile_root = temp.path().join("profile");
     std::fs::create_dir(&profile_root).expect("create empty profile directory");
     let snapshot = temp.path().join("snapshot.json");
@@ -75,11 +77,21 @@ async fn claude_cli_profile_falls_back_to_snapshot_without_profile_credentials()
 
     let client = reqwest::Client::new();
     assert!(matches!(
-        poll_claude_cli_profile(&client, &profile_root, "id", &snapshot).await,
+        poll_claude_cli_profile(
+            &store,
+            &account_id,
+            &client,
+            &profile_root,
+            "id",
+            &snapshot,
+        )
+        .await,
         CliProfileOutcome::Live(FetchOutcome::Live { .. })
     ));
     assert!(matches!(
         poll_claude_cli_profile(
+            &store,
+            &account_id,
             &client,
             &profile_root,
             "id",
@@ -88,6 +100,35 @@ async fn claude_cli_profile_falls_back_to_snapshot_without_profile_credentials()
         .await,
         CliProfileOutcome::WaitingForUsage
     ));
+}
+
+#[test]
+fn cli_profile_token_cache_round_trips() {
+    let temp = TempDir::new().expect("create temp directory");
+    let store = crate::store::AccountStore::new_at(temp.path().join("store"));
+    let account_id = uuid::Uuid::new_v4().to_string();
+    let credentials = Credentials {
+        access_token: "access-token".to_string(),
+        refresh_token: Some("refresh-token".to_string()),
+        account_id: Some("claude-account".to_string()),
+        expires_at: None,
+    };
+
+    assert!(store.cli_profile_credentials(&account_id).is_none());
+    assert!(store.cli_profile_credentials("not-a-uuid").is_none());
+    assert!(store
+        .set_cli_profile_credentials("not-a-uuid", &credentials)
+        .is_err());
+
+    store
+        .set_cli_profile_credentials(&account_id, &credentials)
+        .expect("persist CLI-profile credentials");
+    let loaded = store
+        .cli_profile_credentials(&account_id)
+        .expect("read CLI-profile credentials");
+
+    assert!(loaded.access_token == credentials.access_token);
+    assert!(loaded.refresh_token == credentials.refresh_token);
 }
 
 #[test]

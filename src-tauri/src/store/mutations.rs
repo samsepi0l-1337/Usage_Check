@@ -123,6 +123,7 @@ impl AccountStore {
                 }
             }
         }
+        self.remove_cli_profile_credentials(&removed.id);
         Ok(Some(removed))
     }
 
