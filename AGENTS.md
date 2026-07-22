@@ -1,3 +1,5 @@
+# AGENTS.md
+
 ## Learned User Preferences
 
 - Build UsageCheck as a cross-platform Windows and macOS app that shows Codex, Claude Code, and Antigravity (agy) usage.
