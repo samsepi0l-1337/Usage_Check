@@ -132,6 +132,11 @@ body {
   color: #f0c25c;
 }
 
+.badge-throttled {
+  background: #4a3a12;
+  color: #f0c25c;
+}
+
 .badge-error {
   background: #4a1e1e;
   color: #f08080;

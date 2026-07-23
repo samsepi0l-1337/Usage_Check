@@ -169,7 +169,7 @@ fn auth_source_needs_login_never_stale() {
 }
 
 #[test]
-fn auth_source_ok_then_rate_limited_serves_stale() {
+fn auth_source_ok_then_throttled_serves_stale() {
     let _cache_guard = lock_last_success_cache_tests();
     clear_last_success_cache();
     let mut cache = HashMap::new();
@@ -187,7 +187,7 @@ fn auth_source_ok_then_rate_limited_serves_stale() {
     let result = apply_last_success(
         &mut cache,
         "account-1",
-        auth_source_usage("account-1", "rate_limited", None),
+        auth_source_usage("account-1", "throttled", None),
     );
 
     assert_eq!(result.status, "stale");
@@ -199,7 +199,7 @@ fn auth_source_ok_then_rate_limited_serves_stale() {
 }
 
 #[test]
-fn auth_source_rate_limited_without_prior_success_stays_rate_limited() {
+fn auth_source_throttled_without_prior_success_stays_throttled() {
     let _cache_guard = lock_last_success_cache_tests();
     clear_last_success_cache();
     let mut cache = HashMap::new();
@@ -207,10 +207,10 @@ fn auth_source_rate_limited_without_prior_success_stays_rate_limited() {
     let result = apply_last_success(
         &mut cache,
         "account-1",
-        auth_source_usage("account-1", "rate_limited", None),
+        auth_source_usage("account-1", "throttled", None),
     );
 
-    assert_eq!(result.status, "rate_limited");
+    assert_eq!(result.status, "throttled");
     assert_eq!(result.five_hour, None);
 }
 

@@ -1,8 +1,8 @@
 use serde::Serialize;
 
-use usage_core::account::{Account, Provider};
 #[cfg(test)]
 use usage_core::account::AuthSource;
+use usage_core::account::{Account, Provider};
 use usage_core::fetch::agy::{compact_windows, AgyQuota, AgyQuotaPool};
 use usage_core::fetch::claude::ClaudeQuota;
 use usage_core::fetch::codex::CodexQuota;
@@ -38,7 +38,11 @@ pub struct AccountUsage {
     pub local_status: Option<String>,
 }
 
-pub(super) fn display_name_for(account: &Account, email: Option<&str>, plan: Option<&str>) -> String {
+pub(super) fn display_name_for(
+    account: &Account,
+    email: Option<&str>,
+    plan: Option<&str>,
+) -> String {
     if let Some(email) = email.filter(|s| !s.is_empty()) {
         return email.to_string();
     }
@@ -89,7 +93,11 @@ pub fn account_usage_from_agy(account: &Account, quota: &AgyQuota, status: &str)
 }
 
 #[cfg(feature = "edition-pro")]
-pub(super) fn account_usage_from_cursor(account: &Account, quota: &CursorQuota, status: &str) -> AccountUsage {
+pub(super) fn account_usage_from_cursor(
+    account: &Account,
+    quota: &CursorQuota,
+    status: &str,
+) -> AccountUsage {
     AccountUsage {
         display_name: display_name_for(account, quota.email.as_deref(), quota.plan.as_deref()),
         plan: quota.plan.clone(),
@@ -105,7 +113,11 @@ pub(super) fn account_usage_from_cursor(account: &Account, quota: &CursorQuota, 
 }
 
 #[cfg(feature = "edition-pro")]
-pub(super) fn account_usage_from_grok(account: &Account, prepaid: &GrokPrepaid, status: &str) -> AccountUsage {
+pub(super) fn account_usage_from_grok(
+    account: &Account,
+    prepaid: &GrokPrepaid,
+    status: &str,
+) -> AccountUsage {
     AccountUsage {
         display_name: display_name_for(account, None, Some("API credits")),
         plan: Some("API credits".into()),
@@ -141,11 +153,11 @@ pub(super) fn account_usage_from_higgsfield(
 }
 
 /// Maps an HTTP failure to a status string: 401/403 (expired/invalid token)
-/// -> "needs_login", 429 -> "rate_limited", anything else -> "error".
+/// -> "needs_login", 429 -> "throttled", anything else -> "error".
 pub(super) fn status_for_failure(status: Option<u16>) -> &'static str {
     match status {
         Some(401) | Some(403) => "needs_login",
-        Some(429) => "rate_limited",
+        Some(429) => "throttled",
         _ => "error",
     }
 }
@@ -176,7 +188,10 @@ pub(super) fn codex_identity_status(probe_identity: &str, expected: &str) -> Opt
     }
 }
 
-pub(super) fn claude_identity_status(snapshot_identity: &str, expected: &str) -> Option<&'static str> {
+pub(super) fn claude_identity_status(
+    snapshot_identity: &str,
+    expected: &str,
+) -> Option<&'static str> {
     if snapshot_identity != expected {
         Some("identity_changed")
     } else {

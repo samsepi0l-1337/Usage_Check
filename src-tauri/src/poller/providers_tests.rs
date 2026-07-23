@@ -3,6 +3,8 @@ use serde_json::json;
 use std::ffi::OsString;
 use std::path::Path;
 use tempfile::TempDir;
+use usage_core::fetch::claude::ClaudeQuota;
+use usage_core::models::QuotaUsage;
 
 struct ClaudeConfigDirGuard(Option<OsString>);
 
@@ -30,7 +32,7 @@ impl Drop for ClaudeConfigDirGuard {
 }
 
 #[test]
-fn cli_profile_rate_limited_failure_is_assembled_as_rate_limited() {
+fn cli_profile_rate_limited_failure_is_assembled_as_throttled() {
     let account = usage_core::account::Account {
         id: "claude-cli".into(),
         provider: usage_core::account::Provider::Claude,
@@ -49,7 +51,7 @@ fn cli_profile_rate_limited_failure_is_assembled_as_rate_limited() {
         local,
     );
 
-    assert_eq!(usage.status, "rate_limited");
+    assert_eq!(usage.status, "throttled");
     assert_eq!(usage.five_hour, None);
     assert_eq!(usage.week, None);
 }
@@ -64,14 +66,28 @@ fn auth_source_claude_snapshot_missing_is_waiting() {
 }
 
 #[test]
-fn auth_source_claude_snapshot_live() {
+fn auth_source_claude_usage_snapshot_round_trips_through_snapshot_reader() {
     let temp = TempDir::new().expect("create temp directory");
     let snapshot = temp.path().join("snapshot.json");
-    std::fs::write(
+    let source_five_hour = QuotaUsage {
+        percent: 30.0,
+        resets_at: None,
+        window_seconds: None,
+    };
+    let source_week = QuotaUsage {
+        percent: 55.0,
+        resets_at: None,
+        window_seconds: None,
+    };
+    crate::claude_statusline::write_usage_snapshot_to_path(
         &snapshot,
-        r#"{"identity":"id","rate_limits":{"five_hour":{"utilization":30.0},"seven_day":{"utilization":55.0}}}"#,
+        "id",
+        &ClaudeQuota {
+            five_hour: Some(source_five_hour.clone()),
+            week: Some(source_week.clone()),
+        },
     )
-    .expect("write snapshot");
+    .expect("write usage snapshot");
 
     let CliProfileOutcome::Live(FetchOutcome::Live {
         five_hour,
@@ -83,8 +99,8 @@ fn auth_source_claude_snapshot_live() {
         panic!("expected live Claude snapshot outcome");
     };
 
-    assert_eq!(five_hour.map(|quota| quota.percent), Some(30.0));
-    assert_eq!(week.map(|quota| quota.percent), Some(55.0));
+    assert_eq!(five_hour, Some(source_five_hour));
+    assert_eq!(week, Some(source_week));
     assert_eq!(plan, None);
     assert_eq!(email.as_deref(), Some("id"));
 }
@@ -110,15 +126,8 @@ async fn claude_cli_profile_falls_back_to_snapshot_without_profile_credentials()
 
     let client = reqwest::Client::new();
     assert!(matches!(
-        poll_claude_cli_profile(
-            &store,
-            &account_id,
-            &client,
-            &profile_root,
-            "id",
-            &snapshot,
-        )
-        .await,
+        poll_claude_cli_profile(&store, &account_id, &client, &profile_root, "id", &snapshot,)
+            .await,
         CliProfileOutcome::Live(FetchOutcome::Live { .. })
     ));
     assert!(matches!(

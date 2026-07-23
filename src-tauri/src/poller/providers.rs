@@ -8,6 +8,7 @@ use usage_core::fetch::claude::parse_claude_usage;
 use usage_core::models::LocalUsage;
 
 use crate::agy_local;
+use crate::claude_statusline;
 use crate::import;
 use crate::store::AccountStore;
 
@@ -189,9 +190,7 @@ async fn seed_claude_creds_from_keychain(
     let ident = expected_identity.to_string();
     match tokio::time::timeout(
         Duration::from_secs(5),
-        tokio::task::spawn_blocking(move || {
-            import::load_claude_profile_credentials(&root, &ident)
-        }),
+        tokio::task::spawn_blocking(move || import::load_claude_profile_credentials(&root, &ident)),
     )
     .await
     {
@@ -230,9 +229,7 @@ async fn refresh_and_fetch_claude(
     if (force_refresh && creds.refresh_token.is_some())
         || crate::oauth::should_refresh(creds.expires_at, Utc::now(), REFRESH_THRESHOLD)
     {
-        if let Ok(refreshed) =
-            crate::oauth::refresh_access_token(Provider::Claude, &creds).await
-        {
+        if let Ok(refreshed) = crate::oauth::refresh_access_token(Provider::Claude, &creds).await {
             match store.set_cli_profile_credentials(account_id, &refreshed) {
                 Ok(()) => {}
                 Err(error) => {
@@ -244,6 +241,11 @@ async fn refresh_and_fetch_claude(
     }
     match fetch_claude_quota(client, &creds).await {
         Ok(quota) => {
+            if let Err(error) =
+                claude_statusline::write_usage_snapshot(account_id, expected_identity, &quota)
+            {
+                eprintln!("failed to persist Claude usage snapshot for {account_id}: {error}");
+            }
             let email = (!expected_identity.is_empty()).then_some(expected_identity);
             Ok(CliProfileOutcome::Live(claude_fetch_outcome(quota, email)))
         }
@@ -299,6 +301,11 @@ pub(super) async fn poll_claude_cli_profile(
         }
         match fetch_claude_quota(client, live).await {
             Ok(quota) => {
+                if let Err(error) =
+                    claude_statusline::write_usage_snapshot(account_id, expected_identity, &quota)
+                {
+                    eprintln!("failed to persist Claude usage snapshot for {account_id}: {error}");
+                }
                 let email = (!expected_identity.is_empty()).then_some(expected_identity);
                 return CliProfileOutcome::Live(claude_fetch_outcome(quota, email));
             }

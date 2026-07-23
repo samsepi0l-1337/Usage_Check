@@ -48,7 +48,7 @@ fn maps_agy_pools() {
 fn status_for_failure_maps_auth_errors() {
     assert_eq!(status_for_failure(Some(401)), "needs_login");
     assert_eq!(status_for_failure(Some(403)), "needs_login");
-    assert_eq!(status_for_failure(Some(429)), "rate_limited");
+    assert_eq!(status_for_failure(Some(429)), "throttled");
     assert_eq!(status_for_failure(Some(500)), "error");
     assert_eq!(status_for_failure(None), "error");
 }

@@ -24,7 +24,7 @@ pub(super) fn last_success_cache() -> &'static Mutex<HashMap<String, LastSuccess
 }
 
 /// Post-step applied to every assembled usage. On success, remember the good
-/// windows. On a transient failure (`error`/`rate_limited`) with a remembered
+/// windows. On a transient failure (`error`/`throttled`) with a remembered
 /// success, serve the cached windows as `stale`. Non-transient statuses
 /// (`needs_login`, `identity_changed`, `waiting_for_usage`) are never masked.
 pub(super) fn apply_last_success(
@@ -44,7 +44,7 @@ pub(super) fn apply_last_success(
                 detail_suffix: usage.detail_suffix.clone(),
             },
         );
-    } else if usage.status == "error" || usage.status == "rate_limited" {
+    } else if usage.status == "error" || usage.status == "throttled" {
         if let Some(previous) = cache.get(id) {
             usage.display_name = previous.display_name.clone();
             usage.plan = previous.plan.clone();

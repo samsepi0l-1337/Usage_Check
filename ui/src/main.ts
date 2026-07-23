@@ -17,6 +17,7 @@ const PROVIDER_LABEL: Record<Provider, string> = {
 const STATUS_LABEL: Record<string, string> = {
   ok: "ok",
   needs_login: "needs login",
+  throttled: "throttled",
   error: "error",
 };
 

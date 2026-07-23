@@ -44,8 +44,7 @@ fn prior_command(settings_path: &Path) -> Option<String> {
     statusline_command(sidecar.get("prior_command")?).map(str::to_owned)
 }
 
-fn write_snapshot(account_id: &str, snapshot: &Value) -> Result<(), String> {
-    let snapshot_path = crate::paths::claude_statusline_snapshot(account_id);
+fn write_snapshot(snapshot_path: &Path, snapshot: &Value) -> Result<(), String> {
     let parent = snapshot_path
         .parent()
         .ok_or_else(|| "snapshot path has no parent".to_string())?;
@@ -63,8 +62,53 @@ fn write_snapshot(account_id: &str, snapshot: &Value) -> Result<(), String> {
             .map_err(|error| format!("failed to replace snapshot: {error}"))?;
     }
 
-    fs::rename(&temp_path, &snapshot_path)
+    fs::rename(&temp_path, snapshot_path)
         .map_err(|error| format!("failed to publish snapshot: {error}"))
+}
+
+fn quota_window_snapshot(window: Option<&usage_core::models::QuotaUsage>) -> Value {
+    let Some(window) = window else {
+        return Value::Null;
+    };
+    let mut snapshot = serde_json::Map::new();
+    snapshot.insert("utilization".to_string(), json!(window.percent));
+    if let Some(resets_at) = window.resets_at {
+        snapshot.insert("resets_at".to_string(), json!(resets_at.to_rfc3339()));
+    }
+    Value::Object(snapshot)
+}
+
+pub(crate) fn write_usage_snapshot_to_path(
+    snapshot_path: &Path,
+    identity: &str,
+    quota: &usage_core::fetch::claude::ClaudeQuota,
+) -> Result<(), String> {
+    if identity.is_empty() || (quota.five_hour.is_none() && quota.week.is_none()) {
+        return Ok(());
+    }
+    let snapshot = json!({
+        "identity": identity,
+        "rate_limits": {
+            "five_hour": quota_window_snapshot(quota.five_hour.as_ref()),
+            "seven_day": quota_window_snapshot(quota.week.as_ref()),
+        }
+    });
+    write_snapshot(snapshot_path, &snapshot)
+}
+
+/// Persist a freshly-fetched Claude usage reading into the account's statusline
+/// snapshot so a later throttle (429) can fall back to the last-known-good
+/// windows. Writes only percentages, reset timestamps, and identity.
+pub fn write_usage_snapshot(
+    account_id: &str,
+    identity: &str,
+    quota: &usage_core::fetch::claude::ClaudeQuota,
+) -> Result<(), String> {
+    write_usage_snapshot_to_path(
+        &crate::paths::claude_statusline_snapshot(account_id),
+        identity,
+        quota,
+    )
 }
 
 fn run_prior(command: &str, stdin_data: &[u8]) -> Result<Vec<u8>, String> {
@@ -145,7 +189,10 @@ pub fn run_bridge<R: Read, W: Write>(
         "identity": identity,
         "rate_limits": { "five_hour": five_hour, "seven_day": seven_day }
     });
-    write_snapshot(account_id, &snapshot)?;
+    write_snapshot(
+        &crate::paths::claude_statusline_snapshot(account_id),
+        &snapshot,
+    )?;
 
     if let Some(command) = prior_command(profile_settings_path) {
         stdout
@@ -235,7 +282,10 @@ pub fn install_statusline_bridge(
         .map_err(|error| format!("failed to write Claude settings: {error}"))
 }
 
-pub fn remove_statusline_bridge(profile_settings_path: &Path, account_id: &str) -> Result<(), String> {
+pub fn remove_statusline_bridge(
+    profile_settings_path: &Path,
+    account_id: &str,
+) -> Result<(), String> {
     let cleanup_artifacts = || {
         let _ = fs::remove_file(crate::paths::claude_statusline_snapshot(account_id));
         if let Ok(sidecar_path) = sidecar_path(profile_settings_path) {
