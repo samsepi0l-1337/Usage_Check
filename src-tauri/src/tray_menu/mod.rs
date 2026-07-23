@@ -34,7 +34,7 @@ mod menu;
 #[allow(unused_imports)]
 pub(crate) use actions::{AuthActionSpec, auth_action_specs, spec_for_event};
 #[allow(unused_imports)]
-pub(crate) use format::format_usage_detail;
+pub(crate) use format::{format_breakdown_row, format_usage_detail};
 #[allow(unused_imports)]
 pub(crate) use menu::{
     account_max_percent, apply_menu, build_menu, near_limit_count, tooltip_for, updated_label,

@@ -53,6 +53,16 @@ pub struct QuotaUsage {
     pub window_seconds: Option<i64>,
 }
 
+/// A single per-model/per-scope usage breakdown row (e.g. Claude "Fable",
+/// Codex "Spark", Cursor "First Party"/"API"), rendered as its own row at the
+/// primary usage-line indent alongside the account's main quota line.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UsageBreakdownRow {
+    /// Display label, e.g. "Fable", "Spark", "First Party", "API".
+    pub label: String,
+    pub usage: QuotaUsage,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ModelTokenEvent {
     pub timestamp: DateTime<Utc>,

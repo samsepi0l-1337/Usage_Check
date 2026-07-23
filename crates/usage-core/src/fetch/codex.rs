@@ -1,12 +1,15 @@
 use chrono::{TimeZone, Utc};
 use serde_json::Value;
-use crate::models::QuotaUsage;
+use crate::models::{QuotaUsage, UsageBreakdownRow};
 
 pub struct CodexQuota {
     pub plan: Option<String>,
     pub email: Option<String>,
     pub five_hour: Option<QuotaUsage>,
     pub week: Option<QuotaUsage>,
+    /// Extra per-model breakdown rows (e.g. "Spark" weekly usage), sourced
+    /// from `additional_rate_limits[]`.
+    pub breakdown: Vec<UsageBreakdownRow>,
 }
 
 fn window(v: &Value) -> Option<QuotaUsage> {
@@ -44,6 +47,25 @@ pub fn window_label(window_seconds: Option<i64>, fallback: &str) -> String {
     }
 }
 
+/// Extracts the "Spark" (gpt-5.3-codex-spark) breakdown row from the
+/// top-level `additional_rate_limits[]` array (present on `wham/usage`).
+/// Matches by `limit_name == "GPT-5.3-Codex-Spark"`, falling back to
+/// `metered_feature == "codex_bengalfox"`. Missing/unparseable
+/// `rate_limit.primary_window.used_percent` yields no row; a present-and-zero
+/// `used_percent` DOES yield a row.
+fn parse_spark_breakdown(root: &Value) -> Option<UsageBreakdownRow> {
+    let limits = root.get("additional_rate_limits")?.as_array()?;
+    let entry = limits.iter().find(|entry| {
+        entry.get("limit_name").and_then(Value::as_str) == Some("GPT-5.3-Codex-Spark")
+            || entry.get("metered_feature").and_then(Value::as_str) == Some("codex_bengalfox")
+    })?;
+    let usage = entry.get("rate_limit").and_then(|rl| rl.get("primary_window")).and_then(window)?;
+    Some(UsageBreakdownRow {
+        label: "Spark".to_string(),
+        usage,
+    })
+}
+
 pub fn parse_codex_usage(root: &Value) -> CodexQuota {
     let rl = root.get("rate_limit");
     let get = |k: &str| rl.and_then(|r| r.get(k)).and_then(window);
@@ -59,6 +81,7 @@ pub fn parse_codex_usage(root: &Value) -> CodexQuota {
             .map(String::from),
         five_hour: get("primary_window"),
         week: get("secondary_window"),
+        breakdown: parse_spark_breakdown(root).into_iter().collect(),
     }
 }
 
@@ -96,6 +119,52 @@ mod tests {
         let v = serde_json::json!({"rate_limit": {"primary_window": {}}});
         let q = parse_codex_usage(&v);
         assert!(q.five_hour.is_none());
+        assert!(q.breakdown.is_empty());
+    }
+
+    #[test]
+    fn parses_spark_breakdown_row_present_and_zero() {
+        let v = json!({
+            "rate_limit": { "primary_window": { "used_percent": 42.5, "limit_window_seconds": 18000 } },
+            "additional_rate_limits": [
+                {
+                    "limit_name": "GPT-5.3-Codex-Spark",
+                    "metered_feature": "codex_bengalfox",
+                    "rate_limit": {
+                        "primary_window": {
+                            "used_percent": 0,
+                            "limit_window_seconds": 604800,
+                            "reset_at": 1_900_000_000.0
+                        },
+                        "secondary_window": null
+                    }
+                }
+            ]
+        });
+        let q = parse_codex_usage(&v);
+        assert_eq!(q.breakdown.len(), 1);
+        assert_eq!(q.breakdown[0].label, "Spark");
+        assert_eq!(q.breakdown[0].usage.percent, 0.0);
+        assert_eq!(q.breakdown[0].usage.window_seconds, Some(604_800));
+    }
+
+    #[test]
+    fn no_spark_entry_yields_empty_breakdown() {
+        let v = json!({
+            "rate_limit": { "primary_window": { "used_percent": 42.5 } },
+            "additional_rate_limits": [
+                { "limit_name": "Other-Limit", "metered_feature": "other", "rate_limit": {} }
+            ]
+        });
+        let q = parse_codex_usage(&v);
+        assert!(q.breakdown.is_empty());
+    }
+
+    #[test]
+    fn missing_additional_rate_limits_yields_empty_breakdown() {
+        let v = json!({"rate_limit": {"primary_window": {"used_percent": 42.5}}});
+        let q = parse_codex_usage(&v);
+        assert!(q.breakdown.is_empty());
     }
 }
 

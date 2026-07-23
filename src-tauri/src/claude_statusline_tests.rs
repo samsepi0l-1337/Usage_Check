@@ -54,6 +54,7 @@ fn write_usage_snapshot_emits_exact_round_trip_shape() {
     let quota = ClaudeQuota {
         five_hour: Some(five_hour.clone()),
         week: Some(week.clone()),
+        breakdown: Vec::new(),
     };
 
     write_usage_snapshot_to_path(&snapshot_path, "user@example.com", &quota)
@@ -93,6 +94,7 @@ fn write_usage_snapshot_skips_empty_identity_and_empty_quota() {
     let populated_quota = ClaudeQuota {
         five_hour: Some(quota_usage(33.0, 1_784_774_400)),
         week: None,
+        breakdown: Vec::new(),
     };
 
     write_usage_snapshot_to_path(&empty_identity_path, "", &populated_quota)
@@ -103,6 +105,7 @@ fn write_usage_snapshot_skips_empty_identity_and_empty_quota() {
     let empty_quota = ClaudeQuota {
         five_hour: None,
         week: None,
+        breakdown: Vec::new(),
     };
     write_usage_snapshot_to_path(&empty_quota_path, "user@example.com", &empty_quota)
         .expect("skip empty quota");

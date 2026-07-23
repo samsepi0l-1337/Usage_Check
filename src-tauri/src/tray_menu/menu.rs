@@ -8,7 +8,7 @@ use usage_core::account::Provider;
 use crate::edition;
 use crate::poller::AccountUsage;
 use super::actions::auth_action_specs;
-use super::format::{account_name_line, account_usage_line, format_pool_detail, format_usage_detail, vendor_title};
+use super::format::{account_name_line, account_usage_line, format_breakdown_row, format_pool_detail, format_usage_detail, vendor_title};
 use super::TRAY_ID;
 
 fn append_vendor_section(
@@ -49,6 +49,18 @@ fn append_vendor_section(
             false,
             None::<&str>,
         )?)?;
+        // Per-model breakdown rows (Claude Fable, Codex Spark, Cursor First
+        // Party/API) — one MenuItem per row at the same indent as the primary
+        // usage line.
+        for (i, row) in usage.breakdown.iter().enumerate() {
+            menu.append(&MenuItem::with_id(
+                app,
+                format!("breakdown-{}-{i}", usage.account.id),
+                format!("     {}", format_breakdown_row(row)),
+                false,
+                None::<&str>,
+            )?)?;
+        }
         // Agy: one indented row per Model Quota pool (Gemini / Claude+GPT).
         for (i, pool) in usage.pool_breakdown.iter().enumerate() {
             menu.append(&MenuItem::with_id(
@@ -80,6 +92,9 @@ pub(crate) fn account_max_percent(usage: &AccountUsage) -> Option<f64> {
         if let Some(q) = &pool.week {
             windows.push(q.percent);
         }
+    }
+    for row in &usage.breakdown {
+        windows.push(row.usage.percent);
     }
     windows
         .into_iter()

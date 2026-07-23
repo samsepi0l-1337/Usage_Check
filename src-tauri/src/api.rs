@@ -19,7 +19,7 @@ use serde::Serialize;
 use usage_core::account::Provider;
 use usage_core::fetch::agy::AgyQuotaPool;
 use usage_core::fetch::codex::window_label;
-use usage_core::models::{QuotaUsage, WindowTotals};
+use usage_core::models::{QuotaUsage, UsageBreakdownRow, WindowTotals};
 
 use crate::poller::AccountUsage;
 
@@ -74,6 +74,21 @@ impl PoolDto {
 }
 
 #[derive(Clone, Debug, Serialize)]
+pub struct BreakdownDto {
+    pub label: String,
+    pub usage: QuotaDto,
+}
+
+impl BreakdownDto {
+    fn from_row(row: &UsageBreakdownRow) -> BreakdownDto {
+        BreakdownDto {
+            label: row.label.clone(),
+            usage: QuotaDto::from_quota(&row.usage, &row.label),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
 pub struct TokenTotalsDto {
     pub five_hours: i64,
     pub week: i64,
@@ -102,6 +117,7 @@ pub struct AccountUsageDto {
     pub five_hour: Option<QuotaDto>,
     pub week: Option<QuotaDto>,
     pub pools: Vec<PoolDto>,
+    pub breakdown: Vec<BreakdownDto>,
     pub token_totals: TokenTotalsDto,
     pub local_status: Option<String>,
     pub detail_suffix: Option<String>,
@@ -120,6 +136,7 @@ impl AccountUsageDto {
             five_hour: u.five_hour.as_ref().map(|q| QuotaDto::from_quota(q, "5h")),
             week: u.week.as_ref().map(|q| QuotaDto::from_quota(q, "7d")),
             pools: u.pool_breakdown.iter().map(PoolDto::from_pool).collect(),
+            breakdown: u.breakdown.iter().map(BreakdownDto::from_row).collect(),
             token_totals: TokenTotalsDto::from_totals(&u.totals),
             local_status: u.local_status.clone(),
             detail_suffix: u.detail_suffix.clone(),

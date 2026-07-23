@@ -79,6 +79,7 @@ fn test_assemble_live_outcome_ok_local_preserves_totals() {
         }),
         plan: Some("Pro".into()),
         email: Some("user@ex.com".into()),
+        breakdown: Vec::new(),
     };
     let local = LocalUsage {
         totals: WindowTotals {
@@ -187,6 +188,7 @@ fn test_assemble_live_empty_windows_yields_waiting_for_usage() {
         week: None,
         plan: None,
         email: None,
+        breakdown: Vec::new(),
     };
     let local = LocalUsage::none(usage_core::models::LocalProvenance::NoLocalProfile);
     let result = assemble_account_usage(&acct, outcome, local);
@@ -213,9 +215,108 @@ fn test_assemble_live_some_five_hour_yields_ok() {
         week: None,
         plan: None,
         email: None,
+        breakdown: Vec::new(),
     };
     let local = LocalUsage::none(usage_core::models::LocalProvenance::NoLocalProfile);
     let result = assemble_account_usage(&acct, outcome, local);
 
     assert_eq!(result.status, "ok");
+}
+
+#[test]
+fn assemble_live_outcome_propagates_breakdown() {
+    let acct = Account {
+        id: "test".into(),
+        provider: Provider::Codex,
+        label: "user@ex.com".into(),
+        auth_source: usage_core::account::AuthSource::BrowserOAuth {
+            credential_id: "test-cred".into(),
+        },
+    };
+    let outcome = FetchOutcome::Live {
+        five_hour: Some(QuotaUsage {
+            percent: 10.0,
+            resets_at: None,
+            window_seconds: Some(18000),
+        }),
+        week: None,
+        plan: None,
+        email: None,
+        breakdown: vec![UsageBreakdownRow {
+            label: "Spark".into(),
+            usage: QuotaUsage {
+                percent: 0.0,
+                resets_at: None,
+                window_seconds: Some(604_800),
+            },
+        }],
+    };
+    let local = LocalUsage::none(usage_core::models::LocalProvenance::NoLocalProfile);
+    let result = assemble_account_usage(&acct, outcome, local);
+
+    assert_eq!(result.breakdown.len(), 1);
+    assert_eq!(result.breakdown[0].label, "Spark");
+}
+
+#[cfg(feature = "edition-pro")]
+#[test]
+fn account_usage_from_cursor_carries_breakdown() {
+    let acct = Account {
+        id: "cursor-1".into(),
+        provider: Provider::Cursor,
+        label: "user@ex.com".into(),
+        auth_source: usage_core::account::AuthSource::CursorDatabase {
+            database_path: "/tmp/state.vscdb".into(),
+            expected_identity: "user@ex.com".into(),
+        },
+    };
+    let quota = CursorQuota {
+        email: Some("user@ex.com".into()),
+        plan: Some("Pro".into()),
+        period: Some(QuotaUsage {
+            percent: 20.0,
+            resets_at: None,
+            window_seconds: None,
+        }),
+        detail_suffix: Some("$12 left".into()),
+        breakdown: vec![
+            UsageBreakdownRow {
+                label: "First Party".into(),
+                usage: QuotaUsage {
+                    percent: 17.0,
+                    resets_at: None,
+                    window_seconds: None,
+                },
+            },
+            UsageBreakdownRow {
+                label: "API".into(),
+                usage: QuotaUsage {
+                    percent: 41.0,
+                    resets_at: None,
+                    window_seconds: None,
+                },
+            },
+        ],
+    };
+    let result = account_usage_from_cursor(&acct, &quota, "ok");
+    assert_eq!(result.breakdown.len(), 2);
+    assert_eq!(result.breakdown[0].label, "First Party");
+    assert_eq!(result.breakdown[1].label, "API");
+}
+
+#[test]
+fn assemble_failed_outcome_yields_empty_breakdown() {
+    let acct = Account {
+        id: "test".into(),
+        provider: Provider::Codex,
+        label: "user@ex.com".into(),
+        auth_source: usage_core::account::AuthSource::BrowserOAuth {
+            credential_id: "test-cred".into(),
+        },
+    };
+    let outcome = FetchOutcome::Failed { status: Some(500) };
+    let local = LocalUsage::none(usage_core::models::LocalProvenance::NoLocalProfile);
+    let result = assemble_account_usage(&acct, outcome, local);
+
+    assert!(result.breakdown.is_empty());
 }

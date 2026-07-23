@@ -54,6 +54,7 @@ pub(super) async fn poll_cursor(
                     plan: None,
                     period: None,
                     detail_suffix: None,
+                    breakdown: Vec::new(),
                 },
                 "needs_login",
             );
@@ -71,6 +72,7 @@ pub(super) async fn poll_cursor(
                     plan: None,
                     period: None,
                     detail_suffix: None,
+                    breakdown: Vec::new(),
                 },
                 "needs_login",
             );
@@ -87,6 +89,7 @@ pub(super) async fn poll_cursor(
                 plan: None,
                 period: None,
                 detail_suffix: None,
+                breakdown: Vec::new(),
             },
             identity_status,
         );
@@ -126,6 +129,7 @@ pub(super) async fn poll_cursor(
                 plan: session.plan.clone(),
                 period: None,
                 detail_suffix: None,
+                breakdown: Vec::new(),
             },
             cursor_outcome_status(&session.identity, &expected_identity, Err(status)),
         ),

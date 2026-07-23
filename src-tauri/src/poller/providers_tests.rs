@@ -85,6 +85,7 @@ fn auth_source_claude_usage_snapshot_round_trips_through_snapshot_reader() {
         &ClaudeQuota {
             five_hour: Some(source_five_hour.clone()),
             week: Some(source_week.clone()),
+            breakdown: Vec::new(),
         },
     )
     .expect("write usage snapshot");
@@ -94,6 +95,7 @@ fn auth_source_claude_usage_snapshot_round_trips_through_snapshot_reader() {
         week,
         plan,
         email,
+        ..
     }) = read_claude_snapshot_outcome(&snapshot, "id")
     else {
         panic!("expected live Claude snapshot outcome");

@@ -1,7 +1,7 @@
-use chrono::{TimeZone, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use serde_json::Value;
 
-use crate::models::QuotaUsage;
+use crate::models::{QuotaUsage, UsageBreakdownRow};
 
 /// Parsed Cursor billing-period usage (unofficial Connect RPC).
 #[derive(Clone, Debug, PartialEq)]
@@ -12,6 +12,9 @@ pub struct CursorQuota {
     pub period: Option<QuotaUsage>,
     /// Secondary tray label, e.g. `"$12.34 left"`.
     pub detail_suffix: Option<String>,
+    /// Extra breakdown rows ("First Party" / "API"), sourced from
+    /// `planUsage.autoPercentUsed` / `planUsage.apiPercentUsed`.
+    pub breakdown: Vec<UsageBreakdownRow>,
 }
 
 fn cents_to_dollars(cents: i64) -> f64 {
@@ -34,12 +37,28 @@ fn parse_plan_usage(plan: &Value) -> Option<(f64, Option<String>)> {
     Some((percent, suffix))
 }
 
+/// Builds a "First Party"/"API" breakdown row when the corresponding
+/// `planUsage` field is present. A missing field yields no row; a
+/// present-and-zero percent DOES yield a row.
+fn breakdown_row(label: &str, plan_usage: &Value, key: &str, resets_at: Option<DateTime<Utc>>) -> Option<UsageBreakdownRow> {
+    let percent = plan_usage.get(key).and_then(|v| v.as_f64())?;
+    Some(UsageBreakdownRow {
+        label: label.to_string(),
+        usage: QuotaUsage {
+            percent,
+            resets_at,
+            window_seconds: None,
+        },
+    })
+}
+
 /// Parses `GetCurrentPeriodUsage` JSON into tray-friendly quota fields.
 pub fn parse_cursor_period_usage(root: &Value) -> CursorQuota {
     // Key `period` off a successfully *parsed* percent, not the raw `planUsage`
     // Option — otherwise a `planUsage` object lacking a percent field would leak
     // the `0.0` default and display "0% used" (full quota) for unknown usage.
-    let parsed = root.get("planUsage").and_then(parse_plan_usage);
+    let plan_usage = root.get("planUsage");
+    let parsed = plan_usage.and_then(parse_plan_usage);
 
     let billing_end = root
         .get("billingCycleEnd")
@@ -62,11 +81,23 @@ pub fn parse_cursor_period_usage(root: &Value) -> CursorQuota {
         None => (None, None),
     };
 
+    let breakdown = plan_usage
+        .into_iter()
+        .flat_map(|plan_usage| {
+            [
+                breakdown_row("First Party", plan_usage, "autoPercentUsed", billing_end),
+                breakdown_row("API", plan_usage, "apiPercentUsed", billing_end),
+            ]
+        })
+        .flatten()
+        .collect();
+
     CursorQuota {
         email: None,
         plan: None,
         period,
         detail_suffix,
+        breakdown,
     }
 }
 
@@ -104,6 +135,7 @@ mod tests {
         assert!((q.period.as_ref().unwrap().percent - 46.444).abs() < 0.001);
         assert_eq!(q.detail_suffix.as_deref(), Some("$167.78 left"));
         assert!(q.period.as_ref().unwrap().resets_at.is_some());
+        assert!(q.breakdown.is_empty());
     }
 
     #[test]
@@ -111,6 +143,39 @@ mod tests {
         let v = json!({ "billingCycleEnd": "1771077734000" });
         let q = parse_cursor_period_usage(&v);
         assert!(q.period.is_none());
+        assert!(q.breakdown.is_empty());
+    }
+
+    #[test]
+    fn parses_first_party_and_api_breakdown_rows() {
+        let v = json!({
+            "billingCycleEnd": "1771077734000",
+            "planUsage": {
+                "totalPercentUsed": 20.0,
+                "autoPercentUsed": 17.0,
+                "apiPercentUsed": 41.0,
+                "remaining": 16778
+            }
+        });
+        let q = parse_cursor_period_usage(&v);
+        assert_eq!(q.breakdown.len(), 2);
+        assert_eq!(q.breakdown[0].label, "First Party");
+        assert_eq!(q.breakdown[0].usage.percent, 17.0);
+        assert!(q.breakdown[0].usage.resets_at.is_some());
+        assert_eq!(q.breakdown[1].label, "API");
+        assert_eq!(q.breakdown[1].usage.percent, 41.0);
+    }
+
+    #[test]
+    fn absent_first_party_and_api_fields_yield_empty_breakdown() {
+        let v = json!({
+            "billingCycleEnd": "1771077734000",
+            "planUsage": { "totalPercentUsed": 20.0, "remaining": 16778 }
+        });
+        let q = parse_cursor_period_usage(&v);
+        assert!(q.breakdown.is_empty());
+        // Primary `period` line stays unaffected by breakdown absence.
+        assert!((q.period.as_ref().unwrap().percent - 20.0).abs() < 0.001);
     }
 
     #[test]

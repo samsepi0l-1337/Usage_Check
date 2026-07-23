@@ -25,12 +25,19 @@ export interface WindowTotals {
   month: number;
 }
 
+/** Matches `usage_core::models::UsageBreakdownRow`. */
+export interface UsageBreakdownRow {
+  label: string;
+  usage: QuotaUsage;
+}
+
 /** Matches `poller::AccountUsage`. */
 export interface AccountUsage {
   account: Account;
   five_hour: QuotaUsage | null;
   week: QuotaUsage | null;
   totals: WindowTotals;
+  breakdown: UsageBreakdownRow[];
   status: string;
 }
 

@@ -177,6 +177,7 @@ pub(super) fn read_claude_snapshot_outcome(
         week: quota.week,
         plan: None,
         email: (!identity.is_empty()).then(|| identity.to_string()),
+        breakdown: quota.breakdown,
     })
 }
 
@@ -438,6 +439,7 @@ pub(super) async fn poll_codex_cli_profile(
                 week: probe.secondary,
                 plan: None,
                 email: probe.account.email.clone(),
+                breakdown: Vec::new(),
             })
         }
         Err(_) => CliProfileOutcome::Live(FetchOutcome::Failed { status: None }),

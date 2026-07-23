@@ -33,7 +33,7 @@
     use crate::poller::AccountUsage;
     use usage_core::account::{Account, AuthSource};
     use usage_core::fetch::agy::AgyQuotaPool;
-    use usage_core::models::{QuotaUsage, WindowTotals};
+    use usage_core::models::{QuotaUsage, UsageBreakdownRow, WindowTotals};
 
     fn quota(percent: f64) -> QuotaUsage {
         QuotaUsage {
@@ -59,6 +59,7 @@
             week: week.map(quota),
             totals: WindowTotals::default(),
             pool_breakdown: Vec::new(),
+            breakdown: Vec::new(),
             detail_suffix: None,
             status: "ok".into(),
             local_status: None,
@@ -88,6 +89,34 @@
             week: Some(quota(97.0)),
         }];
         assert_eq!(account_max_percent(&u), Some(97.0));
+    }
+
+    #[test]
+    fn account_max_percent_includes_breakdown_rows() {
+        let mut u = usage(Provider::Claude, Some(35.0), Some(30.0));
+        u.breakdown = vec![UsageBreakdownRow {
+            label: "Fable".into(),
+            usage: quota(92.0),
+        }];
+        assert_eq!(account_max_percent(&u), Some(92.0));
+    }
+
+    #[test]
+    fn format_breakdown_row_renders_label_and_percent() {
+        let row = UsageBreakdownRow {
+            label: "Fable".into(),
+            usage: quota(28.0),
+        };
+        assert_eq!(format_breakdown_row(&row), "Fable 28%");
+    }
+
+    #[test]
+    fn format_breakdown_row_renders_present_and_zero() {
+        let row = UsageBreakdownRow {
+            label: "Spark".into(),
+            usage: quota(0.0),
+        };
+        assert_eq!(format_breakdown_row(&row), "Spark 0%");
     }
 
     #[test]

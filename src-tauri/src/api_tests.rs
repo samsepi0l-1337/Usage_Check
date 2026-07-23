@@ -49,6 +49,7 @@ fn sample(provider: Provider, id: &str, five: Option<f64>, week: Option<f64>) ->
         }),
         totals: WindowTotals::default(),
         pool_breakdown: Vec::new(),
+        breakdown: Vec::new(),
         detail_suffix: None,
         status: "ok".into(),
         local_status: None,

@@ -12,6 +12,7 @@ fn dto(provider: Provider, id: &str, auth_kind: &'static str) -> AccountUsageDto
         five_hour: None,
         week: None,
         pools: Vec::new(),
+        breakdown: Vec::new(),
         token_totals: TokenTotalsDto {
             five_hours: 0,
             week: 0,

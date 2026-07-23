@@ -1,7 +1,7 @@
 use chrono::Utc;
 use usage_core::fetch::agy::AgyQuotaPool;
 use usage_core::fetch::codex::window_label;
-use usage_core::models::QuotaUsage;
+use usage_core::models::{QuotaUsage, UsageBreakdownRow};
 use usage_core::account::Provider;
 use crate::poller::AccountUsage;
 
@@ -191,4 +191,10 @@ pub(crate) fn account_name_line(usage: &AccountUsage) -> String {
 
 pub(crate) fn account_usage_line(usage: &AccountUsage) -> String {
     format!("     {}", format_usage_detail(usage))
+}
+
+/// Formats a single per-model breakdown row, e.g. "Fable 28%". No reset
+/// suffix — the primary usage line above it already shows the reset.
+pub(crate) fn format_breakdown_row(row: &UsageBreakdownRow) -> String {
+    format!("{} {}", row.label, format_percent(row.usage.percent))
 }

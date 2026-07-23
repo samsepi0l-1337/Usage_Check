@@ -34,6 +34,7 @@ fn auth_source_usage(id: &str, status: &str, five_hour: Option<QuotaUsage>) -> A
         week: None,
         totals: WindowTotals::default(),
         pool_breakdown: Vec::new(),
+        breakdown: Vec::new(),
         detail_suffix: None,
         status: status.to_string(),
         local_status: None,
@@ -241,6 +242,31 @@ fn auth_source_stale_restores_pool_breakdown_and_detail_suffix() {
     assert_eq!(result.pool_breakdown.len(), 1);
     assert_eq!(result.pool_breakdown[0].name, "Gemini");
     assert_eq!(result.detail_suffix.as_deref(), Some("$12 left"));
+}
+
+#[test]
+fn auth_source_stale_restores_breakdown() {
+    // Regression: per-model breakdown rows (Claude Fable, Codex Spark, Cursor
+    // First Party/API) must be restored on stale, mirroring pool_breakdown.
+    let _cache_guard = lock_last_success_cache_tests();
+    clear_last_success_cache();
+    let mut cache = HashMap::new();
+
+    let mut good = auth_source_usage("account-1", "ok", Some(auth_source_quota(40.0)));
+    good.breakdown = vec![usage_core::models::UsageBreakdownRow {
+        label: "Spark".into(),
+        usage: auth_source_quota(0.0),
+    }];
+    apply_last_success(&mut cache, "account-1", good);
+
+    // Transient failure produces an empty snapshot (no breakdown).
+    let mut failed = auth_source_usage("account-1", "error", None);
+    failed.breakdown = Vec::new();
+    let result = apply_last_success(&mut cache, "account-1", failed);
+
+    assert_eq!(result.status, "stale");
+    assert_eq!(result.breakdown.len(), 1);
+    assert_eq!(result.breakdown[0].label, "Spark");
 }
 
 #[test]

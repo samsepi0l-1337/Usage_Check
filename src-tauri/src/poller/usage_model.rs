@@ -12,7 +12,7 @@ use usage_core::fetch::cursor::CursorQuota;
 use usage_core::fetch::grok::GrokPrepaid;
 #[cfg(feature = "edition-pro")]
 use usage_core::fetch::higgsfield::HiggsfieldCredits;
-use usage_core::models::{LocalProvenance, LocalUsage, QuotaUsage, WindowTotals};
+use usage_core::models::{LocalProvenance, LocalUsage, QuotaUsage, UsageBreakdownRow, WindowTotals};
 
 /// A single account's usage snapshot: live quota (when available) plus
 /// local-log token totals (Codex/Claude fallback only), ready for the tray.
@@ -27,6 +27,10 @@ pub struct AccountUsage {
     pub totals: WindowTotals,
     /// Agy: Gemini / Claude+GPT pool rows (used %, like Codex/Claude).
     pub pool_breakdown: Vec<AgyQuotaPool>,
+    /// Per-model/per-scope extra usage rows (Claude Fable, Codex Spark,
+    /// Cursor First Party/API), rendered as their own rows alongside the
+    /// primary usage line.
+    pub breakdown: Vec<UsageBreakdownRow>,
     /// Pro providers: secondary label (`$12 left`, `809 credits left`).
     pub detail_suffix: Option<String>,
     pub status: String,
@@ -86,6 +90,7 @@ pub fn account_usage_from_agy(account: &Account, quota: &AgyQuota, status: &str)
         week,
         totals: WindowTotals::default(),
         pool_breakdown: quota.pools.clone(),
+        breakdown: Vec::new(),
         detail_suffix: None,
         status: status.to_string(),
         local_status: None,
@@ -106,6 +111,7 @@ pub(super) fn account_usage_from_cursor(
         week: quota.period.clone(),
         totals: WindowTotals::default(),
         pool_breakdown: Vec::new(),
+        breakdown: quota.breakdown.clone(),
         detail_suffix: quota.detail_suffix.clone(),
         status: status.to_string(),
         local_status: None,
@@ -126,6 +132,7 @@ pub(super) fn account_usage_from_grok(
         week: prepaid.period.clone(),
         totals: WindowTotals::default(),
         pool_breakdown: Vec::new(),
+        breakdown: Vec::new(),
         detail_suffix: prepaid.detail_suffix.clone(),
         status: status.to_string(),
         local_status: None,
@@ -146,6 +153,7 @@ pub(super) fn account_usage_from_higgsfield(
         week: credits.to_quota(),
         totals: WindowTotals::default(),
         pool_breakdown: Vec::new(),
+        breakdown: Vec::new(),
         detail_suffix: credits.detail_suffix(),
         status: status.to_string(),
         local_status: None,
@@ -168,6 +176,7 @@ pub(super) fn codex_fetch_outcome(quota: CodexQuota) -> FetchOutcome {
         week: quota.week,
         plan: quota.plan,
         email: quota.email,
+        breakdown: quota.breakdown,
     }
 }
 
@@ -177,6 +186,7 @@ pub(super) fn claude_fetch_outcome(quota: ClaudeQuota, email: Option<&str>) -> F
         week: quota.week,
         plan: None,
         email: email.map(str::to_string),
+        breakdown: quota.breakdown,
     }
 }
 
@@ -207,6 +217,7 @@ pub enum FetchOutcome {
         week: Option<QuotaUsage>,
         plan: Option<String>,
         email: Option<String>,
+        breakdown: Vec<UsageBreakdownRow>,
     },
     Failed {
         status: Option<u16>,
@@ -220,12 +231,13 @@ pub fn assemble_account_usage(
     local: LocalUsage,
 ) -> AccountUsage {
     let local_status = local_status_label(local.provenance).map(str::to_string);
-    let (five_hour, week, plan, email, status) = match outcome {
+    let (five_hour, week, plan, email, breakdown, status) = match outcome {
         FetchOutcome::Live {
             five_hour,
             week,
             plan,
             email,
+            breakdown,
         } => {
             // A 2xx with no usable quota windows (empty/unparseable body, schema
             // drift) must not masquerade as a healthy "ok" with blank bars —
@@ -235,13 +247,14 @@ pub fn assemble_account_usage(
             } else {
                 "ok"
             };
-            (five_hour, week, plan, email, status.to_string())
+            (five_hour, week, plan, email, breakdown, status.to_string())
         }
         FetchOutcome::Failed { status } => (
             None,
             None,
             None,
             None,
+            Vec::new(),
             status_for_failure(status).to_string(),
         ),
     };
@@ -258,6 +271,7 @@ pub fn assemble_account_usage(
         week,
         totals: local.totals,
         pool_breakdown: Vec::new(),
+        breakdown,
         detail_suffix: None,
         status,
         local_status,

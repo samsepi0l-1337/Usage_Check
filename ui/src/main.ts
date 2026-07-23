@@ -112,6 +112,9 @@ function renderCard(usage: AccountUsage): HTMLElement {
     const gauges = el("div", "gauges");
     gauges.appendChild(renderGaugeRow("5h", usage.five_hour));
     gauges.appendChild(renderGaugeRow("7d", usage.week));
+    for (const row of usage.breakdown) {
+      gauges.appendChild(renderGaugeRow(row.label, row.usage));
+    }
     card.appendChild(gauges);
 
     const resetSrc = usage.five_hour?.resets_at ?? usage.week?.resets_at ?? null;
@@ -177,6 +180,7 @@ async function refresh() {
         five_hour: null,
         week: null,
         totals: { five_hours: 0, week: 0, month: 0 },
+        breakdown: [],
         status: "ok",
       };
     });

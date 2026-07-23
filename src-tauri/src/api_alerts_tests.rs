@@ -21,6 +21,7 @@ fn dto(provider: Provider, name: &str, five: Option<f64>, week: Option<f64>) -> 
         five_hour: five.map(quota),
         week: week.map(quota),
         pools: Vec::new(),
+        breakdown: Vec::new(),
         token_totals: TokenTotalsDto {
             five_hours: 0,
             week: 0,
