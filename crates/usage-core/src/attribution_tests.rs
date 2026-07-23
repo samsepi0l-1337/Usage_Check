@@ -336,6 +336,74 @@ fn test_no_identity_assumed() {
 }
 
 #[test]
+fn test_no_identity_sole_associate_no_events_yields_no_events_not_assumed() {
+    // Managed Claude CliProfile account whose only associated root has ZERO events:
+    // there is nothing to "assume" from an empty root, so provenance should be
+    // NoEvents (maps to no tray message), not Assumed.
+    let now = Utc::now();
+    let root = ScannedRoot {
+        root_key: PathBuf::from("/claude/empty-root"),
+        source_roots: vec![PathBuf::from("/claude/empty-root")],
+        events: vec![],
+        health: LocalProvenance::NoEvents,
+        identity: RootIdentity::None,
+    };
+    let acct_a = AccountRef {
+        account_id: "a",
+        creds_account_id: None,
+        expected_identity: None,
+        is_browser_oauth: true,
+        profile_roots: vec![PathBuf::from("/claude/empty-root")],
+    };
+    let result = assign_local_usage(&[acct_a], &[root], now);
+    assert_eq!(result.len(), 1);
+    let (_, usage) = &result[0];
+    assert_eq!(
+        usage.provenance,
+        LocalProvenance::NoEvents,
+        "Sole-associate NoIdentity root with zero events → NoEvents, not Assumed"
+    );
+    assert_eq!(usage.totals.five_hours, 0, "No events → empty totals");
+    assert_eq!(usage.totals.week, 0, "No events → empty totals");
+    assert_eq!(usage.totals.month, 0, "No events → empty totals");
+}
+
+#[test]
+fn test_no_identity_sole_associate_empty_unavailable_root_stays_unavailable() {
+    // Anti-over-suppression guard: an empty-events root whose health is
+    // Unavailable (genuinely unreadable, not just quiet) must surface as
+    // Unavailable, not collapse to NoEvents or None. The sole-associate
+    // no-identity branch uses root.health verbatim when events is empty,
+    // so Unavailable must pass through unchanged.
+    let now = Utc::now();
+    let root = ScannedRoot {
+        root_key: PathBuf::from("/claude/unreadable-root"),
+        source_roots: vec![PathBuf::from("/claude/unreadable-root")],
+        events: vec![],
+        health: LocalProvenance::Unavailable,
+        identity: RootIdentity::None,
+    };
+    let acct_a = AccountRef {
+        account_id: "a",
+        creds_account_id: None,
+        expected_identity: None,
+        is_browser_oauth: true,
+        profile_roots: vec![PathBuf::from("/claude/unreadable-root")],
+    };
+    let result = assign_local_usage(&[acct_a], &[root], now);
+    assert_eq!(result.len(), 1);
+    let (_, usage) = &result[0];
+    assert_eq!(
+        usage.provenance,
+        LocalProvenance::Unavailable,
+        "Sole-associate NoIdentity root with empty events but Unavailable health → Unavailable, not NoEvents/None"
+    );
+    assert_eq!(usage.totals.five_hours, 0, "No events → empty totals");
+    assert_eq!(usage.totals.week, 0, "No events → empty totals");
+    assert_eq!(usage.totals.month, 0, "No events → empty totals");
+}
+
+#[test]
 fn test_ambiguous_no_proof_multi_account() {
     // §6.6: two accounts share root, no identity proof.
     // Expected: both Ambiguous(0).

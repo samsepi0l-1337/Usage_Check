@@ -84,19 +84,51 @@ async fn test_mtime_irrelevance_recent_timestamp() {
     );
 }
 
-/// §6.10 Error classification: unreadable root → Unavailable provenance.
+/// §6.10 Error classification: a scan root that does not exist is NOT an error — e.g. a
+/// managed CliProfile legitimately has no `<profile_root>/projects` dir. It should
+/// contribute no events and must NOT set root_unreadable (which would surface a false
+/// "(local: unavailable)" tray warning).
 #[tokio::test]
-async fn test_scan_unreadable_root_provenance() {
+async fn test_scan_missing_root_is_not_unreadable() {
     let nonexistent = PathBuf::from("/nonexistent/root/path");
     let now = Utc::now();
 
     let result = scan_local_events(Provider::Codex, &[nonexistent], now).await;
 
-    // Root doesn't exist → root_unreadable should be true
+    // Root doesn't exist → this is NOT an error, so root_unreadable must stay false.
     assert!(
-        result.health.root_unreadable,
-        "Unreadable root should set root_unreadable=true"
+        !result.health.root_unreadable,
+        "Missing root should NOT set root_unreadable=true"
     );
     // Events should be empty
-    assert_eq!(result.events.len(), 0, "Unreadable root has no events");
+    assert_eq!(result.events.len(), 0, "Missing root has no events");
+    // scan_provenance must classify this as NoEvents, not Unavailable.
+    assert_eq!(
+        super::scan_provenance(&result),
+        usage_core::models::LocalProvenance::NoEvents,
+        "Missing root with no events should be NoEvents, not Unavailable"
+    );
+}
+
+/// §6.10b Error classification: a root that exists but is a regular file (not a
+/// directory) is a genuine anomaly and MUST still set root_unreadable → Unavailable.
+#[tokio::test]
+async fn test_scan_root_is_regular_file_is_unreadable() {
+    let dir = tempdir().expect("tempdir");
+    let file_path = dir.path().join("not_a_dir.txt");
+    fs::write(&file_path, b"hello").expect("write file");
+    let now = Utc::now();
+
+    let result = scan_local_events(Provider::Codex, &[file_path], now).await;
+
+    assert!(
+        result.health.root_unreadable,
+        "A root that is a regular file (not a dir) should set root_unreadable=true"
+    );
+    assert_eq!(result.events.len(), 0, "Regular-file root has no events");
+    assert_eq!(
+        super::scan_provenance(&result),
+        usage_core::models::LocalProvenance::Unavailable,
+        "A regular-file root should be classified Unavailable"
+    );
 }

@@ -48,10 +48,18 @@ pub fn assign_local_usage(
                 }
             }
             [] if root.identity.is_absent() => match associated.as_slice() {
-                [owner] => assignments[*owner].add_root(
-                    root,
-                    merge_provenance(LocalProvenance::Assumed, root.health),
-                ),
+                [owner] => {
+                    // Only mark the attribution "assumed" when there are real events to
+                    // attribute-by-association. A sole-associate root with NO events (e.g. a
+                    // managed profile whose projects dir is empty/absent) has nothing to assume,
+                    // so it should carry its plain health (NoEvents), not an "assumed" caveat.
+                    let provenance = if root.events.is_empty() {
+                        root.health
+                    } else {
+                        merge_provenance(LocalProvenance::Assumed, root.health)
+                    };
+                    assignments[*owner].add_root(root, provenance);
+                }
                 owners if owners.len() >= 2 => {
                     for owner in owners {
                         assignments[*owner].add_signal(LocalProvenance::Ambiguous);

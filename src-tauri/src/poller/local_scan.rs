@@ -177,9 +177,16 @@ fn scan_local_events_blocking(provider: Provider, roots: &[PathBuf]) -> ScanResu
         if result.health.truncated {
             break;
         }
-        let Ok(metadata) = std::fs::symlink_metadata(root) else {
-            result.health.root_unreadable = true;
-            continue;
+        let metadata = match std::fs::symlink_metadata(root) {
+            Ok(metadata) => metadata,
+            // A scan root that simply does not exist contributes no events and is NOT an
+            // error — e.g. a managed profile with no `projects/` dir. Only genuine read
+            // failures (permission, I/O) count as unreadable/"unavailable".
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(_) => {
+                result.health.root_unreadable = true;
+                continue;
+            }
         };
         if !metadata.is_dir() || metadata.file_type().is_symlink() {
             result.health.root_unreadable = true;
