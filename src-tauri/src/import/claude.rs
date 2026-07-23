@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 #[cfg(target_os = "macos")]
 use std::process::Command;
 
@@ -69,6 +69,41 @@ pub(crate) fn claude_oauth_identity_set_in(
         .filter(|s| !s.is_empty())
         .map(str::to_string);
     (email, account_id, org_uuid)
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub enum ClaudeLoginDecision {
+    MatchedRoot(PathBuf, Option<String>),
+    RideUnverifiedLive,
+    Refuse,
+}
+
+pub fn resolve_claude_identity_decision(
+    expected_identity: &str,
+    roots: &[PathBuf],
+) -> ClaudeLoginDecision {
+    let expected = expected_identity.trim();
+    if expected.is_empty() {
+        return ClaudeLoginDecision::Refuse;
+    }
+
+    let mut any_identity_present = false;
+    for root in roots {
+        let (email, account_id, org_uuid) = claude_oauth_identity_set_in(root);
+        any_identity_present |= email.is_some() || account_id.is_some() || org_uuid.is_some();
+        if email.as_deref() == Some(expected)
+            || account_id.as_deref() == Some(expected)
+            || org_uuid.as_deref() == Some(expected)
+        {
+            return ClaudeLoginDecision::MatchedRoot(root.clone(), account_id);
+        }
+    }
+
+    if any_identity_present {
+        ClaudeLoginDecision::Refuse
+    } else {
+        ClaudeLoginDecision::RideUnverifiedLive
+    }
 }
 
 /// True iff `profile_root` is the default/unmanaged Claude profile (one of
@@ -158,37 +193,38 @@ pub fn load_claude_profile_credentials(
 }
 
 /// Identity-safe read of the live default Claude Code login credentials.
-/// Returns credentials only when a default config root's `.claude.json`
-/// identity matches the non-empty `expected_identity`. The live keychain is
-/// read-only; callers must never refresh, rotate, or write these credentials.
+/// Returns credentials when a default config root's `.claude.json` identity
+/// matches the non-empty `expected_identity`, or when no root exposes any
+/// identity. The live keychain is read-only; callers must never refresh,
+/// rotate, or write these credentials.
 pub fn load_claude_default_login_credentials(expected_identity: &str) -> Option<Credentials> {
-    let expected = expected_identity.trim();
-    if expected.is_empty() {
-        return None;
-    }
-
-    for root in paths::claude_config_roots() {
-        let (email, account_id, org_uuid) = claude_oauth_identity_set_in(&root);
-        if email.as_deref() != Some(expected)
-            && account_id.as_deref() != Some(expected)
-            && org_uuid.as_deref() != Some(expected)
-        {
-            continue;
+    let roots = paths::claude_config_roots();
+    match resolve_claude_identity_decision(expected_identity, &roots) {
+        ClaudeLoginDecision::MatchedRoot(root, account_id) => {
+            let mut credentials =
+                read_claude_from_keychain_service(&paths::claude_keychain_service_name())
+                    .or_else(|| read_claude_credentials_file(&root.join(".credentials.json")))?;
+            if credentials.account_id.is_none() {
+                credentials.account_id = account_id;
+            }
+            Some(credentials)
         }
-
-        let Some(mut credentials) =
-            read_claude_from_keychain_service(&paths::claude_keychain_service_name())
-                .or_else(|| read_claude_credentials_file(&root.join(".credentials.json")))
-        else {
-            continue;
-        };
-        if credentials.account_id.is_none() {
-            credentials.account_id = account_id;
+        ClaudeLoginDecision::RideUnverifiedLive => {
+            // Fallback: Claude Code CLI frequently does not persist oauthAccount identity in
+            // ~/.claude/.claude.json (and the keychain token is opaque), so a positive identity match is
+            // impossible even though the machine has exactly one Claude Code login. When NO config root
+            // exposes ANY identity, the identity is UNVERIFIABLE (not mismatched): ride that single live
+            // keychain login read-only (the managed profile was imported from it). If any root DID expose a
+            // (mismatching) identity we do NOT fall back — that would risk adopting a different account.
+            let mut credentials =
+                read_claude_from_keychain_service(&paths::claude_keychain_service_name())?;
+            if credentials.account_id.is_none() {
+                credentials.account_id = Some(expected_identity.trim().to_string());
+            }
+            Some(credentials)
         }
-        return Some(credentials);
+        ClaudeLoginDecision::Refuse => None,
     }
-
-    None
 }
 
 /// Pure parser for Claude credentials JSON (file or Keychain password blob).

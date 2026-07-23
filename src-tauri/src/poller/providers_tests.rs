@@ -111,8 +111,21 @@ async fn claude_cli_profile_falls_back_to_snapshot_without_profile_credentials()
     let _lock = crate::import::CLAUDE_CONFIG_DIR_ENV_LOCK
         .lock()
         .expect("environment lock");
-    let _config = ClaudeConfigDirGuard::unset();
+    let _retain_unset_helper_without_invoking_it = ClaudeConfigDirGuard::unset;
     let temp = TempDir::new().expect("create temp directory");
+    let config_root = temp.path().join("default-claude");
+    std::fs::create_dir(&config_root).expect("create default Claude config directory");
+    let _config = ClaudeConfigDirGuard::set(&config_root);
+    std::fs::write(
+        config_root.join(".claude.json"),
+        serde_json::to_string(&json!({
+            "oauthAccount": {
+                "accountUuid": "other-account"
+            }
+        }))
+        .unwrap(),
+    )
+    .expect("write mismatched default Claude identity");
     let store = crate::store::AccountStore::new_at(temp.path().join("store"));
     let account_id = uuid::Uuid::new_v4().to_string();
     let profile_root = temp.path().join("profile");

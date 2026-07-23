@@ -1,4 +1,5 @@
 use super::*;
+use super::claude::{resolve_claude_identity_decision, ClaudeLoginDecision};
 use serde_json::json;
 use std::ffi::OsString;
 use std::path::Path;
@@ -284,6 +285,53 @@ fn claude_default_login_credentials_reject_empty_expected_identity() {
     write_claude_default_login(config_root.path());
 
     assert!(load_claude_default_login_credentials("  ").is_none());
+}
+
+#[test]
+fn claude_default_login_credentials_rides_live_login_when_no_identity_present() {
+    let _lock = crate::import::CLAUDE_CONFIG_DIR_ENV_LOCK
+        .lock()
+        .expect("environment lock");
+    let config_root = TempDir::new().expect("create default Claude config directory");
+    let _config = ClaudeConfigDirGuard::set(config_root.path());
+    std::fs::write(
+        config_root.path().join(".claude.json"),
+        serde_json::to_string(&json!({ "machineID": "test-machine" })).unwrap(),
+    )
+    .expect("write default Claude config without identity");
+
+    assert_eq!(
+        resolve_claude_identity_decision(
+            "expected-account",
+            &crate::paths::claude_config_roots(),
+        ),
+        ClaudeLoginDecision::RideUnverifiedLive
+    );
+}
+
+#[test]
+fn claude_default_login_credentials_refuses_when_identity_present_but_mismatched() {
+    let _lock = crate::import::CLAUDE_CONFIG_DIR_ENV_LOCK
+        .lock()
+        .expect("environment lock");
+    let config_root = TempDir::new().expect("create default Claude config directory");
+    let _config = ClaudeConfigDirGuard::set(config_root.path());
+    std::fs::write(
+        config_root.path().join(".claude.json"),
+        serde_json::to_string(&json!({
+            "oauthAccount": { "accountUuid": "different-account" }
+        }))
+        .unwrap(),
+    )
+    .expect("write mismatching default Claude identity");
+
+    assert_eq!(
+        resolve_claude_identity_decision(
+            "expected-account",
+            &crate::paths::claude_config_roots(),
+        ),
+        ClaudeLoginDecision::Refuse
+    );
 }
 
 #[test]
