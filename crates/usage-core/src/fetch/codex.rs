@@ -66,9 +66,59 @@ fn parse_spark_breakdown(root: &Value) -> Option<UsageBreakdownRow> {
     })
 }
 
+/// Classifies up to two Codex rate-limit windows into `(five_hour, week)`
+/// slots by their ACTUAL duration rather than by JSON position. This matters
+/// because Codex removed its 5-hour window from `wham/usage`: modern
+/// responses carry only a weekly `primary_window`, so positional mapping
+/// (`primary_window` → `five_hour`) would misfile weekly usage into the 5h
+/// slot.
+///
+/// - A window whose `window_seconds` falls in the 5-hour range
+///   `(4*3600..6*3600)` is placed in `five_hour`.
+/// - A window whose `window_seconds` falls in the weekly range
+///   `(6*24*3600..8*24*3600)` is placed in `week`.
+/// - A window with unknown/out-of-range duration falls back to the first
+///   still-empty slot (`five_hour` then `week`), preserving legacy
+///   positional behavior for unrecognized durations.
+///
+/// `primary_window` is processed before `secondary_window`; a slot is never
+/// overwritten once filled (first writer wins).
+fn classify_codex_windows(
+    primary: Option<QuotaUsage>,
+    secondary: Option<QuotaUsage>,
+) -> (Option<QuotaUsage>, Option<QuotaUsage>) {
+    let mut five_hour: Option<QuotaUsage> = None;
+    let mut week: Option<QuotaUsage> = None;
+
+    for usage in [primary, secondary].into_iter().flatten() {
+        match usage.window_seconds {
+            Some(s) if (4 * 3600..6 * 3600).contains(&s) => {
+                if five_hour.is_none() {
+                    five_hour = Some(usage);
+                }
+            }
+            Some(s) if (6 * 24 * 3600..8 * 24 * 3600).contains(&s) => {
+                if week.is_none() {
+                    week = Some(usage);
+                }
+            }
+            _ => {
+                if five_hour.is_none() {
+                    five_hour = Some(usage);
+                } else if week.is_none() {
+                    week = Some(usage);
+                }
+            }
+        }
+    }
+
+    (five_hour, week)
+}
+
 pub fn parse_codex_usage(root: &Value) -> CodexQuota {
     let rl = root.get("rate_limit");
     let get = |k: &str| rl.and_then(|r| r.get(k)).and_then(window);
+    let (five_hour, week) = classify_codex_windows(get("primary_window"), get("secondary_window"));
     CodexQuota {
         plan: root
             .get("plan_type")
@@ -79,8 +129,8 @@ pub fn parse_codex_usage(root: &Value) -> CodexQuota {
             .and_then(|x| x.as_str())
             .filter(|s| !s.is_empty())
             .map(String::from),
-        five_hour: get("primary_window"),
-        week: get("secondary_window"),
+        five_hour,
+        week,
         breakdown: parse_spark_breakdown(root).into_iter().collect(),
     }
 }
@@ -112,6 +162,40 @@ mod tests {
         assert_eq!(q.week.as_ref().unwrap().window_seconds, Some(604800));
         assert_eq!(window_label(Some(18000), "5h"), "5h");
         assert_eq!(window_label(Some(604800), "7d"), "7d");
+    }
+
+    #[test]
+    fn weekly_only_primary_window_yields_no_five_hour() {
+        // Codex removed its 5-hour rate-limit window: wham/usage now returns
+        // only a weekly primary_window with a null secondary_window. This
+        // must NOT land in the five_hour slot (positional mapping bug).
+        let v = json!({
+            "rate_limit": {
+                "primary_window": {"used_percent": 15.0, "limit_window_seconds": 604800},
+                "secondary_window": null
+            }
+        });
+        let q = parse_codex_usage(&v);
+        assert!(q.five_hour.is_none());
+        assert_eq!(q.week.as_ref().unwrap().percent, 15.0);
+        assert_eq!(q.week.as_ref().unwrap().window_seconds, Some(604800));
+    }
+
+    #[test]
+    fn unknown_duration_window_falls_back_to_five_hour_slot() {
+        // A window whose duration is neither 5h nor weekly range falls back
+        // to the first still-empty slot (five_hour), preserving legacy
+        // positional behavior for unrecognized durations.
+        let v = json!({
+            "rate_limit": {
+                "primary_window": {"used_percent": 33.0, "limit_window_seconds": 3600},
+                "secondary_window": null
+            }
+        });
+        let q = parse_codex_usage(&v);
+        assert_eq!(q.five_hour.as_ref().unwrap().percent, 33.0);
+        assert_eq!(q.five_hour.as_ref().unwrap().window_seconds, Some(3600));
+        assert!(q.week.is_none());
     }
 
     #[test]
@@ -165,6 +249,39 @@ mod tests {
         let v = json!({"rate_limit": {"primary_window": {"used_percent": 42.5}}});
         let q = parse_codex_usage(&v);
         assert!(q.breakdown.is_empty());
+    }
+
+    #[test]
+    fn two_unknown_duration_windows_fill_five_hour_then_week() {
+        // Two windows with out-of-range durations (neither 5h nor weekly)
+        // fall back to filling the first empty slot in processing order:
+        // primary_window -> five_hour, secondary_window -> week.
+        let v = json!({
+            "rate_limit": {
+                "primary_window": {"used_percent": 11.0, "limit_window_seconds": 3600},
+                "secondary_window": {"used_percent": 22.0, "limit_window_seconds": 7200}
+            }
+        });
+        let q = parse_codex_usage(&v);
+        assert_eq!(q.five_hour.as_ref().unwrap().percent, 11.0);
+        assert_eq!(q.week.as_ref().unwrap().percent, 22.0);
+    }
+
+    #[test]
+    fn two_weekly_windows_first_writer_wins_second_dropped() {
+        // Both windows fall in the weekly range; the week slot is
+        // first-writer-wins so primary_window claims it and
+        // secondary_window is dropped (no five_hour slot for a weekly
+        // duration, since it's out of the 5h range).
+        let v = json!({
+            "rate_limit": {
+                "primary_window": {"used_percent": 33.0, "limit_window_seconds": 604800},
+                "secondary_window": {"used_percent": 44.0, "limit_window_seconds": 604800}
+            }
+        });
+        let q = parse_codex_usage(&v);
+        assert_eq!(q.week.as_ref().unwrap().percent, 33.0);
+        assert!(q.five_hour.is_none());
     }
 }
 

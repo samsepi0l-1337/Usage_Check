@@ -110,8 +110,8 @@ function renderCard(usage: AccountUsage): HTMLElement {
 
   if (hasQuota) {
     const gauges = el("div", "gauges");
-    gauges.appendChild(renderGaugeRow("5h", usage.five_hour));
-    gauges.appendChild(renderGaugeRow("7d", usage.week));
+    if (usage.five_hour !== null) gauges.appendChild(renderGaugeRow("5h", usage.five_hour));
+    if (usage.week !== null) gauges.appendChild(renderGaugeRow("7d", usage.week));
     for (const row of usage.breakdown) {
       gauges.appendChild(renderGaugeRow(row.label, row.usage));
     }
