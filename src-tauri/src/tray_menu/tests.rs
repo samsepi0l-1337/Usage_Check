@@ -195,3 +195,139 @@
             }
         }
     }
+
+    #[test]
+    fn account_usage_lines_splits_both_windows_with_own_resets() {
+        let mut u = usage(Provider::Claude, Some(12.0), Some(66.0));
+        u.five_hour = Some(QuotaUsage {
+            percent: 12.0,
+            resets_at: Some(chrono::Utc::now() + chrono::Duration::seconds(8_160)), // ~2h16m
+            window_seconds: None,
+        });
+        u.week = Some(QuotaUsage {
+            percent: 66.0,
+            resets_at: Some(chrono::Utc::now() + chrono::Duration::seconds(526_800)), // ~6d3h
+            window_seconds: None,
+        });
+        let lines = account_usage_lines(&u);
+        assert_eq!(lines.len(), 2);
+        assert!(
+            lines[0].starts_with("     5h 12% · resets "),
+            "row 1: {}",
+            lines[0]
+        );
+        assert!(
+            lines[1].starts_with("     7d 66% · resets "),
+            "row 2: {}",
+            lines[1]
+        );
+    }
+
+    #[test]
+    fn account_usage_lines_only_five_hour_has_reset() {
+        let mut u = usage(Provider::Claude, Some(12.0), Some(66.0));
+        u.five_hour = Some(QuotaUsage {
+            percent: 12.0,
+            resets_at: Some(chrono::Utc::now() + chrono::Duration::seconds(8_160)),
+            window_seconds: None,
+        });
+        u.week = Some(QuotaUsage {
+            percent: 66.0,
+            resets_at: None,
+            window_seconds: None,
+        });
+        let lines = account_usage_lines(&u);
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].contains("· resets"), "row 1: {}", lines[0]);
+        assert_eq!(lines[1], "     7d 66%", "row 2 should have no reset suffix");
+    }
+
+    #[test]
+    fn account_usage_lines_only_week_has_reset() {
+        let mut u = usage(Provider::Claude, Some(12.0), Some(66.0));
+        u.five_hour = Some(QuotaUsage {
+            percent: 12.0,
+            resets_at: None,
+            window_seconds: None,
+        });
+        u.week = Some(QuotaUsage {
+            percent: 66.0,
+            resets_at: Some(chrono::Utc::now() + chrono::Duration::seconds(526_800)),
+            window_seconds: None,
+        });
+        let lines = account_usage_lines(&u);
+        assert_eq!(lines.len(), 2);
+        assert!(!lines[0].contains("· resets"), "row 1: {}", lines[0]);
+        assert!(lines[1].contains("· resets"), "row 2: {}", lines[1]);
+    }
+
+    #[test]
+    fn account_usage_lines_reset_values_are_source_distinct() {
+        let mut u = usage(Provider::Claude, Some(12.0), Some(66.0));
+        u.five_hour = Some(QuotaUsage {
+            percent: 12.0,
+            resets_at: Some(
+                chrono::Utc::now() + chrono::Duration::days(3) + chrono::Duration::hours(5),
+            ),
+            window_seconds: None,
+        });
+        u.week = Some(QuotaUsage {
+            percent: 66.0,
+            resets_at: Some(
+                chrono::Utc::now() + chrono::Duration::days(20) + chrono::Duration::hours(5),
+            ),
+            window_seconds: None,
+        });
+        let lines = account_usage_lines(&u);
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].contains("3d"), "row 1: {}", lines[0]);
+        assert!(!lines[0].contains("20d"), "row 1: {}", lines[0]);
+        assert!(lines[1].contains("20d"), "row 2: {}", lines[1]);
+        assert!(!lines[1].contains("3d"), "row 2: {}", lines[1]);
+
+        let reset_5h = lines[0]
+            .split("· resets ")
+            .nth(1)
+            .expect("row 1 has reset suffix");
+        let reset_7d = lines[1]
+            .split("· resets ")
+            .nth(1)
+            .expect("row 2 has reset suffix");
+        assert_ne!(reset_5h, reset_7d, "reset text should differ between windows");
+    }
+
+    #[test]
+    fn account_usage_lines_single_window_matches_today() {
+        let u = usage(Provider::Codex, None, Some(66.0));
+        let lines = account_usage_lines(&u);
+        assert_eq!(lines, vec![format!("     {}", format_usage_detail(&u))]);
+    }
+
+    #[test]
+    fn account_usage_lines_status_and_local_suffix_on_last_row_only() {
+        let mut u = usage(Provider::Claude, Some(12.0), Some(66.0));
+        u.status = "error".into();
+        u.local_status = Some("unavailable".into());
+        let lines = account_usage_lines(&u);
+        assert_eq!(lines.len(), 2);
+        assert!(!lines[0].contains("(error)"));
+        assert!(!lines[0].contains("(local: unavailable)"));
+        assert!(lines[1].contains("(error)"));
+        assert!(lines[1].contains("(local: unavailable)"));
+        let joined = lines.join(" ");
+        assert_eq!(joined.matches("(error)").count(), 1);
+        assert_eq!(joined.matches("(local: unavailable)").count(), 1);
+    }
+
+    #[test]
+    fn account_usage_lines_agy_pool_breakdown_stays_single_row() {
+        let mut u = usage(Provider::Agy, Some(12.0), Some(66.0));
+        u.pool_breakdown = vec![AgyQuotaPool {
+            name: "Gemini".into(),
+            five_hour: None,
+            week: Some(quota(97.0)),
+        }];
+        let lines = account_usage_lines(&u);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0], format!("     {}", format_usage_detail(&u)));
+    }

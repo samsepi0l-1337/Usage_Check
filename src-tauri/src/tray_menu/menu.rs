@@ -8,7 +8,7 @@ use usage_core::account::Provider;
 use crate::edition;
 use crate::poller::AccountUsage;
 use super::actions::auth_action_specs;
-use super::format::{account_name_line, account_usage_line, format_breakdown_row, format_pool_detail, format_usage_detail, vendor_title};
+use super::format::{account_name_line, account_usage_lines, format_breakdown_row, format_pool_detail, format_usage_detail, vendor_title};
 use super::TRAY_ID;
 
 fn append_vendor_section(
@@ -42,13 +42,15 @@ fn append_vendor_section(
             false,
             None::<&str>,
         )?)?;
-        menu.append(&MenuItem::with_id(
-            app,
-            format!("usage-{}", usage.account.id),
-            account_usage_line(usage),
-            false,
-            None::<&str>,
-        )?)?;
+        for (i, line) in account_usage_lines(usage).into_iter().enumerate() {
+            menu.append(&MenuItem::with_id(
+                app,
+                format!("usage-{}-{i}", usage.account.id),
+                line,
+                false,
+                None::<&str>,
+            )?)?;
+        }
         // Per-model breakdown rows (Claude Fable, Codex Spark, Cursor First
         // Party/API) — one MenuItem per row at the same indent as the primary
         // usage line.

@@ -184,8 +184,39 @@ pub(crate) fn account_name_line(usage: &AccountUsage) -> String {
     format!("  {} {}", status_dot(&usage.status), usage.display_name)
 }
 
-pub(crate) fn account_usage_line(usage: &AccountUsage) -> String {
-    format!("     {}", format_usage_detail(usage))
+/// Usage row(s) for an account, indented to match the account name line.
+///
+/// When an account has BOTH a 5h and a 7d window (Claude today), each window
+/// gets its own row with its own reset time. Every other case (single
+/// window, `detail_suffix`-only, agy `pool_breakdown`, or the token-totals
+/// fallback) collapses to the single `format_usage_detail` line, unchanged.
+pub(crate) fn account_usage_lines(usage: &AccountUsage) -> Vec<String> {
+    if usage.pool_breakdown.is_empty() {
+        if let (Some(five), Some(week)) = (&usage.five_hour, &usage.week) {
+            let mut row_5h = format!("     {}", format_quota_window(five, "5h"));
+            if let Some(reset) = relative_reset(five) {
+                row_5h.push_str(" · resets ");
+                row_5h.push_str(&reset);
+            }
+            let mut row_7d = format!("     {}", format_quota_window(week, "7d"));
+            if let Some(reset) = relative_reset(week) {
+                row_7d.push_str(" · resets ");
+                row_7d.push_str(&reset);
+            }
+            if usage.status != "ok" {
+                row_7d.push_str(" (");
+                row_7d.push_str(&usage.status);
+                row_7d.push(')');
+            }
+            if let Some(local_status) = usage.local_status.as_deref() {
+                row_7d.push_str(" (local: ");
+                row_7d.push_str(local_status);
+                row_7d.push(')');
+            }
+            return vec![row_5h, row_7d];
+        }
+    }
+    vec![format!("     {}", format_usage_detail(usage))]
 }
 
 /// Formats a single per-model breakdown row, e.g. "Fable 28%". No reset
