@@ -86,8 +86,13 @@ pub(crate) fn write_usage_snapshot_to_path(
     if identity.is_empty() || (quota.five_hour.is_none() && quota.week.is_none()) {
         return Ok(());
     }
+    // GAP 2 provenance: this is a live-fetch self-seed, not a bridge write — it
+    // may hold a possibly-unverified live-ride account's numbers under
+    // `identity`. `read_claude_snapshot_outcome` gates on this field for
+    // multi-account Claude CliProfile accounts.
     let snapshot = json!({
         "identity": identity,
+        "source": "live-ride",
         "rate_limits": {
             "five_hour": quota_window_snapshot(quota.five_hour.as_ref()),
             "seven_day": quota_window_snapshot(quota.week.as_ref()),
@@ -185,8 +190,12 @@ pub fn run_bridge<R: Read, W: Write>(
         .and_then(|limits| limits.get("seven_day"))
         .map(normalize_rate_window)
         .unwrap_or(Value::Null);
+    // GAP 2 provenance: written by Claude Code itself running under this
+    // specific managed profile — genuinely per-account, unlike a live-ride
+    // self-seed. See `write_usage_snapshot_to_path` for the counterpart.
     let snapshot = json!({
         "identity": identity,
+        "source": "bridge",
         "rate_limits": { "five_hour": five_hour, "seven_day": seven_day }
     });
     write_snapshot(

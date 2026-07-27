@@ -194,10 +194,20 @@ pub fn load_claude_profile_credentials(
 
 /// Identity-safe read of the live default Claude Code login credentials.
 /// Returns credentials when a default config root's `.claude.json` identity
-/// matches the non-empty `expected_identity`, or when no root exposes any
-/// identity. The live keychain is read-only; callers must never refresh,
-/// rotate, or write these credentials.
-pub fn load_claude_default_login_credentials(expected_identity: &str) -> Option<Credentials> {
+/// matches the non-empty `expected_identity`, or — when `allow_unverified_ride`
+/// is true — when no root exposes any identity. The live keychain is
+/// read-only; callers must never refresh, rotate, or write these credentials.
+///
+/// `allow_unverified_ride` must only be true when it is unambiguous that this
+/// live login belongs to `expected_identity` — i.e. this is the sole Claude
+/// `CliProfile` account in the store. With 2+ such accounts, Claude Code CLI's
+/// frequent lack of a persisted identity would otherwise let every account ride
+/// the SAME live keychain login (fails closed: caller must pass `false` in that
+/// case, and the app-owned cache/snapshot path takes over instead).
+pub fn load_claude_default_login_credentials(
+    expected_identity: &str,
+    allow_unverified_ride: bool,
+) -> Option<Credentials> {
     let roots = paths::claude_config_roots();
     match resolve_claude_identity_decision(expected_identity, &roots) {
         ClaudeLoginDecision::MatchedRoot(root, account_id) => {
@@ -216,6 +226,11 @@ pub fn load_claude_default_login_credentials(expected_identity: &str) -> Option<
             // exposes ANY identity, the identity is UNVERIFIABLE (not mismatched): ride that single live
             // keychain login read-only (the managed profile was imported from it). If any root DID expose a
             // (mismatching) identity we do NOT fall back — that would risk adopting a different account.
+            // This ride is only unambiguous for a single Claude CliProfile account; callers with 2+ such
+            // accounts must pass `allow_unverified_ride = false` so they don't all adopt the same login.
+            if !allow_unverified_ride {
+                return None;
+            }
             let mut credentials =
                 read_claude_from_keychain_service(&paths::claude_keychain_service_name())?;
             if credentials.account_id.is_none() {

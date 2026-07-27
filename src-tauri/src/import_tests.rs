@@ -252,7 +252,7 @@ fn claude_default_login_credentials_accept_each_matching_identity_from_file() {
     write_claude_default_login(config_root.path());
 
     for expected_identity in ["live@example.test", "live-account", "live-organization"] {
-        let credentials = load_claude_default_login_credentials(expected_identity)
+        let credentials = load_claude_default_login_credentials(expected_identity, true)
             .expect("identity-matching default Claude credentials");
         assert_eq!(credentials.access_token, "live-access-token");
         assert_eq!(
@@ -272,7 +272,7 @@ fn claude_default_login_credentials_reject_identity_mismatch() {
     let _config = ClaudeConfigDirGuard::set(config_root.path());
     write_claude_default_login(config_root.path());
 
-    assert!(load_claude_default_login_credentials("different-account").is_none());
+    assert!(load_claude_default_login_credentials("different-account", true).is_none());
 }
 
 #[test]
@@ -284,7 +284,36 @@ fn claude_default_login_credentials_reject_empty_expected_identity() {
     let _config = ClaudeConfigDirGuard::set(config_root.path());
     write_claude_default_login(config_root.path());
 
-    assert!(load_claude_default_login_credentials("  ").is_none());
+    assert!(load_claude_default_login_credentials("  ", true).is_none());
+}
+
+#[test]
+fn claude_default_login_credentials_ride_requires_allow_unverified_flag() {
+    let _lock = crate::import::CLAUDE_CONFIG_DIR_ENV_LOCK
+        .lock()
+        .expect("environment lock");
+    let config_root = TempDir::new().expect("create default Claude config directory");
+    let _config = ClaudeConfigDirGuard::set(config_root.path());
+    // No `oauthAccount` present — identity is unverifiable, not mismatched — so
+    // `resolve_claude_identity_decision` returns `RideUnverifiedLive` (covered by
+    // `claude_default_login_credentials_rides_live_login_when_no_identity_present`).
+    std::fs::write(
+        config_root.path().join(".claude.json"),
+        serde_json::to_string(&json!({ "machineID": "test-machine" })).unwrap(),
+    )
+    .expect("write default Claude config without identity");
+
+    // Ambiguous with 2+ Claude CliProfile accounts: the caller must pass
+    // `allow_unverified_ride = false`, and the loader must fail closed — deterministically
+    // None, WITHOUT even attempting the live keychain read — rather than let this account
+    // ride the same live login as every other account.
+    assert!(load_claude_default_login_credentials("expected-account", false).is_none());
+
+    // Sole account (today's working behavior): `allow_unverified_ride = true` still reaches
+    // the real ride attempt (no test keychain entry exists in this sandbox, so it also
+    // resolves to None here — the assertion above is what actually guards the fail-closed
+    // gate; this call just proves `true` does not short-circuit the same way).
+    assert!(load_claude_default_login_credentials("expected-account", true).is_none());
 }
 
 #[test]

@@ -2,7 +2,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use chrono::Utc;
-use usage_core::account::{Account, Credentials, Provider};
+use usage_core::account::{Account, AuthSource, Credentials, Provider};
 use usage_core::fetch::agy::AgyQuota;
 use usage_core::fetch::claude::parse_claude_usage;
 use usage_core::models::LocalUsage;
@@ -78,17 +78,78 @@ async fn enrich_agy_identity(store: &AccountStore, account: &Account, creds: &mu
     }
 }
 
+/// Whether a machine-local Antigravity quota may be attributed to this account.
+/// Fails closed: an unverifiable identity is only accepted when the account is the
+/// only agy account, so one desktop login is never shown as two different accounts.
+fn agy_local_quota_matches_account(
+    local_email: Option<&str>,
+    account_label: &str,
+    agy_account_count: usize,
+) -> bool {
+    match local_email {
+        Some(local_email) => {
+            if account_label.contains('@') {
+                // Account identity is known — only attribute the local quota when it
+                // actually belongs to this account.
+                account_label.eq_ignore_ascii_case(local_email)
+            } else {
+                // Account identity is unverified (e.g. freshly added). Only unambiguous
+                // when it is the sole agy account in the store.
+                agy_account_count <= 1
+            }
+        }
+        // Local quota carries no identity at all — cannot verify, so only accept it
+        // when there is no other agy account it could be confused with.
+        None => agy_account_count <= 1,
+    }
+}
+
 pub(super) async fn poll_agy(
     store: &AccountStore,
     client: &reqwest::Client,
     account: &Account,
 ) -> AccountUsage {
-    // 1) Prefer live Antigravity.app language_server (same as Model Quota UI).
-    if let Some(quota) = agy_local::fetch_local_quota().await {
-        if let Some(email) = quota.email.as_deref() {
-            store.update_label(&account.id, email);
+    poll_agy_with_local_quota(store, client, account, agy_local::fetch_local_quota().await).await
+}
+
+/// Core of `poll_agy`, parameterized on the local-quota probe result so the
+/// GAP 3 reject→evict wiring below is unit-testable at the poller level
+/// without driving the real `agy_local::fetch_local_quota()` probe (a `ps`
+/// process scan plus a local loopback HTTPS call — not mockable in a unit
+/// test).
+async fn poll_agy_with_local_quota(
+    store: &AccountStore,
+    client: &reqwest::Client,
+    account: &Account,
+    local_quota: Option<AgyQuota>,
+) -> AccountUsage {
+    // 1) Prefer live Antigravity.app language_server (same as Model Quota UI), but
+    // only when the probed identity can be safely attributed to this account —
+    // `fetch_local_quota` has no account argument, so with 2+ agy accounts a
+    // mismatched or unverifiable local login must not be shown as this account's
+    // usage (see `agy_local_quota_matches_account`).
+    if let Some(quota) = local_quota {
+        let agy_account_count = store
+            .list()
+            .iter()
+            .filter(|a| a.provider == Provider::Agy)
+            .count();
+        if agy_local_quota_matches_account(quota.email.as_deref(), &account.label, agy_account_count)
+        {
+            if let Some(email) = quota.email.as_deref() {
+                store.update_label(&account.id, email);
+            }
+            return account_usage_from_agy(account, &quota, "ok");
         }
-        return account_usage_from_agy(account, &quota, "ok");
+        // GAP 3 fix: the local quota could not be safely attributed to this
+        // account (ambiguous now that 2+ agy accounts exist). Any previously
+        // remembered `last_success` value may have been cached while this
+        // account was still the sole agy account — it is now equally
+        // ambiguous, so evict it here rather than let a subsequent OAuth
+        // failure re-serve it as `stale`. Do NOT evict when the local quota
+        // was accepted above, and this branch is only reached when a local
+        // quota was actually probed (never on `None`, i.e. no local path).
+        crate::poller::evict_last_success(&account.id);
     }
 
     // 2) OAuth remote Cloud Code fallback.
@@ -153,9 +214,23 @@ pub(super) enum CliProfileOutcome {
     IdentityChanged,
 }
 
+/// Reads a Claude usage snapshot and maps it to a `CliProfileOutcome`.
+///
+/// GAP 2 fix: a snapshot's `source` field distinguishes provenance — `"bridge"`
+/// (written by `claude_statusline::run_bridge`, i.e. Claude Code itself running
+/// under this specific managed profile — genuinely per-account) from
+/// `"live-ride"` (self-seeded from a possibly-unverified live-ride fetch, which
+/// may hold another account's numbers under this account's identity) and legacy
+/// snapshots with no `source` at all. `trust_unverified_source` gates this:
+/// when `false` (2+ Claude CliProfile accounts), only `"bridge"` snapshots are
+/// accepted — `"live-ride"` and source-less snapshots fail closed to
+/// `WaitingForUsage` rather than risk showing a possibly-wrong number. When
+/// `true` (sole account), behavior is unchanged from before this fix, including
+/// legacy source-less snapshots.
 pub(super) fn read_claude_snapshot_outcome(
     snapshot_path: &Path,
     expected_identity: &str,
+    trust_unverified_source: bool,
 ) -> CliProfileOutcome {
     let Ok(bytes) = std::fs::read(snapshot_path) else {
         return CliProfileOutcome::WaitingForUsage;
@@ -163,6 +238,12 @@ pub(super) fn read_claude_snapshot_outcome(
     let Ok(root) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
         return CliProfileOutcome::WaitingForUsage;
     };
+    if !trust_unverified_source {
+        let source = root.get("source").and_then(serde_json::Value::as_str);
+        if source != Some("bridge") {
+            return CliProfileOutcome::WaitingForUsage;
+        }
+    }
     let identity = root
         .get("identity")
         .and_then(serde_json::Value::as_str)
@@ -208,12 +289,19 @@ async fn seed_claude_creds_from_keychain(
 
 /// Identity-checked live-default-login read, bounded so a stalled auth prompt
 /// degrades gracefully. Returned credentials retain live-keychain provenance
-/// and must never be passed to the refresh flow.
-async fn load_live_claude_creds_from_keychain(expected_identity: &str) -> Option<Credentials> {
+/// and must never be passed to the refresh flow. `allow_unverified_ride` gates
+/// the unverifiable-identity fallback — see
+/// `import::load_claude_default_login_credentials`.
+async fn load_live_claude_creds_from_keychain(
+    expected_identity: &str,
+    allow_unverified_ride: bool,
+) -> Option<Credentials> {
     let ident = expected_identity.to_string();
     match tokio::time::timeout(
         Duration::from_secs(5),
-        tokio::task::spawn_blocking(move || import::load_claude_default_login_credentials(&ident)),
+        tokio::task::spawn_blocking(move || {
+            import::load_claude_default_login_credentials(&ident, allow_unverified_ride)
+        }),
     )
     .await
     {
@@ -264,13 +352,27 @@ fn claude_snapshot_after_fetch_failure(
     snapshot_path: &Path,
     expected_identity: &str,
     status: Option<u16>,
+    trust_unverified_source: bool,
 ) -> CliProfileOutcome {
-    match read_claude_snapshot_outcome(snapshot_path, expected_identity) {
+    match read_claude_snapshot_outcome(snapshot_path, expected_identity, trust_unverified_source) {
         CliProfileOutcome::WaitingForUsage => {
             CliProfileOutcome::Live(FetchOutcome::Failed { status })
         }
         other => other,
     }
+}
+
+/// Whether Step B of `poll_claude_cli_profile` may read the app-owned
+/// CLI-profile token cache. Pure decision, extracted so the GAP 1 fix is
+/// unit-testable directly: with a matching live login already ridden this
+/// step (`live_creds_present`), the cache must not be reinterpreted as an
+/// app-owned refreshable copy (pre-existing behavior); with 2+ Claude
+/// CliProfile accounts (`!sole_claude_cli_profile`), the cache may hold a
+/// live-ride token cached earlier while this account was still the sole
+/// account, which is no longer safe to trust — see the call site for the
+/// full rationale.
+fn claude_cli_profile_cache_is_trusted(live_creds_present: bool, sole_claude_cli_profile: bool) -> bool {
+    !live_creds_present && sole_claude_cli_profile
 }
 
 /// Polls a Claude CliProfile account by first riding an identity-matching live
@@ -285,8 +387,20 @@ pub(super) async fn poll_claude_cli_profile(
     snapshot_path: &Path,
 ) -> CliProfileOutcome {
     // Step A: ride the identity-matching Claude Code login read-only. This
-    // credential is never sent through `refresh_and_fetch_claude`.
-    let live_creds = load_live_claude_creds_from_keychain(expected_identity).await;
+    // credential is never sent through `refresh_and_fetch_claude`. The
+    // unverified-identity ride (Claude Code CLI often persists no identity) is
+    // only unambiguous when this is the sole Claude CliProfile account in the
+    // store — otherwise every such account would ride the SAME live login.
+    let sole_claude_cli_profile = store
+        .list()
+        .iter()
+        .filter(|a| {
+            a.provider == Provider::Claude && matches!(a.auth_source, AuthSource::CliProfile { .. })
+        })
+        .count()
+        <= 1;
+    let live_creds =
+        load_live_claude_creds_from_keychain(expected_identity, sole_claude_cli_profile).await;
     let mut live_fetch_status = None;
     if let Some(live) = live_creds.as_ref().filter(|credentials| {
         credentials
@@ -324,12 +438,22 @@ pub(super) async fn poll_claude_cli_profile(
     // live login exists, do not reinterpret the just-cached live token as an
     // app-owned refreshable copy. A distinct per-profile credential may still
     // seed the existing app-owned path.
-    let cached = if live_creds.is_some() {
-        None
-    } else {
+    //
+    // GAP 1 fix: with 2+ Claude CliProfile accounts, the app-owned cache may
+    // hold a live-ride token that Step A cached earlier — while this account
+    // was still (unambiguously) the sole account. Once a second account exists
+    // that ride is refused going forward, but the cached token would otherwise
+    // keep silently serving the earlier live login's usage. Skip the cache
+    // read entirely in that case and go straight to the identity-checked
+    // per-profile keychain seed below, which verifies identity against the
+    // profile's own `.claude.json`.
+    let cached = if claude_cli_profile_cache_is_trusted(live_creds.is_some(), sole_claude_cli_profile)
+    {
         store
             .cli_profile_credentials(account_id)
             .filter(|c| !c.access_token.is_empty())
+    } else {
+        None
     };
     let creds = match cached {
         Some(cached) => Some(cached),
@@ -392,15 +516,19 @@ pub(super) async fn poll_claude_cli_profile(
                     snapshot_path,
                     expected_identity,
                     status,
+                    sole_claude_cli_profile,
                 );
             }
         }
     }
     match live_fetch_status {
-        Some(status) => {
-            claude_snapshot_after_fetch_failure(snapshot_path, expected_identity, status)
-        }
-        None => read_claude_snapshot_outcome(snapshot_path, expected_identity),
+        Some(status) => claude_snapshot_after_fetch_failure(
+            snapshot_path,
+            expected_identity,
+            status,
+            sole_claude_cli_profile,
+        ),
+        None => read_claude_snapshot_outcome(snapshot_path, expected_identity, sole_claude_cli_profile),
     }
 }
 

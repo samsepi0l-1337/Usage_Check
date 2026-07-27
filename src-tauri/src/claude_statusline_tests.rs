@@ -65,6 +65,7 @@ fn write_usage_snapshot_emits_exact_round_trip_shape() {
         written,
         json!({
             "identity": "user@example.com",
+            "source": "live-ride",
             "rate_limits": {
                 "five_hour": {
                     "utilization": 33.25,
