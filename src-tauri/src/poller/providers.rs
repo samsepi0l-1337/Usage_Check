@@ -28,7 +28,7 @@ const REFRESH_THRESHOLD: Duration = Duration::from_secs(60);
 /// applies to a stale token that couldn't be refreshed.
 async fn maybe_refresh(
     store: &AccountStore,
-    id: &str,
+    credential_id: &str,
     provider: Provider,
     creds: Credentials,
 ) -> Credentials {
@@ -38,7 +38,7 @@ async fn maybe_refresh(
 
     match crate::oauth::refresh_access_token(provider, &creds).await {
         Ok(refreshed) => {
-            let _ = store.update_credentials(id, &refreshed);
+            let _ = store.update_credentials(credential_id, &refreshed);
             refreshed
         }
         Err(_) => creds,
@@ -69,7 +69,7 @@ async fn enrich_agy_identity(store: &AccountStore, account: &Account, creds: &mu
         }
     }
     if changed {
-        let _ = store.update_credentials(&account.id, creds);
+        let _ = store.update_credentials(AccountStore::credential_key(account), creds);
     }
     if needs_label {
         if let Some(email) = identity.email.filter(|s| !s.is_empty()) {
@@ -92,9 +92,15 @@ pub(super) async fn poll_agy(
     }
 
     // 2) OAuth remote Cloud Code fallback.
-    match store.credentials(&account.id) {
+    match store.credentials(AccountStore::credential_key(account)) {
         Some(creds) if !creds.access_token.is_empty() => {
-            let mut creds = maybe_refresh(store, &account.id, Provider::Agy, creds).await;
+            let mut creds = maybe_refresh(
+                store,
+                AccountStore::credential_key(account),
+                Provider::Agy,
+                creds,
+            )
+            .await;
             enrich_agy_identity(store, account, &mut creds).await;
             match fetch_agy_quota_remote(client, &creds).await {
                 Ok(mut quota) => {
@@ -451,9 +457,15 @@ pub(super) async fn poll_codex_oauth(
     client: &reqwest::Client,
     account: &Account,
 ) -> FetchOutcome {
-    match store.credentials(&account.id) {
+    match store.credentials(AccountStore::credential_key(account)) {
         Some(creds) if !creds.access_token.is_empty() => {
-            let creds = maybe_refresh(store, &account.id, Provider::Codex, creds).await;
+            let creds = maybe_refresh(
+                store,
+                AccountStore::credential_key(account),
+                Provider::Codex,
+                creds,
+            )
+            .await;
             match fetch_codex_quota(client, &creds).await {
                 Ok(quota) => {
                     if let Some(email) = quota.email.as_deref() {
@@ -473,9 +485,15 @@ pub(super) async fn poll_claude_oauth(
     client: &reqwest::Client,
     account: &Account,
 ) -> FetchOutcome {
-    match store.credentials(&account.id) {
+    match store.credentials(AccountStore::credential_key(account)) {
         Some(creds) if !creds.access_token.is_empty() => {
-            let creds = maybe_refresh(store, &account.id, Provider::Claude, creds).await;
+            let creds = maybe_refresh(
+                store,
+                AccountStore::credential_key(account),
+                Provider::Claude,
+                creds,
+            )
+            .await;
             match fetch_claude_quota(client, &creds).await {
                 Ok(quota) => {
                     let email = if account.label.contains('@') {

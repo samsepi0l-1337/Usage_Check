@@ -1,8 +1,6 @@
 use serde::Serialize;
 
-#[cfg(test)]
-use usage_core::account::AuthSource;
-use usage_core::account::{Account, Provider};
+use usage_core::account::{Account, AuthSource, Provider};
 use usage_core::fetch::agy::{compact_windows, AgyQuota, AgyQuotaPool};
 use usage_core::fetch::claude::ClaudeQuota;
 use usage_core::fetch::codex::CodexQuota;
@@ -230,7 +228,14 @@ pub fn assemble_account_usage(
     outcome: FetchOutcome,
     local: LocalUsage,
 ) -> AccountUsage {
-    let local_status = local_status_label(local.provenance).map(str::to_string);
+    // A browser-OAuth account has no local CLI profile by construction, so
+    // "no_local_profile" is an expected state, not a problem worth flagging.
+    let local_status = local_status_label(local.provenance)
+        .filter(|_| {
+            !(matches!(account.auth_source, AuthSource::BrowserOAuth { .. })
+                && local.provenance == LocalProvenance::NoLocalProfile)
+        })
+        .map(str::to_string);
     let (five_hour, week, plan, email, breakdown, status) = match outcome {
         FetchOutcome::Live {
             five_hour,

@@ -220,4 +220,13 @@ impl AccountStore {
             _ => None,
         }
     }
+
+    /// The key under which this account's app-owned secret is stored: the
+    /// `credential_id` carried by the auth source when there is one, else the
+    /// account id (legacy accounts, and auth kinds that have no separate
+    /// credential id). Callers MUST use this instead of `account.id` when
+    /// reading or writing `credentials/`.
+    pub fn credential_key(account: &Account) -> &str {
+        Self::secret_credential_id(&account.auth_source).unwrap_or(&account.id)
+    }
 }

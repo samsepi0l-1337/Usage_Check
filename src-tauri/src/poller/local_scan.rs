@@ -69,7 +69,7 @@ pub(super) async fn local_usage_for_provider(
         .iter()
         .map(|account| {
             store
-                .credentials(&account.id)
+                .credentials(AccountStore::credential_key(account))
                 .and_then(|credentials| credentials.account_id)
         })
         .collect();

@@ -743,6 +743,89 @@ fn v2_app_owned_sources_resolve_and_update_credentials_by_credential_id() {
 }
 
 #[test]
+fn credential_key_uses_secret_credential_id_and_falls_back_to_account_id() {
+    let sandbox = TestSandbox::new();
+    let store = sandbox.store();
+
+    let browser = store
+        .add_secret(
+            Provider::Agy,
+            "agy".into(),
+            SecretSource::BrowserOAuth,
+            credentials("agy-key-test"),
+        )
+        .unwrap();
+    let AuthSource::BrowserOAuth { credential_id } = &browser.auth_source else {
+        panic!("browser account must own browser credentials");
+    };
+    assert_eq!(
+        AccountStore::credential_key(&browser),
+        credential_id.as_str()
+    );
+    assert_ne!(AccountStore::credential_key(&browser), browser.id.as_str());
+
+    let reference = store
+        .add_reference(
+            Provider::Codex,
+            "codex".into(),
+            AuthSource::CliProfile {
+                profile_root: sandbox.root.join("cli-profile-test"),
+                ownership: ProfileOwnership::External,
+                expected_identity: "codex@example.com".into(),
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        AccountStore::credential_key(&reference),
+        reference.id.as_str()
+    );
+}
+
+#[test]
+fn credential_key_resolves_the_bug_account_id_keyed_read_fails() {
+    let sandbox = TestSandbox::new();
+    let store = sandbox.store();
+    let account = store
+        .add_secret(
+            Provider::Agy,
+            "agy".into(),
+            SecretSource::BrowserOAuth,
+            credentials("agy-regression"),
+        )
+        .unwrap();
+
+    assert_eq!(store.credentials(&account.id), None);
+    assert_eq!(
+        store.credentials(AccountStore::credential_key(&account)),
+        Some(credentials("agy-regression"))
+    );
+}
+
+#[test]
+fn update_credentials_by_credential_key_persists() {
+    let sandbox = TestSandbox::new();
+    let store = sandbox.store();
+    let account = store
+        .add_secret(
+            Provider::Agy,
+            "agy".into(),
+            SecretSource::BrowserOAuth,
+            credentials("agy-regression-before"),
+        )
+        .unwrap();
+    let updated = credentials("agy-regression-updated");
+
+    assert_eq!(
+        store.update_credentials(AccountStore::credential_key(&account), &updated),
+        Ok(())
+    );
+    assert_eq!(
+        store.credentials(AccountStore::credential_key(&account)),
+        Some(updated)
+    );
+}
+
+#[test]
 fn v2_remove_deletes_only_the_removed_accounts_app_owned_secret() {
     let sandbox = TestSandbox::new();
     let store = sandbox.store();

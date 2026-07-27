@@ -305,6 +305,63 @@ fn account_usage_from_cursor_carries_breakdown() {
 }
 
 #[test]
+fn assemble_browser_oauth_no_local_profile_suppresses_caveat() {
+    // BrowserOAuth accounts have no local CLI profile by construction, so
+    // NoLocalProfile is expected, not a problem — local_status must be None.
+    let acct = Account {
+        id: "test".into(),
+        provider: Provider::Codex,
+        label: "user@ex.com".into(),
+        auth_source: AuthSource::BrowserOAuth {
+            credential_id: "test-cred".into(),
+        },
+    };
+    let outcome = FetchOutcome::Failed { status: Some(500) };
+    let local = LocalUsage::none(usage_core::models::LocalProvenance::NoLocalProfile);
+    let result = assemble_account_usage(&acct, outcome, local);
+
+    assert_eq!(result.local_status, None);
+}
+
+#[test]
+fn assemble_browser_oauth_unavailable_still_surfaces_caveat() {
+    // A genuine problem provenance must still surface for BrowserOAuth accounts.
+    let acct = Account {
+        id: "test".into(),
+        provider: Provider::Codex,
+        label: "user@ex.com".into(),
+        auth_source: AuthSource::BrowserOAuth {
+            credential_id: "test-cred".into(),
+        },
+    };
+    let outcome = FetchOutcome::Failed { status: Some(500) };
+    let local = LocalUsage::none(usage_core::models::LocalProvenance::Unavailable);
+    let result = assemble_account_usage(&acct, outcome, local);
+
+    assert_eq!(result.local_status, Some("unavailable".to_string()));
+}
+
+#[test]
+fn assemble_cli_profile_no_local_profile_still_surfaces_caveat() {
+    // Non-BrowserOAuth accounts (e.g. CliProfile) must keep showing the caveat.
+    let acct = Account {
+        id: "test".into(),
+        provider: Provider::Codex,
+        label: "user@ex.com".into(),
+        auth_source: AuthSource::CliProfile {
+            profile_root: "/tmp/profile".into(),
+            ownership: usage_core::account::ProfileOwnership::External,
+            expected_identity: "user@ex.com".into(),
+        },
+    };
+    let outcome = FetchOutcome::Failed { status: Some(500) };
+    let local = LocalUsage::none(usage_core::models::LocalProvenance::NoLocalProfile);
+    let result = assemble_account_usage(&acct, outcome, local);
+
+    assert_eq!(result.local_status, Some("no_local_profile".to_string()));
+}
+
+#[test]
 fn assemble_failed_outcome_yields_empty_breakdown() {
     let acct = Account {
         id: "test".into(),

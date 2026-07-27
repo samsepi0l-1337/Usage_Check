@@ -141,7 +141,7 @@ pub(super) async fn poll_grok(
     client: &reqwest::Client,
     account: &Account,
 ) -> AccountUsage {
-    let Some(creds) = store.credentials(&account.id) else {
+    let Some(creds) = store.credentials(AccountStore::credential_key(account)) else {
         return account_usage_from_grok(
             account,
             &GrokPrepaid {
@@ -165,7 +165,10 @@ pub(super) async fn poll_grok(
 }
 
 pub(super) async fn poll_higgsfield(store: &AccountStore, account: &Account) -> AccountUsage {
-    if store.credentials(&account.id).is_none() {
+    if store
+        .credentials(AccountStore::credential_key(account))
+        .is_none()
+    {
         return account_usage_from_higgsfield(
             account,
             &HiggsfieldCredits {
