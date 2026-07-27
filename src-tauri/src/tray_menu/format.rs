@@ -157,11 +157,6 @@ pub fn format_usage_detail(usage: &AccountUsage) -> String {
     };
 
     if has_five || has_week {
-        if usage.totals.five_hours > 0 || usage.totals.week > 0 || usage.totals.month > 0 {
-            line.push_str(" · ⟨");
-            line.push_str(&format_token_windows(&usage.totals));
-            line.push('⟩');
-        }
         if let Some(reset) = usage
             .five_hour
             .as_ref()

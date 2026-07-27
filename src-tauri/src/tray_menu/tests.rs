@@ -145,6 +145,35 @@
     }
 
     #[test]
+    fn format_usage_detail_omits_token_totals_when_live_quota_present() {
+        let mut u = usage(Provider::Codex, Some(1.0), None);
+        u.five_hour = Some(QuotaUsage {
+            percent: 1.0,
+            resets_at: Some(chrono::Utc::now() + chrono::Duration::seconds(513_000)),
+            window_seconds: Some(18_000),
+        });
+        u.totals = WindowTotals {
+            five_hours: 0,
+            week: 3_022_300_000,
+            month: 0,
+        };
+        let line = format_usage_detail(&u);
+        assert_eq!(line, "1% · resets 5d 22h");
+    }
+
+    #[test]
+    fn format_usage_detail_falls_back_to_token_totals_without_live_quota() {
+        let mut u = usage(Provider::Codex, None, None);
+        u.totals = WindowTotals {
+            five_hours: 12_000,
+            week: 3_022_300_000,
+            month: 0,
+        };
+        let line = format_usage_detail(&u);
+        assert_eq!(line, "5h 12.0k · 7d 3022.3M");
+    }
+
+    #[test]
     fn test_auth_specs_no_forbidden_substrings() {
         let specs = auth_action_specs();
         let forbidden = [
