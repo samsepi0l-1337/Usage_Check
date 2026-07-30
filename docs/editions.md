@@ -1,9 +1,19 @@
 # UsageCheck providers and the Pro license
 
+> **Status: Pro activation is NOT available in the current release.** The
+> licensing service is not live, and shipped builds embed the documented
+> placeholder verification key, so every activation attempt fails and no
+> license key unlocks Cursor, Grok or Higgsfield — for anyone. Codex, Claude
+> and agy are unaffected. Already-configured paid accounts are preserved and
+> render as `pro_required`. This document describes the licensing **design**;
+> treat every "unlocks" statement below as what happens once a real
+> production key is embedded and the activation endpoint exists.
+
 UsageCheck ships as **one binary** for everyone. Codex, Claude, and agy
-(Gemini/Antigravity) are free. A **Pro license key** unlocks Cursor, Grok,
-and Higgsfield at **runtime** — there is no separate Free/Pro binary, no
-compile-time edition Cargo feature, and no `tauri.pro.conf.json` override.
+(Gemini/Antigravity) are free. A **Pro license key** is designed to unlock
+Cursor, Grok, and Higgsfield at **runtime** — there is no separate Free/Pro
+binary, no compile-time edition Cargo feature, and no `tauri.pro.conf.json`
+override.
 This replaces the two-binary/compile-time-edition split UsageCheck used
 before the runtime license gate landed.
 
@@ -201,7 +211,7 @@ GitHub Actions workflow: [`.github/workflows/release.yml`](../.github/workflows/
 Triggered by:
 
 - `workflow_dispatch` (manual)
-- Push of tags matching `v*` (e.g. `v0.1.34`)
+- Push of tags matching `v*` (e.g. `v0.2.0`)
 
 A `guard` job runs first and checks the embedded license Ed25519 public key
 (`src-tauri/src/license/pubkey.rs`) — see that file and `pubkey_tests.rs` for

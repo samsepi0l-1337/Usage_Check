@@ -40,7 +40,7 @@ with the URL above as the compiled-in default.
 {
   "key": "<license key as the user typed it>",
   "device": "<64-char lowercase hex — see \"Device binding\" below>",
-  "app_version": "<the UsageCheck crate version, e.g. \"0.1.33\">"
+  "app_version": "<the UsageCheck crate version, e.g. \"0.2.0\">"
 }
 ```
 

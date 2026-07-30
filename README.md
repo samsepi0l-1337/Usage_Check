@@ -15,24 +15,36 @@ rows, Add/Remove account actions, Refresh, and Quit.
   menu, fetched from each provider's usage API.
 - **agy**: Antigravity Model Quota (Gemini / Claude+GPT pools) as used % in
   the tray menu.
-- A Pro **license key** unlocks **Cursor** (local, Experimental), **Grok**
-  (xAI API management-key credits, not consumer SuperGrok), and
-  **Higgsfield** (credits via CLI) at runtime — no separate binary.
+- **Cursor** (local, Experimental), **Grok** (xAI API management-key credits,
+  not consumer SuperGrok) and **Higgsfield** (credits via CLI) are Pro
+  providers, designed to unlock at runtime from a license key rather than a
+  separate binary. **Pro activation is not available in this release** — see
+  the status note below.
 - A background poll refreshes the tray menu every 60 seconds (override with
   `USAGECHECK_POLL_SECS=<seconds>`, clamped to 15–3600).
 
 ## Licensing: single binary, runtime unlock
 
+> **Status in this release: Pro activation is NOT available.** The licensing
+> service is not live yet, and this build embeds the documented placeholder
+> verification key, so `resolve_public_key()` returns `None` in a release
+> build and **no license key can unlock Cursor, Grok or Higgsfield — for
+> anyone.** Codex, Claude and agy are unaffected and fully functional. Paid
+> accounts you already configured are never deleted; they are shown as
+> `pro_required`. Everything below this note describes the licensing design,
+> not a capability of this build.
+
 UsageCheck ships as **one binary** for everyone. Codex, Claude, and agy
-(Gemini/Antigravity) are free. A Pro license key unlocks Cursor, Grok, and
-Higgsfield at **runtime** — no separate Free/Pro build, no compile-time
-edition flag. Deep reference: [`docs/editions.md`](docs/editions.md) (provider
-matrix, setup) and [`docs/LICENSE_API.md`](docs/LICENSE_API.md) (the signed
-activation-token wire contract).
+(Gemini/Antigravity) are free. A Pro license key is designed to unlock Cursor,
+Grok, and Higgsfield at **runtime** — no separate Free/Pro build, no
+compile-time edition flag. Deep reference:
+[`docs/editions.md`](docs/editions.md) (provider matrix, setup) and
+[`docs/LICENSE_API.md`](docs/LICENSE_API.md) (the signed activation-token wire
+contract).
 
 | | Product name | Bundle ID | Providers |
 | --- | --- | --- | --- |
-| UsageCheck | `UsageCheck` | `com.usagecheck.desktop` | Codex, Claude, agy free; Cursor/Grok/Higgsfield unlocked by a Pro license key |
+| UsageCheck | `UsageCheck` | `com.usagecheck.desktop` | Codex, Claude, agy free; Cursor/Grok/Higgsfield gated behind a Pro license (not activatable in this release) |
 
 **Gemini** is `Provider::Agy` (Antigravity Gemini Models quota), not a
 separate enum.
@@ -40,10 +52,13 @@ separate enum.
 Tray → license section (near Add Account / Remove): shows the current
 license status, lets you **Activate from clipboard** (paste a license key,
 then click), **Deactivate license**, and **Get a license…** (opens
-`https://autoworkit.com/`).
+`https://autoworkit.com/`). In this release the status always reads
+`License: Free` and **Activate from clipboard** always fails — there is no
+activation service to reach yet.
 
 Pro-only import paths (tray → Add Account, visible once a Pro license is
-active), exact menu labels from `auth_action_specs()`:
+active — so **not visible in this release**), exact menu labels from
+`auth_action_specs()`:
 
 - **Import Cursor (local, Experimental)** — read-only reference to the local
   Cursor `state.vscdb` via an undocumented private RPC
@@ -67,7 +82,7 @@ unified binary — see `scripts/build-edition.sh` for a wrapped
 `docs/LICENSE_API.md`); the token is bound to this device and persisted
 locally — there is no separate Pro binary to install.
 
-**CI releases:** push a `v*` tag (e.g. `v0.1.34`) or run the Release workflow
+**CI releases:** push a `v*` tag (e.g. `v0.2.0`) or run the Release workflow
 manually. A guard step warns (but does not fail the build) if the embedded
 license public key is still the placeholder; such a build ships permanently
 Free — Pro cannot be unlocked. Artifacts: `UsageCheck-macos` (.dmg + .app),
