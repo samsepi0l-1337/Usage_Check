@@ -10,7 +10,42 @@ permissions:
   contents: write
 
 jobs:
+  # Guard: refuses to build/publish a release while the embedded license
+  # Ed25519 public key (`src-tauri/src/license/pubkey.rs::EMBEDDED_PUBLIC_KEY_B64`)
+  # is still the placeholder. Mechanism: `embedded_public_key_is_not_placeholder`
+  # is a `#[ignore]`d unit test in `src-tauri/src/license/pubkey_tests.rs` —
+  # ignored so the normal `cargo test -p usage-app` suite stays green before
+  # the real key is embedded — and this step runs it EXPLICITLY via
+  # `--ignored`. It currently FAILS by design (see that test's assertion
+  # message). To make a release buildable: embed the real autoworkit.com
+  # production Ed25519 public key in `EMBEDDED_PUBLIC_KEY_B64` (see
+  # `docs/LICENSE_API.md` for how the site generates and publishes it), then
+  # this guard passes automatically and no workflow change is needed.
+  guard:
+    name: Guard - embedded license public key
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install Linux deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Guard - embedded license public key is not the placeholder
+        run: cargo test -p usage-app -- embedded_public_key_is_not_placeholder --ignored
+
   build:
+    needs: guard
     strategy:
       fail-fast: false
       matrix:
@@ -18,33 +53,11 @@ jobs:
           # Pin macOS 15 so the runner image does not silently jump to macOS 26
           # when the macos-latest label migrates.
           - platform: macos-15
-            edition: free
-            cargo_features: custom-protocol,edition-free
-            tauri_config: ""
-            product_name: UsageCheck-Free
             args: --bundles dmg,app
-            artifact: macos-free
-          - platform: macos-15
-            edition: pro
-            cargo_features: custom-protocol,edition-pro
-            tauri_config: --config tauri.pro.conf.json
-            product_name: UsageCheck-Pro
-            args: --bundles dmg,app
-            artifact: macos-pro
+            artifact: macos
           - platform: windows-latest
-            edition: free
-            cargo_features: custom-protocol,edition-free
-            tauri_config: ""
-            product_name: UsageCheck-Free
             args: --bundles nsis,msi
-            artifact: windows-free
-          - platform: windows-latest
-            edition: pro
-            cargo_features: custom-protocol,edition-pro
-            tauri_config: --config tauri.pro.conf.json
-            product_name: UsageCheck-Pro
-            args: --bundles nsis,msi
-            artifact: windows-pro
+            artifact: windows
 
     runs-on: ${{ matrix.platform }}
 
@@ -64,7 +77,6 @@ jobs:
         uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri -> target
-          key: edition-${{ matrix.edition }}
 
       - name: Install Linux deps
         if: runner.os == 'Linux'
@@ -80,23 +92,14 @@ jobs:
       - name: Install Tauri CLI
         run: cargo install tauri-cli --version "^2" --locked
 
-      - name: Build bundles (${{ matrix.edition }})
+      # Single unified build — no more free/pro edition split (Pro providers
+      # are unlocked at runtime by a license key, not by a separate binary).
+      - name: Build bundles
         working-directory: src-tauri
         shell: bash
         run: |
           set -euo pipefail
-          if [ "${{ matrix.edition }}" = "pro" ]; then
-            cargo tauri build \
-              --features "${{ matrix.cargo_features }}" \
-              ${{ matrix.tauri_config }} \
-              ${{ matrix.args }} \
-              -- --no-default-features
-          else
-            cargo tauri build \
-              --features "${{ matrix.cargo_features }}" \
-              ${{ matrix.tauri_config }} \
-              ${{ matrix.args }}
-          fi
+          cargo tauri build --features custom-protocol ${{ matrix.args }}
 
       - name: Collect bundle paths
         id: bundles
@@ -120,12 +123,12 @@ jobs:
       # Without an Apple Developer ID, Tauri must still ad-hoc sign the .app bundle
       # (signingIdentity "-"). Linker-only signatures look "damaged" under Gatekeeper.
       - name: Verify macOS ad-hoc code signature
-        if: startsWith(matrix.artifact, 'macos')
+        if: matrix.artifact == 'macos'
         shell: bash
         run: |
           set -euo pipefail
           BUNDLE_DIR="${{ steps.bundles.outputs.dir }}"
-          APP="$BUNDLE_DIR/macos/${{ matrix.product_name }}.app"
+          APP="$BUNDLE_DIR/macos/UsageCheck.app"
           test -d "$APP"
           codesign --verify --deep --strict --verbose=2 "$APP"
           codesign -dv --verbose=4 "$APP" 2>&1 | tee /tmp/usagecheck-codesign.txt
@@ -138,20 +141,20 @@ jobs:
           fi
 
       - name: Upload macOS artifacts
-        if: startsWith(matrix.artifact, 'macos')
+        if: matrix.artifact == 'macos'
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.product_name }}-macos
+          name: UsageCheck-macos
           path: |
             ${{ steps.bundles.outputs.dir }}/dmg/*.dmg
             ${{ steps.bundles.outputs.dir }}/macos/*.app
           if-no-files-found: error
 
       - name: Upload Windows artifacts
-        if: startsWith(matrix.artifact, 'windows')
+        if: matrix.artifact == 'windows'
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.product_name }}-windows
+          name: UsageCheck-windows
           path: |
             ${{ steps.bundles.outputs.dir }}/nsis/*.exe
             ${{ steps.bundles.outputs.dir }}/msi/*.msi
@@ -171,12 +174,10 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           # Artifacts keep bundle subdirs (dmg/, nsis/, msi/) from upload paths.
+          # 3 unified installers: macOS .dmg, Windows .exe (NSIS) + .msi.
           files: |
-            dist/UsageCheck-Free-macos/**/*.dmg
-            dist/UsageCheck-Pro-macos/**/*.dmg
-            dist/UsageCheck-Free-windows/**/*.exe
-            dist/UsageCheck-Pro-windows/**/*.exe
-            dist/UsageCheck-Free-windows/**/*.msi
-            dist/UsageCheck-Pro-windows/**/*.msi
+            dist/UsageCheck-macos/**/*.dmg
+            dist/UsageCheck-windows/**/*.exe
+            dist/UsageCheck-windows/**/*.msi
           fail_on_unmatched_files: true
           generate_release_notes: true

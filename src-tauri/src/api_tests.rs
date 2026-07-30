@@ -11,17 +11,14 @@ fn sample_auth_source(provider: Provider, identity: &str) -> AuthSource {
         Provider::Agy => AuthSource::BrowserOAuth {
             credential_id: format!("{identity}-credential"),
         },
-        #[cfg(feature = "edition-pro")]
         Provider::Cursor => AuthSource::CursorDatabase {
             database_path: "/profiles/cursor/state.vscdb".into(),
             expected_identity: identity.into(),
         },
-        #[cfg(feature = "edition-pro")]
         Provider::Grok => AuthSource::XaiManagement {
             credential_id: format!("{identity}-credential"),
             team_id: identity.into(),
         },
-        #[cfg(feature = "edition-pro")]
         Provider::Higgsfield => AuthSource::HiggsfieldCli {
             expected_identity: identity.into(),
         },
@@ -278,7 +275,6 @@ fn dto_includes_detail_suffix() {
 #[test]
 fn dto_never_serializes_auth_metadata() {
     let usages = std::iter::once(sample(Provider::Codex, "cli", None, None));
-    #[cfg(feature = "edition-pro")]
     let usages = usages.chain([
         sample(Provider::Cursor, "cursor", None, None),
         sample(Provider::Grok, "grok", None, None),
@@ -303,7 +299,6 @@ fn status_stale_serializes() {
 fn openapi_declares_detail_suffix_and_stale() {
     assert!(["detail_suffix", "stale", "higgsfield"].into_iter().all(|v| OPENAPI_YAML.contains(v)));
 }
-#[cfg(feature = "edition-pro")]
 #[test]
 fn provider_filter_accepts_pro_providers() {
     let state = state_with(&[

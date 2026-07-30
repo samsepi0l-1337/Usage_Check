@@ -27,11 +27,9 @@ use providers::{
     assemble_cli_profile_usage, poll_agy, poll_claude_cli_profile, poll_claude_oauth,
     poll_codex_cli_profile, poll_codex_oauth,
 };
-#[cfg(feature = "edition-pro")]
 mod providers_pro;
-#[cfg(feature = "edition-pro")]
 use providers_pro::{poll_cursor, poll_grok, poll_higgsfield};
-pub use usage_model::{assemble_account_usage, AccountUsage};
+pub use usage_model::{account_usage_pro_required, assemble_account_usage, AccountUsage};
 
 mod last_success;
 pub use last_success::evict_last_success;
@@ -39,6 +37,13 @@ use last_success::{apply_last_success, last_success_cache};
 
 /// Builds the full per-account usage snapshot.
 pub async fn poll_all(store: &AccountStore) -> Vec<AccountUsage> {
+    poll_all_with(store, crate::license::is_pro()).await
+}
+
+/// Core of [`poll_all`], with the license flag injected explicitly (mirrors
+/// `tray_menu::actions::auth_action_specs_with`) so the paid-provider gate is
+/// unit-testable without reading global license state.
+async fn poll_all_with(store: &AccountStore, is_pro: bool) -> Vec<AccountUsage> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
         .connect_timeout(std::time::Duration::from_secs(10))
@@ -99,11 +104,11 @@ pub async fn poll_all(store: &AccountStore) -> Vec<AccountUsage> {
                     }
                 }
             }
-            #[cfg(feature = "edition-pro")]
+            Provider::Cursor | Provider::Grok | Provider::Higgsfield if !is_pro => {
+                account_usage_pro_required(&account)
+            }
             Provider::Cursor => poll_cursor(store, &client, &account).await,
-            #[cfg(feature = "edition-pro")]
             Provider::Grok => poll_grok(store, &client, &account).await,
-            #[cfg(feature = "edition-pro")]
             Provider::Higgsfield => poll_higgsfield(store, &account).await,
         };
         let usage = {
@@ -117,3 +122,7 @@ pub async fn poll_all(store: &AccountStore) -> Vec<AccountUsage> {
 
     out
 }
+
+#[cfg(test)]
+#[path = "pro_gate_tests.rs"]
+mod pro_gate_tests;

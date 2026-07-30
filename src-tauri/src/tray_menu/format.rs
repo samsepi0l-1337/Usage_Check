@@ -1,8 +1,9 @@
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use usage_core::fetch::agy::AgyQuotaPool;
 use usage_core::fetch::codex::window_label;
 use usage_core::models::{QuotaUsage, UsageBreakdownRow};
 use usage_core::account::Provider;
+use crate::license::{ActivationErrorClass, LicenseStatus};
 use crate::poller::AccountUsage;
 
 fn status_dot(status: &str) -> &'static str {
@@ -35,19 +36,64 @@ fn format_percent(p: f64) -> String {
     }
 }
 
-fn relative_reset(q: &QuotaUsage) -> Option<String> {
-    let resets_at = q.resets_at?;
-    let secs = (resets_at - Utc::now()).num_seconds().max(0);
+/// Relative time until `at` (e.g. `"5d 22h"`, `"2h 16m"`, `"40m"`) — the
+/// single formatting rule shared by every "resets"/"expires" row in the
+/// tray, so a license expiry reads exactly like a quota reset.
+pub(crate) fn relative_time(at: DateTime<Utc>) -> String {
+    let secs = (at - Utc::now()).num_seconds().max(0);
     let days = secs / 86_400;
     let hours = (secs % 86_400) / 3_600;
     let minutes = (secs % 3_600) / 60;
     if days > 0 {
-        Some(format!("{days}d {hours}h"))
+        format!("{days}d {hours}h")
     } else if hours > 0 {
-        Some(format!("{hours}h {minutes}m"))
+        format!("{hours}h {minutes}m")
     } else {
-        Some(format!("{minutes}m"))
+        format!("{minutes}m")
     }
+}
+
+fn relative_reset(q: &QuotaUsage) -> Option<String> {
+    Some(relative_time(q.resets_at?))
+}
+
+/// Row 1 of the tray license section: the current [`LicenseStatus`] as a
+/// single line. Never includes the key or token — `LicenseStatus` carries
+/// nothing but an optional expiry timestamp.
+pub(crate) fn license_status_line(status: LicenseStatus) -> String {
+    match status {
+        LicenseStatus::Free => "License: Free".to_string(),
+        LicenseStatus::Pro { expires_at: None } => "License: Pro".to_string(),
+        LicenseStatus::Pro {
+            expires_at: Some(at),
+        } => format!("License: Pro · expires {}", relative_time(at)),
+        LicenseStatus::Expired => "License: expired — reactivate".to_string(),
+        LicenseStatus::GracePeriodEnded => "License: verification needed".to_string(),
+    }
+}
+
+/// Row 2 of the tray license section: the outcome of the most recent
+/// activation attempt this process. Built ONLY from the coarse
+/// [`ActivationErrorClass`] (H4) — never from `ActivationError`'s `Display`,
+/// which for `Server{..}`/`InvalidToken` embeds server-provided or
+/// attacker-influenced text — so nothing this function can produce ever
+/// contains the license key, the token, or raw server text: `Result<(),
+/// ActivationErrorClass>` carries no string payload at all.
+pub(crate) fn activation_result_line(result: &Result<(), ActivationErrorClass>) -> String {
+    let detail = match result {
+        Ok(()) => "activated",
+        Err(ActivationErrorClass::Network) => "no network",
+        Err(ActivationErrorClass::ServerRejected) => "invalid key",
+        Err(ActivationErrorClass::InvalidToken) => "invalid key",
+        Err(ActivationErrorClass::DeviceMismatch) => "bound to a different device",
+        Err(ActivationErrorClass::EndpointMissing) => "server not available yet",
+        Err(ActivationErrorClass::Persist) => "could not save license",
+        Err(ActivationErrorClass::NoStoredLicense) => "no license to refresh",
+        Err(ActivationErrorClass::ReplayedToken) => "try again",
+        Err(ActivationErrorClass::NotEntitled) => "key not currently valid",
+        Err(ActivationErrorClass::DeviceNotPersisted) => "could not save device id",
+    };
+    format!("Last attempt: {detail}")
 }
 
 fn format_quota_window(q: &QuotaUsage, fallback_label: &str) -> String {

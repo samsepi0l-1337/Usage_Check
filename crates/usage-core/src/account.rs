@@ -8,11 +8,8 @@ pub enum Provider {
     Codex,
     Claude,
     Agy,
-    #[cfg(feature = "edition-pro")]
     Cursor,
-    #[cfg(feature = "edition-pro")]
     Grok,
-    #[cfg(feature = "edition-pro")]
     Higgsfield,
 }
 
@@ -22,11 +19,8 @@ impl Provider {
             Provider::Codex => "codex",
             Provider::Claude => "claude",
             Provider::Agy => "agy",
-            #[cfg(feature = "edition-pro")]
             Provider::Cursor => "cursor",
-            #[cfg(feature = "edition-pro")]
             Provider::Grok => "grok",
-            #[cfg(feature = "edition-pro")]
             Provider::Higgsfield => "higgsfield",
         }
     }
@@ -36,11 +30,8 @@ impl Provider {
             "codex" => Some(Provider::Codex),
             "claude" => Some(Provider::Claude),
             "agy" => Some(Provider::Agy),
-            #[cfg(feature = "edition-pro")]
             "cursor" => Some(Provider::Cursor),
-            #[cfg(feature = "edition-pro")]
             "grok" => Some(Provider::Grok),
-            #[cfg(feature = "edition-pro")]
             "higgsfield" => Some(Provider::Higgsfield),
             _ => None,
         }
@@ -51,11 +42,8 @@ impl Provider {
             Provider::Codex => "Codex",
             Provider::Claude => "Claude",
             Provider::Agy => "Antigravity (agy)",
-            #[cfg(feature = "edition-pro")]
             Provider::Cursor => "Cursor",
-            #[cfg(feature = "edition-pro")]
             Provider::Grok => "xAI API credits",
-            #[cfg(feature = "edition-pro")]
             Provider::Higgsfield => "Higgsfield",
         }
     }
@@ -146,12 +134,10 @@ mod tests {
             auth_capability(Provider::Agy).methods,
             &[AuthMethod::BrowserOAuth]
         );
-        #[cfg(feature = "edition-pro")]
         assert_eq!(
             auth_capability(Provider::Cursor).methods,
             &[AuthMethod::LocalDatabase]
         );
-        #[cfg(feature = "edition-pro")]
         assert_eq!(
             auth_capability(Provider::Grok).methods,
             &[
@@ -159,7 +145,6 @@ mod tests {
                 AuthMethod::ManagementKeyEnvironment,
             ]
         );
-        #[cfg(feature = "edition-pro")]
         assert_eq!(
             auth_capability(Provider::Higgsfield).methods,
             &[AuthMethod::Cli]
@@ -188,7 +173,6 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "edition-pro")]
     #[test]
     fn cursor_database_account_round_trips_json() {
         assert_account_json_round_trip(
@@ -200,7 +184,6 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "edition-pro")]
     #[test]
     fn xai_management_account_round_trips_json() {
         assert_account_json_round_trip(
@@ -212,7 +195,6 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "edition-pro")]
     #[test]
     fn higgsfield_cli_account_round_trips_json() {
         assert_account_json_round_trip(
@@ -223,7 +205,6 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "edition-pro")]
     #[test]
     fn grok_display_name_identifies_xai_api_credits() {
         assert_eq!(Provider::Grok.display_name(), "xAI API credits");

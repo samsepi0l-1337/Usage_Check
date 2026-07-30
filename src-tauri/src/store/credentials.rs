@@ -101,7 +101,6 @@ impl AccountStore {
             SecretSource::BrowserOAuth => AuthSource::BrowserOAuth {
                 credential_id: credential_id.clone(),
             },
-            #[cfg(feature = "edition-pro")]
             SecretSource::XaiManagement { team_id } => AuthSource::XaiManagement {
                 credential_id: credential_id.clone(),
                 team_id,

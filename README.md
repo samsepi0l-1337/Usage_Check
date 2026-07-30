@@ -15,28 +15,35 @@ rows, Add/Remove account actions, Refresh, and Quit.
   menu, fetched from each provider's usage API.
 - **agy**: Antigravity Model Quota (Gemini / Claude+GPT pools) as used % in
   the tray menu.
-- **UsageCheck Pro** adds **Cursor** (local, Experimental), **Grok** (xAI API
-  management-key credits, not consumer SuperGrok), and **Higgsfield**
-  (credits via CLI).
+- A Pro **license key** unlocks **Cursor** (local, Experimental), **Grok**
+  (xAI API management-key credits, not consumer SuperGrok), and
+  **Higgsfield** (credits via CLI) at runtime — no separate binary.
 - A background poll refreshes the tray menu every 60 seconds (override with
   `USAGECHECK_POLL_SECS=<seconds>`, clamped to 15–3600).
 
-## Free vs Pro editions
+## Licensing: single binary, runtime unlock
 
-UsageCheck ships as **two compile-time editions** (v0.1.4+), not a single
-binary unlocked at runtime. Deep reference:
-[`docs/editions.md`](docs/editions.md).
+UsageCheck ships as **one binary** for everyone. Codex, Claude, and agy
+(Gemini/Antigravity) are free. A Pro license key unlocks Cursor, Grok, and
+Higgsfield at **runtime** — no separate Free/Pro build, no compile-time
+edition flag. Deep reference: [`docs/editions.md`](docs/editions.md) (provider
+matrix, setup) and [`docs/LICENSE_API.md`](docs/LICENSE_API.md) (the signed
+activation-token wire contract).
 
-| Edition | Product name | Bundle ID | Providers | Build |
-| ------- | ------------ | --------- | --------- | ----- |
-| **Free** (default) | `UsageCheck-Free` | `com.usagecheck.desktop.free` | Codex, Claude, agy (Gemini/Antigravity) | `./scripts/build-edition.sh free` |
-| **Pro** | `UsageCheck-Pro` | `com.usagecheck.desktop.pro` | Free + Cursor, Grok, Higgsfield | `./scripts/build-edition.sh pro` |
+| | Product name | Bundle ID | Providers |
+| --- | --- | --- | --- |
+| UsageCheck | `UsageCheck` | `com.usagecheck.desktop` | Codex, Claude, agy free; Cursor/Grok/Higgsfield unlocked by a Pro license key |
 
 **Gemini** is `Provider::Agy` (Antigravity Gemini Models quota), not a
 separate enum.
 
-Pro-only import paths (tray → Add Account), exact menu labels from
-`auth_action_specs()`:
+Tray → license section (near Add Account / Remove): shows the current
+license status, lets you **Activate from clipboard** (paste a license key,
+then click), **Deactivate license**, and **Get a license…** (opens
+`https://autoworkit.com/`).
+
+Pro-only import paths (tray → Add Account, visible once a Pro license is
+active), exact menu labels from `auth_action_specs()`:
 
 - **Import Cursor (local, Experimental)** — read-only reference to the local
   Cursor `state.vscdb` via an undocumented private RPC
@@ -51,17 +58,19 @@ Pro-only import paths (tray → Add Account), exact menu labels from
   (no credential file read). Status is `needs_setup` when the CLI or its JSON
   output is unavailable.
 
-Plain `cargo build` produces the **Free** edition. Pro builds use
-`--no-default-features --features custom-protocol,edition-pro` and
-`tauri.pro.conf.json` (see `scripts/build-edition.sh`).
+Plain `cargo build` (or `./scripts/build-edition.sh`) produces the single
+unified binary — see `scripts/build-edition.sh` for a wrapped
+`cargo tauri build` invocation.
 
-**License note:** Pro is a separate binary with additional provider modules
-compiled in. There is no online license server; distribution is by
-edition-specific installers from CI.
+**License note:** activation is a signed Ed25519 token issued by
+`autoworkit.com` and re-verified on every status check (see
+`docs/LICENSE_API.md`); the token is bound to this device and persisted
+locally — there is no separate Pro binary to install.
 
-**CI releases:** push a `v*` tag (e.g. `v0.1.4`) or run the Release workflow
-manually. Artifacts: `UsageCheck-Free-macos`, `UsageCheck-Pro-macos`,
-`UsageCheck-Free-windows`, `UsageCheck-Pro-windows`. See
+**CI releases:** push a `v*` tag (e.g. `v0.1.34`) or run the Release workflow
+manually. A guard step fails the build if the embedded license public key is
+still the placeholder. Artifacts: `UsageCheck-macos` (.dmg + .app),
+`UsageCheck-windows` (.exe + .msi). See
 [`docs/editions.md`](docs/editions.md#ci-release-matrix).
 
 ## Architecture
@@ -155,13 +164,8 @@ after upgrading from a pre-schema-v2 build.
 
 ```sh
 cargo test -p usage-core   # core models/aggregate/fetch/scanners/account
-cargo test -p usage-app    # oauth/poller/store/import/paths
+cargo test -p usage-app    # oauth/poller/store/import/paths/license
 cargo build -p usage-app --release
-
-# Both editions (mutually exclusive features):
-cargo test -p usage-core --no-default-features --features edition-free
-cargo test -p usage-core --no-default-features --features edition-pro
-cargo test -p usage-app --no-default-features --features custom-protocol,edition-pro
 ```
 
 On macOS the release binary is `target/release/usage-app`. On Windows, build
@@ -222,10 +226,10 @@ via `USAGECHECK_ALERT_THRESHOLD`), a **⚠ N account(s) near limit** banner
 appears at the top of the tray menu.
 
 The tray menu also shows an informational **`Updated HH:MM:SS`** row (the last
-poll time, local clock), a **`<Product Name> v<version>`** row
-(`UsageCheck-Free` or `UsageCheck-Pro` depending on edition) and, unless the
-API is disabled, an **Open Usage API** item that opens the local API index
-(`http://127.0.0.1:<port>/`) in your browser.
+poll time, local clock), a **`UsageCheck v<version>`** row, a license section
+(status, last activation attempt, Activate/Deactivate/Get a license) and,
+unless the API is disabled, an **Open Usage API** item that opens the local
+API index (`http://127.0.0.1:<port>/`) in your browser.
 
 Right-click (or use the tray menu) → **Quit UsageCheck** to exit. Accounts can
 be removed individually via the tray's **Remove** submenu; removing a CLI

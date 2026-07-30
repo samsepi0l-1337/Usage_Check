@@ -20,7 +20,25 @@ pub fn home_dir() -> Option<PathBuf> {
 }
 
 /// UsageCheck's application-owned data root.
+///
+/// Debug-build-only test seam: `USAGECHECK_APP_DATA_DIR`, if set and
+/// non-empty, overrides the platform-derived path below. This exists so
+/// integration tests can point the license/account-store machinery at an
+/// isolated tempdir WITHOUT mutating the much broader-blast-radius `HOME`
+/// env var (which also redirects Claude/Codex/Cursor config resolution) and
+/// without racing the `HOME` mutation another test file already owns (see
+/// `claude_statusline_tests.rs`). Gated by `cfg!(debug_assertions)` for the
+/// same reason `USAGECHECK_LICENSE_PUBKEY` is (`license/pubkey.rs`): a
+/// release binary must never have its app-data location redirected by an
+/// environment variable.
 pub fn usagecheck_app_data_dir() -> Option<PathBuf> {
+    if cfg!(debug_assertions) {
+        if let Ok(raw) = std::env::var("USAGECHECK_APP_DATA_DIR") {
+            if !raw.trim().is_empty() {
+                return Some(PathBuf::from(raw));
+            }
+        }
+    }
     #[cfg(target_os = "macos")]
     {
         home_dir().map(|home| {
@@ -126,7 +144,6 @@ fn hex_prefix(bytes: impl AsRef<[u8]>, n: usize) -> String {
 }
 
 /// Cursor `state.vscdb` (read-only) under globalStorage.
-#[cfg(feature = "edition-pro")]
 pub fn cursor_state_vscdb() -> Option<PathBuf> {
     #[cfg(target_os = "macos")]
     {
@@ -172,6 +189,36 @@ mod tests {
         // In CI/dev this should always be set on macOS/Linux; on Windows
         // USERPROFILE is expected. Either way the helper must not panic.
         let _ = home_dir();
+    }
+
+    #[test]
+    fn app_data_dir_env_override_wins_when_set() {
+        // `USAGECHECK_APP_DATA_DIR` is a process-wide env var ALSO mutated by
+        // `license/http_tests.rs`, `license/status_tests.rs`, and
+        // `menu_actions_tests.rs` — a file-local lock here would not prevent
+        // this test's mutation from racing theirs under `cargo test`'s
+        // default parallel execution, so this must take the ONE crate-wide
+        // lock instead (see `crate::license::LICENSE_ENV_LOCK`'s doc comment).
+        let _lock = crate::license::LICENSE_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let previous = std::env::var_os("USAGECHECK_APP_DATA_DIR");
+
+        std::env::set_var("USAGECHECK_APP_DATA_DIR", "/tmp/usagecheck-test-override");
+        assert_eq!(
+            usagecheck_app_data_dir(),
+            Some(PathBuf::from("/tmp/usagecheck-test-override"))
+        );
+
+        std::env::set_var("USAGECHECK_APP_DATA_DIR", "   ");
+        assert_ne!(
+            usagecheck_app_data_dir(),
+            Some(PathBuf::from("   ")),
+            "a blank override must fall back to the platform-derived path"
+        );
+
+        match previous {
+            Some(p) => std::env::set_var("USAGECHECK_APP_DATA_DIR", p),
+            None => std::env::remove_var("USAGECHECK_APP_DATA_DIR"),
+        }
     }
 
     #[test]

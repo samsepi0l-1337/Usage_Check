@@ -15,9 +15,7 @@ use usage_core::account::{Credentials, Provider};
 
 mod claude;
 mod codex;
-#[cfg(feature = "edition-pro")]
 mod grok;
-#[cfg(feature = "edition-pro")]
 mod higgsfield;
 
 #[cfg(test)]
@@ -31,13 +29,11 @@ pub(crate) use claude::{
 #[cfg(test)]
 use claude::claude_profile_is_default;
 pub(crate) use codex::{parse_codex_auth_json, load_codex_cli_auth};
-#[cfg(feature = "edition-pro")]
 #[allow(unused_imports)]
 pub(crate) use grok::{
     import_grok_from_clipboard, load_grok_env_auth, grok_imported_account,
     validate_grok_management_key,
 };
-#[cfg(feature = "edition-pro")]
 pub(crate) use higgsfield::load_higgsfield_cli_auth;
 
 /// Result of a CLI import: credentials plus a human-readable label
@@ -73,11 +69,8 @@ pub fn import_from_cli(provider: Provider) -> Result<ImportedAccount, String> {
         ),
         Provider::Codex => load_codex_cli_auth(),
         Provider::Claude => load_claude_cli_auth(),
-        #[cfg(feature = "edition-pro")]
         Provider::Cursor => crate::cursor_local::load_cursor_local_auth(),
-        #[cfg(feature = "edition-pro")]
         Provider::Grok => load_grok_env_auth(),
-        #[cfg(feature = "edition-pro")]
         Provider::Higgsfield => load_higgsfield_cli_auth(),
     }
 }

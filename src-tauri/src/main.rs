@@ -32,10 +32,10 @@ mod claude_cli;
 mod claude_statusline;
 mod cli_auth;
 mod codex_cli;
-#[cfg(feature = "edition-pro")]
 mod cursor_local;
 mod edition;
 mod import;
+mod license;
 mod menu_actions;
 mod oauth;
 mod paths;
@@ -190,6 +190,13 @@ fn main() {
                 loop {
                     interval.tick().await;
                     menu_actions::refresh_tray(&app_handle).await;
+                    // Fire-and-forget: `maybe_periodic_refresh` internally
+                    // throttles itself to at most once every 24h and no-ops
+                    // when no license record exists, so spawning it on every
+                    // tick is cheap. Spawned onto its own task (not
+                    // `.await`ed inline) so a slow/failed license refresh
+                    // network call never delays the tray's own poll loop.
+                    tauri::async_runtime::spawn(license::maybe_periodic_refresh());
                 }
             });
 

@@ -4,7 +4,6 @@ use usage_core::account::{Credentials, Provider};
 
 use super::{default_label, ImportedAccount};
 
-#[cfg(feature = "edition-pro")]
 /// Higgsfield CLI account reference from `higgsfield account status --json`.
 pub fn load_higgsfield_cli_auth() -> Result<ImportedAccount, String> {
     use usage_core::fetch::higgsfield::parse_higgsfield_account;

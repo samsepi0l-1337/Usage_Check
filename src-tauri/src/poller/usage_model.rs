@@ -4,11 +4,8 @@ use usage_core::account::{Account, AuthSource, Provider};
 use usage_core::fetch::agy::{compact_windows, AgyQuota, AgyQuotaPool};
 use usage_core::fetch::claude::ClaudeQuota;
 use usage_core::fetch::codex::CodexQuota;
-#[cfg(feature = "edition-pro")]
 use usage_core::fetch::cursor::CursorQuota;
-#[cfg(feature = "edition-pro")]
 use usage_core::fetch::grok::GrokPrepaid;
-#[cfg(feature = "edition-pro")]
 use usage_core::fetch::higgsfield::HiggsfieldCredits;
 use usage_core::models::{LocalProvenance, LocalUsage, QuotaUsage, UsageBreakdownRow, WindowTotals};
 
@@ -95,7 +92,6 @@ pub fn account_usage_from_agy(account: &Account, quota: &AgyQuota, status: &str)
     }
 }
 
-#[cfg(feature = "edition-pro")]
 pub(super) fn account_usage_from_cursor(
     account: &Account,
     quota: &CursorQuota,
@@ -116,7 +112,6 @@ pub(super) fn account_usage_from_cursor(
     }
 }
 
-#[cfg(feature = "edition-pro")]
 pub(super) fn account_usage_from_grok(
     account: &Account,
     prepaid: &GrokPrepaid,
@@ -137,7 +132,6 @@ pub(super) fn account_usage_from_grok(
     }
 }
 
-#[cfg(feature = "edition-pro")]
 pub(super) fn account_usage_from_higgsfield(
     account: &Account,
     credits: &HiggsfieldCredits,
@@ -154,6 +148,26 @@ pub(super) fn account_usage_from_higgsfield(
         breakdown: Vec::new(),
         detail_suffix: credits.detail_suffix(),
         status: status.to_string(),
+        local_status: None,
+    }
+}
+
+/// Assembles a placeholder `AccountUsage` for a paid-provider account when the
+/// installation is not licensed for Pro. The account stays visible (never
+/// dropped) with a distinct `"pro_required"` status and no quota numbers — no
+/// network/local fetch is performed for it.
+pub fn account_usage_pro_required(account: &Account) -> AccountUsage {
+    AccountUsage {
+        display_name: display_name_for(account, None, None),
+        plan: None,
+        account: account.clone(),
+        five_hour: None,
+        week: None,
+        totals: WindowTotals::default(),
+        pool_breakdown: Vec::new(),
+        breakdown: Vec::new(),
+        detail_suffix: None,
+        status: "pro_required".to_string(),
         local_status: None,
     }
 }

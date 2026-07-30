@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "UsageCheck-Free",
+  "productName": "UsageCheck",
   "version": "0.1.33",
-  "identifier": "com.usagecheck.desktop.free",
+  "identifier": "com.usagecheck.desktop",
   "build": {
     "frontendDist": "../ui/dist"
   },
@@ -17,8 +17,8 @@
     "active": true,
     "targets": [ "dmg", "app", "nsis", "msi" ],
     "category": "Utility",
-    "shortDescription": "Menu bar usage monitor for Codex, Claude, and Gemini (Free)",
-    "longDescription": "UsageCheck Free shows Codex, Claude Code, and Gemini (agy) usage in the macOS menu bar / Windows system tray.",
+    "shortDescription": "Menu bar usage monitor for Codex, Claude, and Gemini",
+    "longDescription": "UsageCheck shows Codex, Claude Code, and Gemini (agy) usage in the macOS menu bar / Windows system tray. A Pro license key unlocks Cursor, Grok, and Higgsfield.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

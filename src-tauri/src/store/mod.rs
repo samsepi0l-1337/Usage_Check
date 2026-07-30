@@ -27,7 +27,7 @@ const INDEX_FILE: &str = "accounts-v2.json";
 const SCHEMA_MARKER: &str = "schema-v2";
 const CREDS_DIR: &str = "credentials";
 
-pub(super) fn set_private_dir_permissions(path: &Path) {
+pub(crate) fn set_private_dir_permissions(path: &Path) {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -35,7 +35,7 @@ pub(super) fn set_private_dir_permissions(path: &Path) {
     }
 }
 
-pub(super) fn write_private_file(path: &Path, contents: &str) -> Result<(), String> {
+pub(crate) fn write_private_file(path: &Path, contents: &str) -> Result<(), String> {
     let parent = path
         .parent()
         .ok_or_else(|| format!("no parent directory for {}", path.display()))?;
@@ -52,15 +52,35 @@ pub(super) fn write_private_file(path: &Path, contents: &str) -> Result<(), Stri
         .unwrap_or("file");
     let tmp = parent.join(format!(".{file_name}.tmp-{}", uuid::Uuid::new_v4()));
 
-    fs::write(&tmp, contents).map_err(|e| {
+    // Create the temp file with mode 0600 ATOMICALLY at `open()` time (via
+    // `OpenOptionsExt::mode`), not create-then-chmod: the previous
+    // create-then-chmod sequence left a real (if brief) window where the file
+    // existed at the process's default umask-derived permissions, and a
+    // failure to narrow them afterward was silently swallowed (`let _ =
+    // fs::set_permissions(...)`). `create_new(true)` additionally refuses to
+    // open through an existing path. Any failure to open (and so to apply the
+    // mode) now propagates as an error instead of being ignored.
+    //
+    // Windows: `.mode()` is a no-op there — there is no POSIX permission bit
+    // to set. File access on Windows is governed by the parent directory's
+    // ACL instead, which this function does not manage, so Windows callers
+    // get no additional narrowing from this call beyond ordinary NTFS
+    // inheritance from the parent directory.
+    let mut open_options = fs::OpenOptions::new();
+    open_options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        open_options.mode(0o600);
+    }
+    let mut file = open_options
+        .open(&tmp)
+        .map_err(|e| format!("create {}: {e}", tmp.display()))?;
+    std::io::Write::write_all(&mut file, contents.as_bytes()).map_err(|e| {
         let _ = fs::remove_file(&tmp);
         format!("write {}: {e}", tmp.display())
     })?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600));
-    }
+    drop(file);
     fs::rename(&tmp, path).map_err(|e| {
         let _ = fs::remove_file(&tmp);
         format!("commit {}: {e}", path.display())
@@ -68,7 +88,7 @@ pub(super) fn write_private_file(path: &Path, contents: &str) -> Result<(), Stri
     Ok(())
 }
 
-pub(super) fn reject_symlink(path: &Path, description: &str) -> Result<(), String> {
+pub(crate) fn reject_symlink(path: &Path, description: &str) -> Result<(), String> {
     match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_symlink() => Err(format!(
             "{description} must not be a symlink: {}",
@@ -84,7 +104,6 @@ pub(super) fn reject_symlink(path: &Path, description: &str) -> Result<(), Strin
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SecretSource {
     BrowserOAuth,
-    #[cfg(feature = "edition-pro")]
     XaiManagement {
         team_id: String,
     },

@@ -20,14 +20,11 @@ pub fn auth_capability(provider: Provider) -> AuthCapability {
     let methods: &'static [AuthMethod] = match provider {
         Provider::Codex | Provider::Claude => &[AuthMethod::Cli, AuthMethod::BrowserOAuth],
         Provider::Agy => &[AuthMethod::BrowserOAuth],
-        #[cfg(feature = "edition-pro")]
         Provider::Cursor => &[AuthMethod::LocalDatabase],
-        #[cfg(feature = "edition-pro")]
         Provider::Grok => &[
             AuthMethod::ManagementKeyClipboard,
             AuthMethod::ManagementKeyEnvironment,
         ],
-        #[cfg(feature = "edition-pro")]
         Provider::Higgsfield => &[AuthMethod::Cli],
     };
     AuthCapability { methods }

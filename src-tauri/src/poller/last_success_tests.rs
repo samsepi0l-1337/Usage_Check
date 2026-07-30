@@ -158,7 +158,12 @@ fn auth_source_needs_login_never_stale() {
         auth_source_usage("account-1", "ok", Some(auth_source_quota(25.0))),
     );
 
-    for status in ["needs_login", "identity_changed", "waiting_for_usage"] {
+    for status in [
+        "needs_login",
+        "identity_changed",
+        "waiting_for_usage",
+        "pro_required",
+    ] {
         let result = apply_last_success(
             &mut cache,
             "account-1",

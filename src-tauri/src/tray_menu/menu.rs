@@ -1,19 +1,24 @@
 use chrono::{DateTime, Local, Utc};
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem, Submenu},
-    AppHandle, Wry,
+    AppHandle, Runtime,
 };
 use tauri_plugin_autostart::ManagerExt;
 use usage_core::account::Provider;
 use crate::edition;
+use crate::license::{ActivationErrorClass, LicenseStatus};
 use crate::poller::AccountUsage;
 use super::actions::auth_action_specs;
-use super::format::{account_name_line, account_usage_lines, format_breakdown_row, format_pool_detail, format_usage_detail, vendor_title};
+use super::format::{account_name_line, account_usage_lines, activation_result_line, format_breakdown_row, format_pool_detail, format_usage_detail, license_status_line, vendor_title};
 use super::TRAY_ID;
 
-fn append_vendor_section(
-    app: &AppHandle,
-    menu: &Menu<Wry>,
+// Generic over `R: Runtime` (rather than hardcoded `Wry`) so
+// `menu_actions::refresh_tray` — itself generic for the B0.4 dispatch-gate
+// integration tests — can call `apply_menu`/`build_menu` under
+// `tauri::test::mock_app()`'s `MockRuntime` as well as production's `Wry`.
+fn append_vendor_section<R: Runtime>(
+    app: &AppHandle<R>,
+    menu: &Menu<R>,
     provider: Provider,
     usages: &[&AccountUsage],
     first_section: &mut bool,
@@ -112,6 +117,72 @@ pub(crate) fn near_limit_count(usages: &[AccountUsage], threshold: f64) -> usize
         .count()
 }
 
+/// Whether the tray should show the "Deactivate license" row: whenever
+/// there is live Pro entitlement OR a stored record exists at all (an
+/// expired/grace-period/tampered record still has a file worth clearing).
+/// Pure so the presence/absence rule is unit-testable without a live tray
+/// `Menu` (menu construction itself requires the platform main thread).
+pub(crate) fn should_show_deactivate(is_pro: bool, has_stored_license: bool) -> bool {
+    is_pro || has_stored_license
+}
+
+/// (item 4 fix) One row of the tray's license section, in render order.
+/// Pure decision extracted from `build_menu` so the ordered row SET — ids,
+/// labels, and enabled/disabled flags — is unit-testable: a real
+/// `tauri::menu::Menu` needs the platform main thread to construct, so it
+/// cannot be built (or inspected) in a `cargo test` run.
+pub(crate) struct LicenseRow {
+    pub(crate) id: &'static str,
+    pub(crate) label: String,
+    pub(crate) enabled: bool,
+}
+
+/// The full, ordered license-section row spec: status (disabled) → result
+/// (disabled, only once an attempt has been made this run) → the three
+/// action rows — Activate from clipboard, then Deactivate license (only
+/// when [`should_show_deactivate`]), then Get a license…. `build_menu`
+/// renders exactly this; no row decision is left inline there. `is_pro` for
+/// the deactivate gate is derived from `status` itself rather than a
+/// separately-read `license::is_pro()` call, so the whole row set comes
+/// from one consistent status snapshot.
+pub(crate) fn license_rows(
+    status: LicenseStatus,
+    last_attempt: Option<&Result<(), ActivationErrorClass>>,
+    has_record: bool,
+) -> Vec<LicenseRow> {
+    let mut rows = vec![LicenseRow {
+        id: "license-status",
+        label: license_status_line(status),
+        enabled: false,
+    }];
+    if let Some(attempt) = last_attempt {
+        rows.push(LicenseRow {
+            id: "license-result",
+            label: activation_result_line(attempt),
+            enabled: false,
+        });
+    }
+    rows.push(LicenseRow {
+        id: "license-activate-clipboard",
+        label: "Activate from clipboard".to_string(),
+        enabled: true,
+    });
+    let is_pro = matches!(status, LicenseStatus::Pro { .. });
+    if should_show_deactivate(is_pro, has_record) {
+        rows.push(LicenseRow {
+            id: "license-deactivate",
+            label: "Deactivate license".to_string(),
+            enabled: true,
+        });
+    }
+    rows.push(LicenseRow {
+        id: "license-get",
+        label: "Get a license…".to_string(),
+        enabled: true,
+    });
+    rows
+}
+
 /// Formats a poll timestamp as a local `Updated HH:MM:SS` label.
 pub(crate) fn updated_label(updated_at: DateTime<Utc>) -> String {
     format!("Updated {}", updated_at.with_timezone(&Local).format("%H:%M:%S"))
@@ -119,11 +190,11 @@ pub(crate) fn updated_label(updated_at: DateTime<Utc>) -> String {
 
 /// Builds the full tray menu from the latest usage snapshot. `updated_at` is the
 /// poll time shown as an informational row (None for the pre-first-poll menu).
-pub fn build_menu(
-    app: &AppHandle,
+pub fn build_menu<R: Runtime>(
+    app: &AppHandle<R>,
     usages: &[AccountUsage],
     updated_at: Option<DateTime<Utc>>,
-) -> tauri::Result<Menu<Wry>> {
+) -> tauri::Result<Menu<R>> {
     let menu = Menu::new(app)?;
 
     // Prominent near-limit banner (disabled row) when any account is at/above
@@ -192,6 +263,24 @@ pub fn build_menu(
         menu.append(&remove_submenu)?;
     }
 
+    // License section — status/result (disabled, informational) plus the
+    // three clickable actions. These are NOT provider-auth actions (never
+    // routed through `auth_action_specs`/`is_dispatch_allowed`); resolved by
+    // `menu_actions::handle_menu_event`'s own arms instead. Never renders the
+    // key or token: `license_status_line`/`activation_result_line` are built
+    // only from `LicenseStatus`/`ActivationErrorClass`, neither of which
+    // carries either. Row decisions (ids, labels, enabled flags, and which
+    // rows even appear) all live in `license_rows` (item 4 fix) — this loop
+    // renders exactly what it returns, with no row logic left inline here.
+    menu.append(&PredefinedMenuItem::separator(app)?)?;
+    for row in license_rows(
+        crate::license::status(),
+        crate::menu_actions::last_license_attempt().as_ref(),
+        crate::license::has_stored_license(),
+    ) {
+        menu.append(&MenuItem::with_id(app, row.id, row.label, row.enabled, None::<&str>)?)?;
+    }
+
     menu.append(&MenuItem::with_id(
         app,
         "refresh",
@@ -251,7 +340,7 @@ pub fn build_menu(
     Ok(menu)
 }
 
-pub fn apply_menu(app: &AppHandle, usages: &[AccountUsage], updated_at: Option<DateTime<Utc>>) {
+pub fn apply_menu<R: Runtime>(app: &AppHandle<R>, usages: &[AccountUsage], updated_at: Option<DateTime<Utc>>) {
     let Ok(menu) = build_menu(app, usages, updated_at) else {
         eprintln!("tray: failed to build menu");
         return;

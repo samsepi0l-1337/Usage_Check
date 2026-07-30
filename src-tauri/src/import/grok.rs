@@ -2,7 +2,6 @@ use usage_core::account::Credentials;
 
 use super::ImportedAccount;
 
-#[cfg(feature = "edition-pro")]
 /// xAI Management API credentials from `XAI_MGMT_KEY` + `XAI_TEAM_ID`.
 pub fn load_grok_env_auth() -> Result<ImportedAccount, String> {
     let key = std::env::var("XAI_MGMT_KEY")
@@ -21,7 +20,6 @@ pub fn load_grok_env_auth() -> Result<ImportedAccount, String> {
     grok_imported_account(&key, &team_id)
 }
 
-#[cfg(feature = "edition-pro")]
 pub(crate) fn grok_imported_account(key: &str, team_id: &str) -> Result<ImportedAccount, String> {
     use usage_core::fetch::grok::is_valid_team_id;
 
@@ -44,7 +42,6 @@ pub(crate) fn grok_imported_account(key: &str, team_id: &str) -> Result<Imported
     })
 }
 
-#[cfg(feature = "edition-pro")]
 fn read_clipboard_text() -> Result<String, String> {
     arboard::Clipboard::new()
         .map_err(|e| format!("clipboard unavailable: {e}"))?
@@ -54,7 +51,6 @@ fn read_clipboard_text() -> Result<String, String> {
         })
 }
 
-#[cfg(feature = "edition-pro")]
 /// Validates a Management Key via the official xAI endpoint and resolves team ID.
 pub async fn validate_grok_management_key(key: &str) -> Result<String, String> {
     use usage_core::fetch::grok::team_id_from_validation;
@@ -82,7 +78,6 @@ pub async fn validate_grok_management_key(key: &str) -> Result<String, String> {
         .ok_or_else(|| "validation succeeded but response has no team/scope id".to_string())
 }
 
-#[cfg(feature = "edition-pro")]
 /// Imports Grok from the system clipboard: validates the Management Key, or
 /// falls back to a pasted team ID / `XAI_TEAM_ID` when validation cannot
 /// resolve scope.

@@ -19,6 +19,7 @@ const STATUS_LABEL: Record<string, string> = {
   needs_login: "needs login",
   throttled: "throttled",
   error: "error",
+  pro_required: "pro required",
 };
 
 let usageById = new Map<string, AccountUsage>();

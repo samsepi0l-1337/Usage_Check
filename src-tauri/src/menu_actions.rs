@@ -1,13 +1,22 @@
 use crate::{
     AccountStore, AppHandle, AuthMethod, AuthSource, Manager, ManagerExt, OsStr, Provider,
 };
+use crate::license::ActivationErrorClass;
+use tauri::Runtime;
 
 /// Polls all accounts and rebuilds the tray menu on the main thread.
 ///
 /// Uses a fresh `AccountStore` handle (file-backed ZST) instead of holding
 /// `app.state()` across `.await` — Tauri's managed-state guard must not cross
 /// suspension points.
-pub(crate) async fn refresh_tray(app: &AppHandle) {
+///
+/// Generic over `R: Runtime` (rather than hardcoded to the default `Wry`)
+/// solely so `handle_menu_event`'s dispatch-gate integration tests
+/// (`menu_actions_tests.rs`, B0.4) can drive the REAL event path against
+/// `tauri::test::mock_app()`'s headless `AppHandle<MockRuntime>` — production
+/// callers (`main.rs`) still resolve `R = Wry` as before; nothing about their
+/// behavior changes.
+pub(crate) async fn refresh_tray<R: Runtime>(app: &AppHandle<R>) {
     let store = AccountStore::new();
     let snapshot = crate::poller::poll_all(&store).await;
     // Publish to the local HTTP API so agents see the same data as the tray.
@@ -30,7 +39,7 @@ pub(crate) async fn refresh_tray(app: &AppHandle) {
     });
 }
 
-pub(crate) fn import_provider(app: &AppHandle, provider: Provider) {
+pub(crate) fn import_provider<R: Runtime>(app: &AppHandle<R>, provider: Provider) {
     // Previously this ran the blocking CLI/DB read synchronously inside the tray
     // menu-event callback (tao `send_event`), so any panic in `import_from_cli`
     // unwound across the FFI boundary and aborted the app. Spawn it (like every
@@ -51,7 +60,7 @@ pub(crate) fn import_provider(app: &AppHandle, provider: Provider) {
     });
 }
 
-pub(crate) fn cli_coordinator_setup(app: &AppHandle, provider: Provider) {
+pub(crate) fn cli_coordinator_setup<R: Runtime>(app: &AppHandle<R>, provider: Provider) {
     use crate::cli_auth::{CliAuthCoordinator, ProviderAdapter, RetrySchedule};
     use crate::terminal::TerminalLauncher;
 
@@ -106,8 +115,7 @@ pub(crate) fn cli_coordinator_setup(app: &AppHandle, provider: Provider) {
     });
 }
 
-#[cfg(feature = "edition-pro")]
-pub(crate) fn import_grok_clipboard(app: &AppHandle) {
+pub(crate) fn import_grok_clipboard<R: Runtime>(app: &AppHandle<R>) {
     let app2 = app.clone();
     tauri::async_runtime::spawn(async move {
         match crate::import::import_grok_from_clipboard().await {
@@ -123,7 +131,128 @@ pub(crate) fn import_grok_clipboard(app: &AppHandle) {
     });
 }
 
-pub(crate) fn oauth_provider(app: &AppHandle, provider: Provider) {
+/// Outcome of the most recent tray "Activate from clipboard" attempt in THIS
+/// process — never persisted to disk. `None` before any attempt has been
+/// made this run. Read by the tray's license "result" row
+/// ([`last_license_attempt`]) and updated only by
+/// [`activate_license_from_clipboard`].
+///
+/// SECURITY: holds only the coarse [`ActivationErrorClass`] (H4), never the
+/// key, the token, or `ActivationError`'s `Display` (which for
+/// `Server{..}`/`InvalidToken` can embed server-provided text) — so this
+/// state can never leak a secret into the tray even by construction.
+static LAST_LICENSE_ATTEMPT: std::sync::Mutex<Option<Result<(), ActivationErrorClass>>> =
+    std::sync::Mutex::new(None);
+
+fn set_last_license_attempt(result: Result<(), ActivationErrorClass>) {
+    *LAST_LICENSE_ATTEMPT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(result);
+}
+
+/// Read by `tray_menu::build_menu` to render (or omit) the license "result"
+/// row.
+pub(crate) fn last_license_attempt() -> Option<Result<(), ActivationErrorClass>> {
+    *LAST_LICENSE_ATTEMPT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Reads the system clipboard for a license key — same pattern as
+/// `import::grok::read_clipboard_text` (`arboard`). SECURITY: the clipboard
+/// text (the license key) is never logged.
+fn read_license_clipboard_text() -> Result<String, String> {
+    arboard::Clipboard::new()
+        .map_err(|e| format!("clipboard unavailable: {e}"))?
+        .get_text()
+        .map_err(|_| "clipboard has no text".to_string())
+}
+
+/// Pure gate: `None` when `text` trims to nothing. Extracted so the "refuse
+/// an empty/whitespace clipboard without calling `license::activate`" rule
+/// is unit-testable without touching the real system clipboard.
+pub(crate) fn license_key_from_clipboard_text(text: &str) -> Option<&str> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    }
+}
+
+/// Tray "Activate from clipboard": reads the clipboard exactly like
+/// `import_grok_clipboard`, trims it, and — only when non-empty — calls
+/// [`crate::license::activate`]. On success or failure, refreshes the tray
+/// so the status/result rows and (on success) the newly-unlocked paid
+/// providers appear. SECURITY: never logs the clipboard contents, the key,
+/// or the token — only the coarse `ActivationErrorClass` on failure (H4).
+pub(crate) fn activate_license_from_clipboard<R: Runtime>(app: &AppHandle<R>) {
+    let app2 = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let clipboard_text = match read_license_clipboard_text() {
+            Ok(text) => text,
+            Err(e) => {
+                eprintln!("license: clipboard read failed: {e}");
+                return;
+            }
+        };
+        let Some(key) = license_key_from_clipboard_text(&clipboard_text) else {
+            eprintln!("license: clipboard is empty; not attempting activation");
+            return;
+        };
+        match crate::license::activate(key).await {
+            Ok(_) => set_last_license_attempt(Ok(())),
+            Err(error) => {
+                eprintln!("license: activation failed; class={}", error.classify());
+                set_last_license_attempt(Err(error.classify()));
+            }
+        }
+        refresh_tray(&app2).await;
+    });
+}
+
+/// Tray "Deactivate license": removes the persisted record, then refreshes
+/// the tray so the status row and the now-locked paid providers update.
+pub(crate) fn deactivate_license<R: Runtime>(app: &AppHandle<R>) {
+    let app2 = app.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(error) = crate::license::deactivate().await {
+            eprintln!("license: deactivate failed: {error}");
+        }
+        refresh_tray(&app2).await;
+    });
+}
+
+/// Tray "Get a license…": opens the license page in the system browser,
+/// same `open` crate already used for `open-api`/OAuth callbacks.
+pub(crate) fn open_license_page() {
+    if let Err(error) = open::that("https://autoworkit.com/") {
+        eprintln!("license: failed to open license page: {error}");
+    }
+}
+
+/// The three tray-clickable license actions. NOT provider-auth actions —
+/// never routed through `auth_action_specs`/`is_dispatch_allowed`
+/// (`tray_menu::actions`); resolved here with their own ids instead. Pure
+/// routing decision extracted (mirrors [`classify_auth_action`]) so it is
+/// unit-testable without a live `AppHandle`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LicenseAction {
+    ActivateFromClipboard,
+    Deactivate,
+    GetLicense,
+}
+
+pub(crate) fn license_action_for_event(event_id: &str) -> Option<LicenseAction> {
+    match event_id {
+        "license-activate-clipboard" => Some(LicenseAction::ActivateFromClipboard),
+        "license-deactivate" => Some(LicenseAction::Deactivate),
+        "license-get" => Some(LicenseAction::GetLicense),
+        _ => None,
+    }
+}
+
+pub(crate) fn oauth_provider<R: Runtime>(app: &AppHandle<R>, provider: Provider) {
     let app2 = app.clone();
     tauri::async_runtime::spawn(async move {
         match crate::oauth::begin_login(provider).await {
@@ -137,7 +266,6 @@ pub(crate) fn oauth_provider(app: &AppHandle, provider: Provider) {
                     Provider::Agy => crate::oauth::agy_email_from_access_token(&creds.access_token)
                         .await
                         .unwrap_or_else(|| "agy".to_string()),
-                    #[cfg(feature = "edition-pro")]
                     Provider::Cursor | Provider::Grok | Provider::Higgsfield => {
                         provider.display_name().to_string()
                     }
@@ -177,36 +305,69 @@ pub(crate) fn classify_auth_action(provider: Provider, method: AuthMethod) -> Au
     }
 }
 
-pub(crate) fn dispatch_auth_action(app: &AppHandle, provider: Provider, method: AuthMethod) {
+pub(crate) fn dispatch_auth_action<R: Runtime>(
+    app: &AppHandle<R>,
+    provider: Provider,
+    method: AuthMethod,
+) {
     match classify_auth_action(provider, method) {
         AuthAction::Oauth => oauth_provider(app, provider),
         AuthAction::CliCoordinator => cli_coordinator_setup(app, provider),
         AuthAction::Import => import_provider(app, provider),
-        AuthAction::GrokClipboard => {
-            #[cfg(feature = "edition-pro")]
-            import_grok_clipboard(app);
-            #[cfg(not(feature = "edition-pro"))]
-            eprintln!("clipboard authentication is unavailable in the Free edition");
-        }
+        AuthAction::GrokClipboard => import_grok_clipboard(app),
     }
 }
 
-pub(crate) fn handle_menu_event(app: &AppHandle, id: &str) {
+/// The outcome of one [`handle_menu_event`] call. Exists so the B0.4
+/// dispatch-gate integration tests (`menu_actions_tests.rs`) can assert on
+/// the REAL license-gate check inside `handle_menu_event` itself — not just
+/// the pure `is_dispatch_allowed`/`spec_for_event` predicates it calls — by
+/// distinguishing "an auth-action event id was dispatched" from "it was
+/// refused because the license isn't active" from "not an auth-action event
+/// id at all". Production callers (`main.rs`) ignore the return value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DispatchOutcome {
+    /// `id` did not resolve to an auth-action event (quit/about/refresh/
+    /// remove-*/toggle-autostart/open-api, or an unknown id).
+    Other,
+    /// `id` resolved to a registered auth action and dispatch was attempted.
+    Dispatched,
+    /// `id` resolved to a Pro-gated auth action and was refused because the
+    /// license is not currently active.
+    Refused,
+}
+
+pub(crate) fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, id: &str) -> DispatchOutcome {
+    // License actions are resolved first and are NOT provider-auth actions —
+    // they never go through `spec_for_event`/`is_dispatch_allowed` below.
+    if let Some(action) = license_action_for_event(id) {
+        match action {
+            LicenseAction::ActivateFromClipboard => activate_license_from_clipboard(app),
+            LicenseAction::Deactivate => deactivate_license(app),
+            LicenseAction::GetLicense => open_license_page(),
+        }
+        return DispatchOutcome::Other;
+    }
     match id {
-        "quit" => app.exit(0),
-        "about" => {}
+        "quit" => {
+            app.exit(0);
+            DispatchOutcome::Other
+        }
+        "about" => DispatchOutcome::Other,
         "open-api" => {
             if let Some(url) = crate::api::public_url() {
                 if let Err(error) = open::that(&url) {
                     eprintln!("open-api: failed to open {url}: {error}");
                 }
             }
+            DispatchOutcome::Other
         }
         "refresh" => {
             let app2 = app.clone();
             tauri::async_runtime::spawn(async move {
                 refresh_tray(&app2).await;
             });
+            DispatchOutcome::Other
         }
         other if other.starts_with("remove-") => {
             let account_id = other["remove-".len()..].to_string();
@@ -255,6 +416,7 @@ pub(crate) fn handle_menu_event(app: &AppHandle, id: &str) {
             tauri::async_runtime::spawn(async move {
                 refresh_tray(&app2).await;
             });
+            DispatchOutcome::Other
         }
         "toggle-autostart" => {
             let manager = app.autolaunch();
@@ -270,10 +432,24 @@ pub(crate) fn handle_menu_event(app: &AppHandle, id: &str) {
             tauri::async_runtime::spawn(async move {
                 refresh_tray(&app2).await;
             });
+            DispatchOutcome::Other
         }
         event_id => {
-            if let Some(spec) = crate::tray_menu::spec_for_event(event_id) {
+            let Some(spec) = crate::tray_menu::spec_for_event(event_id) else {
+                return DispatchOutcome::Other;
+            };
+            // Re-check entitlement HERE, at the point of side effect — the
+            // menu already filters paid providers out when rendering, but
+            // `spec_for_event` resolves through the full, ungated spec
+            // registry, so a stale/crafted event id (or a menu snapshot
+            // rendered before the license lapsed) must not still be able
+            // to trigger a paid-provider import/auth once Pro is gone.
+            if crate::tray_menu::is_dispatch_allowed(&spec, crate::license::is_pro()) {
                 dispatch_auth_action(app, spec.provider, spec.method);
+                DispatchOutcome::Dispatched
+            } else {
+                eprintln!("dispatch: {event_id} requires Pro; refusing (license not active)");
+                DispatchOutcome::Refused
             }
         }
     }
@@ -295,3 +471,7 @@ pub(crate) fn statusline_bridge_account_id() -> Result<Option<String>, String> {
     crate::claude_statusline::validate_account_id(&account_id)?;
     Ok(Some(account_id))
 }
+
+#[cfg(test)]
+#[path = "menu_actions_tests.rs"]
+mod tests;

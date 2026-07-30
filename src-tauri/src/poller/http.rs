@@ -4,9 +4,7 @@ use usage_core::account::Credentials;
 use usage_core::fetch::agy::{parse_agy_quota_summary, AgyQuota};
 use usage_core::fetch::claude::{parse_claude_usage, ClaudeQuota};
 use usage_core::fetch::codex::{parse_codex_usage, CodexQuota};
-#[cfg(feature = "edition-pro")]
 use usage_core::fetch::cursor::{parse_cursor_period_usage, CursorQuota};
-#[cfg(feature = "edition-pro")]
 use usage_core::fetch::grok::{parse_grok_prepaid_balance, GrokPrepaid};
 
 const AGY_USER_AGENT: &str = "antigravity/usagecheck macos/arm64";
@@ -144,12 +142,9 @@ pub(super) async fn fetch_agy_quota_remote(
     Err(last_status)
 }
 
-#[cfg(feature = "edition-pro")]
 const CURSOR_API_BASE: &str = "https://api2.cursor.sh";
-#[cfg(feature = "edition-pro")]
 const CURSOR_OAUTH_CLIENT_ID: &str = "KbZUR41cY7W6zRSdpSUJ7I7mLYBKOCmB";
 
-#[cfg(feature = "edition-pro")]
 pub(super) async fn refresh_cursor_access_token(
     client: &reqwest::Client,
     refresh_token: &str,
@@ -184,7 +179,6 @@ pub(super) async fn refresh_cursor_access_token(
         .ok_or(())
 }
 
-#[cfg(feature = "edition-pro")]
 pub(super) async fn fetch_cursor_quota(
     client: &reqwest::Client,
     creds: &Credentials,
@@ -210,7 +204,6 @@ pub(super) async fn fetch_cursor_quota(
     Ok(parse_cursor_period_usage(&body))
 }
 
-#[cfg(feature = "edition-pro")]
 pub(super) async fn fetch_grok_prepaid(
     client: &reqwest::Client,
     creds: &Credentials,
@@ -237,8 +230,6 @@ pub(super) async fn fetch_grok_prepaid(
     Ok(parse_grok_prepaid_balance(&body))
 }
 
-
-#[cfg(feature = "edition-pro")]
 pub(super) fn fetch_higgsfield_account_json() -> Result<serde_json::Value, ()> {
     use std::process::Command;
 

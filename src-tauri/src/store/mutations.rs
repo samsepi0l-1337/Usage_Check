@@ -138,7 +138,6 @@ impl AccountStore {
             Provider::Codex | Provider::Claude | Provider::Agy => {
                 self.add_secret(provider, label, SecretSource::BrowserOAuth, credentials)
             }
-            #[cfg(feature = "edition-pro")]
             Provider::Cursor => {
                 // Derive identity from session (JWT sub or email)
                 let db_path = crate::paths::cursor_state_vscdb()
@@ -154,7 +153,6 @@ impl AccountStore {
                     },
                 )
             }
-            #[cfg(feature = "edition-pro")]
             Provider::Grok => self.add_secret(
                 provider,
                 label,
@@ -163,7 +161,6 @@ impl AccountStore {
                 },
                 credentials,
             ),
-            #[cfg(feature = "edition-pro")]
             Provider::Higgsfield => self.add_reference(
                 provider,
                 label.clone(),

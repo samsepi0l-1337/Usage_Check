@@ -7,7 +7,7 @@ edition = "2021"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-usage-core = { path = "../crates/usage-core", default-features = false }
+usage-core = { path = "../crates/usage-core" }
 # custom-protocol: required so `cargo build --release` embeds ui/dist and does
 # NOT treat the binary as `cfg(dev)` (which would load http://localhost:5173 and
 # show a blank window when the Vite dev server is not running).
@@ -25,18 +25,24 @@ sha2 = "0.11"
 base64 = "0.22"
 urlencoding = "2"
 rand = "0.10"
-rusqlite = { version = "0.40", features = ["bundled"], optional = true }
-arboard = { version = "3", optional = true }
+rusqlite = { version = "0.40", features = ["bundled"] }
+arboard = "3"
 tauri-plugin-autostart = "2"
+# Signed license tokens (Stage B): verify Ed25519 signatures on every status
+# evaluation so a hand-edited cache file fails closed.
+ed25519-dalek = "3"
 
 [features]
 # Keep custom-protocol on by default for plain `cargo build --release`.
 # `cargo tauri dev` disables this feature so the app loads the Vite dev server.
-default = ["custom-protocol", "edition-free"]
+default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
-edition-free = ["usage-core/edition-free"]
-edition-pro = ["usage-core/edition-pro", "dep:rusqlite", "dep:arboard"]
 
 [dev-dependencies]
 tempfile = "3"
 filetime = "0.2"
+# `tauri::test::mock_app()` — headless AppHandle for dispatch-gate integration
+# tests (menu_actions_tests.rs). Cargo feature-unifies this with the normal
+# `tauri` dependency above for test builds only; it never reaches a release
+# binary (dev-dependency features are not compiled into `cargo build --release`).
+tauri = { version = "2", features = ["test"] }

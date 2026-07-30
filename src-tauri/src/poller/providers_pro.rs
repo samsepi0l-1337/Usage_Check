@@ -1,5 +1,3 @@
-#![cfg(feature = "edition-pro")]
-
 use super::http::{
     fetch_cursor_quota,
     fetch_grok_prepaid,

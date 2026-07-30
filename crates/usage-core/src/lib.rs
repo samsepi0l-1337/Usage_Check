@@ -8,6 +8,5 @@ pub mod scanners;
 
 pub use capabilities::{auth_capability, AuthCapability, AuthMethod};
 
-#[cfg(feature = "edition-pro")]
 pub mod paid;
 pub mod attribution;

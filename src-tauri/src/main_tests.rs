@@ -58,7 +58,6 @@ fn clipboard_routes_to_grok_clipboard() {
     );
 }
 
-#[cfg(feature = "edition-pro")]
 #[test]
 fn pro_providers_route_per_capability() {
     assert_eq!(
@@ -81,10 +80,11 @@ fn pro_providers_route_per_capability() {
 
 // Registry-consistency: every (provider, method) actually wired into the tray registry
 // classifies to the action the current dispatcher would have taken — guards against future
-// registry drift. Edition-aware automatically because auth_action_specs() is cfg-gated.
+// registry drift. Checked against the full registry (Pro included) regardless of the
+// test process's own license state.
 #[test]
 fn registry_specs_classify_as_expected() {
-    for spec in crate::tray_menu::auth_action_specs() {
+    for spec in crate::tray_menu::auth_action_specs_with(true) {
         let action = classify_auth_action(spec.provider, spec.method);
         let expected = match spec.method {
             AuthMethod::BrowserOAuth => AuthAction::Oauth,

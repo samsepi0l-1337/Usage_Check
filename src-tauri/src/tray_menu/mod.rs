@@ -36,12 +36,18 @@ mod format;
 mod menu;
 
 #[allow(unused_imports)]
-pub(crate) use actions::{AuthActionSpec, auth_action_specs, spec_for_event};
+pub(crate) use actions::{
+    auth_action_specs, auth_action_specs_with, is_dispatch_allowed, spec_for_event, AuthActionSpec,
+};
 #[allow(unused_imports)]
-pub(crate) use format::{account_usage_lines, format_breakdown_row, format_usage_detail};
+pub(crate) use format::{
+    account_usage_lines, activation_result_line, format_breakdown_row, format_usage_detail,
+    license_status_line,
+};
 #[allow(unused_imports)]
 pub(crate) use menu::{
-    account_max_percent, apply_menu, build_menu, near_limit_count, tooltip_for, updated_label,
+    account_max_percent, apply_menu, build_menu, license_rows, near_limit_count,
+    should_show_deactivate, tooltip_for, updated_label, LicenseRow,
 };
 
 pub fn tray_id() -> &'static str {

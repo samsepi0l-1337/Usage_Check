@@ -384,7 +384,6 @@ fn imports_claude_from_local_keychain_when_present() {
 }
 
 #[test]
-#[cfg(feature = "edition-pro")]
 fn xai_env_parse_reads_mgmt_key_and_team() {
     use std::env;
 
@@ -419,7 +418,6 @@ fn xai_env_parse_reads_mgmt_key_and_team() {
 }
 
 #[test]
-#[cfg(feature = "edition-pro")]
 fn xai_paste_dedupes_team_line() {
     use usage_core::fetch::grok::parse_grok_paste;
 
@@ -435,7 +433,6 @@ fn xai_paste_dedupes_team_line() {
 }
 
 #[test]
-#[cfg(feature = "edition-pro")]
 fn grok_imported_account_accepts_valid_team_id() {
     let imported = grok_imported_account("  test-mgmt-key  ", "team-abc").unwrap();
     assert_eq!(imported.label, "Grok · team team-abc");
@@ -444,7 +441,6 @@ fn grok_imported_account_accepts_valid_team_id() {
 }
 
 #[test]
-#[cfg(feature = "edition-pro")]
 fn grok_imported_account_rejects_invalid_team_id() {
     let err = grok_imported_account(
         "test-mgmt-key",
@@ -457,7 +453,6 @@ fn grok_imported_account_rejects_invalid_team_id() {
 }
 
 #[test]
-#[cfg(feature = "edition-pro")]
 fn xai_stored_as_management_reference() {
     use crate::store::AccountStore;
     use tempfile::TempDir;

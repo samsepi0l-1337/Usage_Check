@@ -7,14 +7,12 @@ impl AccountStore {
         provider: Provider,
         source: &AuthSource,
     ) -> Result<(), String> {
-        let valid = match (provider, source) {
-            (Provider::Codex | Provider::Claude, AuthSource::CliProfile { .. }) => true,
-            #[cfg(feature = "edition-pro")]
-            (Provider::Cursor, AuthSource::CursorDatabase { .. }) => true,
-            #[cfg(feature = "edition-pro")]
-            (Provider::Higgsfield, AuthSource::HiggsfieldCli { .. }) => true,
-            _ => false,
-        };
+        let valid = matches!(
+            (provider, source),
+            (Provider::Codex | Provider::Claude, AuthSource::CliProfile { .. })
+                | (Provider::Cursor, AuthSource::CursorDatabase { .. })
+                | (Provider::Higgsfield, AuthSource::HiggsfieldCli { .. })
+        );
         if valid {
             Ok(())
         } else {
@@ -30,7 +28,6 @@ impl AccountStore {
             SecretSource::BrowserOAuth => {
                 matches!(provider, Provider::Codex | Provider::Claude | Provider::Agy)
             }
-            #[cfg(feature = "edition-pro")]
             SecretSource::XaiManagement { .. } => provider == Provider::Grok,
         };
         if valid {

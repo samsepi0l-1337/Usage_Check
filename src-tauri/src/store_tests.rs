@@ -58,6 +58,56 @@ fn parse_index_empty_on_empty_string() {
     assert_eq!(parse_index(""), Vec::<Account>::new());
 }
 
+// H6: `write_private_file` must create its target atomically at mode 0600
+// (never briefly at a wider, umask-derived mode) and must propagate a
+// permission-setting failure rather than silently ignoring it. Both are
+// meaningless on Windows (no POSIX permission bits), hence unix-only.
+#[cfg(unix)]
+#[test]
+fn write_private_file_creates_file_at_mode_0600() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let sandbox = TestSandbox::new();
+    let path = sandbox.root.join("secret.txt");
+    write_private_file(&path, "top secret").expect("write_private_file should succeed");
+
+    let mode = fs::metadata(&path).expect("stat written file").permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600, "file must be created at exactly 0600, got {mode:o}");
+}
+
+#[cfg(unix)]
+#[test]
+fn write_private_file_propagates_permission_failure() {
+    use std::os::unix::fs::PermissionsExt;
+
+    // Locking `parent` itself (rather than its ANCESTOR) does not work as a
+    // fault-injection here: `write_private_file` calls
+    // `set_private_dir_permissions` (chmod 0700) on `parent` unconditionally
+    // before creating the temp file, and chmod only requires being the
+    // owner — not write access — so a directly-locked `parent` would be
+    // silently re-widened before the create attempt. Locking the PARENT's
+    // OWN parent instead means `parent` cannot even be created by
+    // `fs::create_dir_all`, which fails and propagates before
+    // `set_private_dir_permissions` (or anything else) ever runs.
+    let sandbox = TestSandbox::new();
+    let locked_root = sandbox.root.join("locked-root");
+    fs::create_dir_all(&locked_root).expect("create locked root");
+    fs::set_permissions(&locked_root, fs::Permissions::from_mode(0o500))
+        .expect("lock down root permissions (read+execute only, no write)");
+
+    let target = locked_root.join("nested").join("secret.txt");
+    let result = write_private_file(&target, "top secret");
+
+    // Restore write access before the sandbox's Drop tries to remove it.
+    fs::set_permissions(&locked_root, fs::Permissions::from_mode(0o700))
+        .expect("restore permissions for cleanup");
+
+    assert!(
+        result.is_err(),
+        "write_private_file must propagate a directory/file-creation failure, not ignore it"
+    );
+}
+
 fn known_account(id: &str) -> Account {
     Account {
         id: id.into(),
@@ -533,7 +583,7 @@ fn v2_rejects_symlinked_index_and_marker_without_overwriting_targets() {
     assert_eq!(fs::read_to_string(outside_marker).unwrap(), "2\n");
 }
 
-#[cfg(all(unix, feature = "edition-pro"))]
+#[cfg(unix)]
 #[test]
 fn v2_rejects_symlinked_credentials_directory_without_writing_outside() {
     use std::os::unix::fs::symlink;
@@ -567,7 +617,7 @@ fn v2_rejects_symlinked_credentials_directory_without_writing_outside() {
     assert_eq!(fs::read_dir(outside).unwrap().count(), 1);
 }
 
-#[cfg(all(unix, feature = "edition-pro"))]
+#[cfg(unix)]
 #[test]
 fn v2_rejects_symlinked_credential_file_without_overwriting_target() {
     use std::os::unix::fs::symlink;
@@ -599,7 +649,6 @@ fn v2_rejects_symlinked_credential_file_without_overwriting_target() {
     assert_eq!(fs::read_to_string(outside).unwrap(), "keep");
 }
 
-#[cfg(feature = "edition-pro")]
 #[test]
 fn v2_grok_compatibility_add_uses_credential_id_for_credentials() {
     let sandbox = TestSandbox::new();
@@ -621,7 +670,6 @@ fn v2_grok_compatibility_add_uses_credential_id_for_credentials() {
     );
 }
 
-#[cfg(feature = "edition-pro")]
 #[test]
 fn cursor_add_reference_creates_no_secret_file() {
     let sandbox = TestSandbox::new();
@@ -641,7 +689,6 @@ fn cursor_add_reference_creates_no_secret_file() {
     assert!(!sandbox.root.join("UsageCheck").join("credentials").exists());
 }
 
-#[cfg(feature = "edition-pro")]
 #[test]
 fn v2_reference_sources_create_no_secret_files() {
     let sandbox = TestSandbox::new();
@@ -683,7 +730,6 @@ fn v2_reference_sources_create_no_secret_files() {
     assert!(!sandbox.root.join("UsageCheck").join("credentials").exists());
 }
 
-#[cfg(feature = "edition-pro")]
 #[test]
 fn v2_app_owned_sources_resolve_and_update_credentials_by_credential_id() {
     let sandbox = TestSandbox::new();
@@ -919,7 +965,6 @@ fn v2_duplicate_profile_roots_are_rejected_without_overwrite() {
     assert_eq!(store.list(), vec![first]);
 }
 
-#[cfg(feature = "edition-pro")]
 #[test]
 fn v2_duplicate_cursor_identities_are_rejected_without_overwrite() {
     let sandbox = TestSandbox::new();
@@ -949,7 +994,6 @@ fn v2_duplicate_cursor_identities_are_rejected_without_overwrite() {
     assert_eq!(store.list(), vec![first]);
 }
 
-#[cfg(feature = "edition-pro")]
 #[test]
 fn v2_duplicate_higgsfield_identities_are_rejected_without_overwrite() {
     let sandbox = TestSandbox::new();
@@ -987,7 +1031,6 @@ fn v2_duplicate_higgsfield_identities_are_rejected_without_overwrite() {
     assert!(duplicate.is_err());
 }
 
-#[cfg(feature = "edition-pro")]
 #[test]
 fn v2_duplicate_xai_team_ids_are_rejected_without_overwrite() {
     let sandbox = TestSandbox::new();

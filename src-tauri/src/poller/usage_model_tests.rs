@@ -258,7 +258,6 @@ fn assemble_live_outcome_propagates_breakdown() {
     assert_eq!(result.breakdown[0].label, "Spark");
 }
 
-#[cfg(feature = "edition-pro")]
 #[test]
 fn account_usage_from_cursor_carries_breakdown() {
     let acct = Account {
@@ -302,6 +301,28 @@ fn account_usage_from_cursor_carries_breakdown() {
     assert_eq!(result.breakdown.len(), 2);
     assert_eq!(result.breakdown[0].label, "First Party");
     assert_eq!(result.breakdown[1].label, "API");
+}
+
+#[test]
+fn account_usage_pro_required_carries_no_quota_and_marks_status() {
+    let acct = Account {
+        id: "grok-1".into(),
+        provider: Provider::Grok,
+        label: "user@ex.com".into(),
+        auth_source: usage_core::account::AuthSource::XaiManagement {
+            credential_id: "cred-1".into(),
+            team_id: "team-1".into(),
+        },
+    };
+    let result = account_usage_pro_required(&acct);
+    assert_eq!(result.status, "pro_required");
+    assert_eq!(result.account.id, "grok-1");
+    assert!(result.five_hour.is_none());
+    assert!(result.week.is_none());
+    assert!(result.plan.is_none());
+    assert!(result.detail_suffix.is_none());
+    assert!(result.breakdown.is_empty());
+    assert!(result.pool_breakdown.is_empty());
 }
 
 #[test]

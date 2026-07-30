@@ -287,13 +287,8 @@ pub(crate) fn route(state: &ApiState, method: &str, path: &str) -> Reply {
                         serde_json::json!({
                             "error": "unknown_provider",
                             "message": format!(
-                                "unknown provider '{}' (expected {})",
-                                name,
-                                if cfg!(feature = "edition-pro") {
-                                    "codex, claude, agy, cursor, grok, or higgsfield"
-                                } else {
-                                    "codex, claude, or agy"
-                                }
+                                "unknown provider '{}' (expected codex, claude, agy, cursor, grok, or higgsfield)",
+                                name
                             ),
                         })
                         .to_string(),

@@ -28,7 +28,6 @@ fn read_item(conn: &Connection, key: &str) -> Option<String> {
 
 /// Cursor session: read-only from local DB, tokens kept in memory only.
 #[derive(Debug, Clone)]
-#[cfg(feature = "edition-pro")]
 pub struct CursorSession {
     pub access_token: String,
     pub refresh_token: Option<String>,
@@ -39,14 +38,12 @@ pub struct CursorSession {
 
 /// Error reading Cursor session from local DB.
 #[derive(Debug)]
-#[cfg(feature = "edition-pro")]
 pub enum CursorLocalError {
     OpenFailed(String),
     TokenMissing,
     IdentityUnderivable,
 }
 
-#[cfg(feature = "edition-pro")]
 impl std::fmt::Display for CursorLocalError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
@@ -57,7 +54,6 @@ impl std::fmt::Display for CursorLocalError {
     }
 }
 
-#[cfg(feature = "edition-pro")]
 impl std::error::Error for CursorLocalError {}
 
 /// Decode JWT payload (middle segment: base64url → JSON).
@@ -85,7 +81,6 @@ fn decode_jwt_payload(token: &str) -> Result<serde_json::Value, String> {
 }
 
 /// Read Cursor session from local DB (read-only, identity from JWT or email).
-#[cfg(feature = "edition-pro")]
 pub fn read_cursor_session(path: &Path) -> Result<CursorSession, CursorLocalError> {
     let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|e| CursorLocalError::OpenFailed(e.to_string()))?;
@@ -209,7 +204,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "edition-pro")]
     fn cursor_identity_prefers_jwt_sub() {
         let db = create_test_db_with_jwt(Some("user@example.com"), "fallback@test.com", "pro");
         let session = read_cursor_session(db.path()).unwrap();
@@ -217,7 +211,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "edition-pro")]
     fn cursor_identity_falls_back_to_trimmed_lowercase_email() {
         let db = create_test_db_with_jwt(None, "  User@X.CO  ", "pro");
         let session = read_cursor_session(db.path()).unwrap();
@@ -225,7 +218,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "edition-pro")]
     fn cursor_plan_is_metadata_not_identity() {
         let db = create_test_db_with_jwt(Some("user@example.com"), "email@test.com", "pro");
         let session = read_cursor_session(db.path()).unwrap();
