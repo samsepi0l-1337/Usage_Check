@@ -203,10 +203,14 @@ Triggered by:
 - `workflow_dispatch` (manual)
 - Push of tags matching `v*` (e.g. `v0.1.34`)
 
-A `guard` job runs first and fails the whole workflow if the embedded
-license Ed25519 public key (`src-tauri/src/license/pubkey.rs`) is still the
-placeholder — see that file and `pubkey_tests.rs` for the mechanism. Once it
-passes:
+A `guard` job runs first and checks the embedded license Ed25519 public key
+(`src-tauri/src/license/pubkey.rs`) — see that file and `pubkey_tests.rs` for
+the mechanism. As of 2026-07-30 this check is advisory: a still-placeholder
+key emits a workflow warning and a job-summary note instead of failing the
+release, and the resulting build ships permanently Free — no customer key
+can unlock Pro (Codex/Claude/agy are unaffected). Dropping the
+`continue-on-error` line on that step in the workflow makes it blocking
+again. The `build` job then runs regardless:
 
 | Matrix job | Platform | Upload artifact name |
 | --- | --- | --- |

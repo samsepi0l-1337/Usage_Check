@@ -10,19 +10,31 @@ permissions:
   contents: write
 
 jobs:
-  # Guard: refuses to build/publish a release while the embedded license
-  # Ed25519 public key (`src-tauri/src/license/pubkey.rs::EMBEDDED_PUBLIC_KEY_B64`)
-  # is still the placeholder. Mechanism: `embedded_public_key_is_not_placeholder`
-  # is a `#[ignore]`d unit test in `src-tauri/src/license/pubkey_tests.rs` —
+  # Guard: reports whether the embedded license Ed25519 public key
+  # (`src-tauri/src/license/pubkey.rs::EMBEDDED_PUBLIC_KEY_B64`) is still the
+  # placeholder. Mechanism: `embedded_public_key_is_not_placeholder` is a
+  # `#[ignore]`d unit test in `src-tauri/src/license/pubkey_tests.rs` —
   # ignored so the normal `cargo test -p usage-app` suite stays green before
   # the real key is embedded — and this step runs it EXPLICITLY via
-  # `--ignored`. It currently FAILS by design (see that test's assertion
-  # message). To make a release buildable: embed the real autoworkit.com
-  # production Ed25519 public key in `EMBEDDED_PUBLIC_KEY_B64` (see
-  # `docs/LICENSE_API.md` for how the site generates and publishes it), then
-  # this guard passes automatically and no workflow change is needed.
+  # `--ignored`.
+  #
+  # ADVISORY, NOT BLOCKING (operator decision, 2026-07-30). It used to fail
+  # the whole workflow while the placeholder was in place. Releases are now
+  # deliberately shipped Free-only until the real autoworkit.com production
+  # key exists, so the check `continue-on-error`s and instead emits a loud
+  # workflow warning + job-summary line. Consequence of releasing while it
+  # warns: `resolve_public_key` returns `None` in a release build, every
+  # license token fails verification, and the shipped binary is permanently
+  # Free — no customer key can unlock Pro. Codex/Claude/agy are unaffected.
+  #
+  # To ship a Pro-capable build: embed the real production Ed25519 public key
+  # in `EMBEDDED_PUBLIC_KEY_B64` (see `docs/LICENSE_API.md` for how the site
+  # generates and publishes it) and rewrite the sibling test
+  # `embedded_constant_is_the_documented_placeholder`, which pins today's
+  # placeholder state. The guard then passes with no workflow change; to make
+  # it block again afterwards, drop the `continue-on-error` line below.
   guard:
-    name: Guard - embedded license public key
+    name: Guard - embedded license public key (advisory)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -42,7 +54,30 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
       - name: Guard - embedded license public key is not the placeholder
+        id: pubkey
+        continue-on-error: true
         run: cargo test -p usage-app -- embedded_public_key_is_not_placeholder --ignored
+
+      - name: Report - placeholder key still embedded
+        if: steps.pubkey.outcome == 'failure'
+        run: |
+          echo "::warning title=License public key is still the placeholder::This release ships permanently Free - every license token fails verification, so no customer key can unlock Pro. Codex/Claude/agy are unaffected. Embed the real autoworkit.com production Ed25519 public key in src-tauri/src/license/pubkey.rs to ship a Pro-capable build."
+          {
+            echo "### :warning: License public key is still the placeholder"
+            echo
+            echo "\`EMBEDDED_PUBLIC_KEY_B64\` (\`src-tauri/src/license/pubkey.rs\`) has not been"
+            echo "replaced with the real autoworkit.com production key."
+            echo
+            echo "**This release is permanently Free.** \`resolve_public_key\` returns \`None\` in a"
+            echo "release build, so every license token fails verification and no customer key can"
+            echo "unlock Pro. Codex / Claude / agy are unaffected."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Report - real license public key embedded
+        if: steps.pubkey.outcome == 'success'
+        run: |
+          echo "Embedded license public key is a valid, non-placeholder Ed25519 key - Pro activation can work in this build." \
+            >> "$GITHUB_STEP_SUMMARY"
 
   build:
     needs: guard

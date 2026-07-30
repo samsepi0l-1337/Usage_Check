@@ -68,8 +68,9 @@ unified binary — see `scripts/build-edition.sh` for a wrapped
 locally — there is no separate Pro binary to install.
 
 **CI releases:** push a `v*` tag (e.g. `v0.1.34`) or run the Release workflow
-manually. A guard step fails the build if the embedded license public key is
-still the placeholder. Artifacts: `UsageCheck-macos` (.dmg + .app),
+manually. A guard step warns (but does not fail the build) if the embedded
+license public key is still the placeholder; such a build ships permanently
+Free — Pro cannot be unlocked. Artifacts: `UsageCheck-macos` (.dmg + .app),
 `UsageCheck-windows` (.exe + .msi). See
 [`docs/editions.md`](docs/editions.md#ci-release-matrix).
 
