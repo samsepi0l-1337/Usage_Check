@@ -67,6 +67,7 @@ pub(crate) fn license_status_line(status: LicenseStatus) -> String {
         LicenseStatus::Pro {
             expires_at: Some(at),
         } => format!("License: Pro · expires {}", relative_time(at)),
+        LicenseStatus::ProDevOverride => "License: Pro (dev override)".to_string(),
         LicenseStatus::Expired => "License: expired — reactivate".to_string(),
         LicenseStatus::GracePeriodEnded => "License: verification needed".to_string(),
     }

@@ -91,6 +91,22 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/UsageResponse"
+  /v1/license:
+    get:
+      tags: [meta]
+      summary: Current license gate state
+      description: >
+        Returns only the coarse current entitlement state. It never exposes a
+        license key, signed token, or device identifier. `forced` is true
+        only for the debug-only local `USAGECHECK_FORCE_PRO` override.
+      operationId: getLicense
+      responses:
+        "200":
+          description: Current runtime license state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/License"
   /v1/usage/{provider}:
     get:
       tags: [usage]
@@ -212,7 +228,7 @@ components:
       description: Usage provider category.
     Status:
       type: string
-      enum: [ok, needs_login, rate_limited, error, stale, waiting_for_usage, identity_changed, experimental_error, needs_setup]
+      enum: [ok, needs_login, rate_limited, error, stale, waiting_for_usage, identity_changed, experimental_error, needs_setup, pro_required]
       description: |
         Freshness/auth status for an account's most recent poll.
         - `ok`: live data fetched successfully.
@@ -224,6 +240,7 @@ components:
         - `identity_changed`: the CLI profile now belongs to a different identity than expected.
         - `experimental_error`: an experimental (reference/DB) provider probe failed.
         - `needs_setup`: provider connected but not yet configured (e.g. Higgsfield credits absent).
+        - `pro_required`: a configured paid-provider account is present but the runtime Pro gate is inactive.
     Quota:
       type: object
       description: A single usage window (used percent).
@@ -237,8 +254,12 @@ components:
           description: Percent of the window consumed (0-100).
           example: 38.0
         window_label:
-          type: string
-          description: Human label derived from window_seconds (e.g. "5h", "7d").
+          type: [string, "null"]
+          description: >-
+            Human label derived from window_seconds when available. Otherwise,
+            known slot semantics supply "5h", "7d", or "billing period". Null
+            means the quota has no known time window, such as a Higgsfield
+            credit balance.
           example: "5h"
         window_seconds:
           type: [integer, "null"]
@@ -412,6 +433,21 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/AccountUsage"
+    License:
+      type: object
+      required: [status, expires_at, forced]
+      properties:
+        status:
+          type: string
+          enum: [free, pro, expired, grace_period_ended]
+          description: Current runtime entitlement classification.
+        expires_at:
+          type: [string, "null"]
+          format: date-time
+          description: Signed Pro expiry when present; null otherwise.
+        forced:
+          type: boolean
+          description: True only when a debug build is using the local force-Pro override.
     Index:
       type: object
       required: [service, version, endpoints]
@@ -428,6 +464,7 @@ components:
             type: string
           example:
             - "GET /health"
+            - "GET /v1/license"
             - "GET /v1/usage"
             - "GET /v1/usage/{provider}"
             - "GET /openapi.yaml"

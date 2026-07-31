@@ -173,6 +173,8 @@ pub(super) async fn poll_higgsfield(store: &AccountStore, account: &Account) -> 
                 email: None,
                 plan: None,
                 credits_remaining: None,
+                credits_total: None,
+                renews_at: None,
             },
             "needs_login",
         );
@@ -194,6 +196,8 @@ pub(super) async fn poll_higgsfield(store: &AccountStore, account: &Account) -> 
                 email: None,
                 plan: None,
                 credits_remaining: None,
+                credits_total: None,
+                renews_at: None,
             },
             "needs_setup",
         ),

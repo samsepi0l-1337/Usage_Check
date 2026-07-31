@@ -22,6 +22,7 @@ signed-token activation wire contract, see
 [`docs/LICENSE_API.md`](LICENSE_API.md). For cross-platform tray architecture
 and the original rewrite plan, see
 [`docs/superpowers/specs/2026-07-08-usagecheck-crossplatform-design.md`](superpowers/specs/2026-07-08-usagecheck-crossplatform-design.md).
+For local development-only Pro verification, see [`docs/dev-pro.md`](dev-pro.md).
 
 ## Product identity
 

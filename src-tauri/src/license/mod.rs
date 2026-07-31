@@ -68,6 +68,10 @@ pub enum LicenseStatus {
     Free,
     /// A valid, current Pro activation.
     Pro { expires_at: Option<DateTime<Utc>> },
+    /// Debug-build-only local verification override. This has no persisted
+    /// record and is deliberately distinct from [`Self::Pro`] so every UI
+    /// and API consumer can disclose that it is not a real activation.
+    ProDevOverride,
     /// The token's `expires_at` is in the past.
     Expired,
     /// Not expired, but the token's own signed `issued_at` (H1 — never
@@ -217,6 +221,37 @@ pub fn decide_status(
     }
 }
 
+/// Whether the raw `USAGECHECK_FORCE_PRO` value enables the local debug
+/// override. Kept pure so the release-build refusal is mechanically
+/// testable without producing a release binary.
+///
+/// This exists solely for local verification. `debug_build` is always
+/// `cfg!(debug_assertions)` at the runtime call site, so a release binary
+/// cannot be unlocked with this environment variable.
+fn force_pro_enabled_for(debug_build: bool, raw: Option<&str>) -> bool {
+    debug_build
+        && raw.is_some_and(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+}
+
+fn force_pro_enabled() -> bool {
+    force_pro_enabled_for(
+        cfg!(debug_assertions),
+        std::env::var("USAGECHECK_FORCE_PRO").ok().as_deref(),
+    )
+}
+
+fn log_force_pro_override_once() {
+    static LOGGED: std::sync::Once = std::sync::Once::new();
+    LOGGED.call_once(|| {
+        eprintln!("license: USAGECHECK_FORCE_PRO is set — Pro forced (debug build only)");
+    });
+}
+
 /// B0.2: rejects a symlinked app-data DIRECTORY (not just a symlinked
 /// license file) before reading, mirroring the device-id and watermark read
 /// paths.
@@ -264,6 +299,13 @@ fn write_record_in(app_data_dir: Option<&Path>, record: &LicenseRecord) -> Resul
 /// `status_in` itself from ever constructing that placeholder in the first
 /// place.
 fn status_in(app_data_dir: Option<&Path>) -> LicenseStatus {
+    // Read this environment variable in exactly this shared status path so
+    // `status()` and `is_pro()` cannot disagree. A release build reaches the
+    // same pure helper with `debug_build == false`, which always refuses it.
+    if force_pro_enabled() {
+        log_force_pro_override_once();
+        return LicenseStatus::ProDevOverride;
+    }
     let Some(this_device_id) = device::device_id_read_only_in(app_data_dir) else {
         return LicenseStatus::Free;
     };
@@ -291,12 +333,13 @@ pub fn status() -> LicenseStatus {
 /// tempdir instead of global license state.
 #[cfg(test)]
 fn is_pro_in(app_data_dir: Option<&Path>) -> bool {
-    matches!(status_in(app_data_dir), LicenseStatus::Pro { .. })
+    matches!(status_in(app_data_dir), LicenseStatus::Pro { .. } | LicenseStatus::ProDevOverride)
 }
 
-/// True only when [`status`] is [`LicenseStatus::Pro`].
+/// True only when [`status`] grants Pro, including the explicitly-marked
+/// debug-only [`LicenseStatus::ProDevOverride`] local verification state.
 pub fn is_pro() -> bool {
-    matches!(status(), LicenseStatus::Pro { .. })
+    matches!(status(), LicenseStatus::Pro { .. } | LicenseStatus::ProDevOverride)
 }
 
 /// True when a license record is persisted on disk, regardless of whether it
