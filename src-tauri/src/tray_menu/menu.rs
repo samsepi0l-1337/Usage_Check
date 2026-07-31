@@ -141,10 +141,10 @@ pub(crate) struct LicenseRow {
 /// (disabled, only once an attempt has been made this run) → the three
 /// action rows — Activate from clipboard, then Deactivate license (only
 /// when [`should_show_deactivate`]), then Get a license…. `build_menu`
-/// renders exactly this; no row decision is left inline there. `is_pro` for
-/// the deactivate gate is derived from `status` itself rather than a
-/// separately-read `license::is_pro()` call, so the whole row set comes
-/// from one consistent status snapshot.
+/// renders exactly this; no row decision is left inline there. Pro entitlement
+/// for the deactivate gate, including the debug override, is derived from
+/// `status` itself rather than a separately-read `license::is_pro()` call, so
+/// the whole row set comes from one consistent status snapshot.
 pub(crate) fn license_rows(
     status: LicenseStatus,
     last_attempt: Option<&Result<(), ActivationErrorClass>>,
@@ -167,7 +167,10 @@ pub(crate) fn license_rows(
         label: "Activate from clipboard".to_string(),
         enabled: true,
     });
-    let is_pro = matches!(status, LicenseStatus::Pro { .. });
+    let is_pro = matches!(
+        status,
+        LicenseStatus::Pro { .. } | LicenseStatus::ProDevOverride
+    );
     if should_show_deactivate(is_pro, has_record) {
         rows.push(LicenseRow {
             id: "license-deactivate",

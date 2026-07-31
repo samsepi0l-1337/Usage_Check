@@ -263,6 +263,45 @@
     }
 
     #[test]
+    fn codex_five_hour_and_week_windows_render_separate_labelled_rows() {
+        let mut u = usage(Provider::Codex, Some(12.0), Some(66.0));
+        u.five_hour = Some(QuotaUsage {
+            percent: 12.0,
+            resets_at: Some(chrono::Utc::now() + chrono::Duration::hours(2)),
+            window_seconds: Some(18_000),
+        });
+        u.week = Some(QuotaUsage {
+            percent: 66.0,
+            resets_at: Some(chrono::Utc::now() + chrono::Duration::days(6)),
+            window_seconds: Some(604_800),
+        });
+
+        let lines = account_usage_lines(&u);
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].starts_with("     5h 12% · resets "), "row 1: {}", lines[0]);
+        assert!(lines[1].starts_with("     7d 66% · resets "), "row 2: {}", lines[1]);
+        assert_ne!(lines[0], lines[1], "each window needs its own reset row");
+    }
+
+    #[test]
+    fn format_usage_detail_higgsfield_line_renders_used_percent_and_credits_with_reset() {
+        // Ensure reset text is computed at render time from `resets_at` (not captured
+        // inside `detail_suffix`), so a stale polled timestamp cannot freeze the
+        // live countdown shown in the tray row.
+        let mut u = usage(Provider::Higgsfield, None, Some(74.5));
+        u.week = Some(QuotaUsage {
+            percent: 74.5,
+            resets_at: Some(chrono::Utc::now() + chrono::Duration::hours(8)),
+            window_seconds: None,
+        });
+        u.detail_suffix = Some("12.75/50 credits".to_string());
+
+        let line = format_usage_detail(&u);
+        assert!(line.starts_with("74.5% · 12.75/50 credits"), "line: {line}");
+        assert!(line.contains("· resets "), "line: {line}");
+    }
+
+    #[test]
     fn account_usage_lines_only_five_hour_has_reset() {
         let mut u = usage(Provider::Claude, Some(12.0), Some(66.0));
         u.five_hour = Some(QuotaUsage {
@@ -372,6 +411,10 @@
             license_status_line(LicenseStatus::Pro { expires_at: None }),
             "License: Pro"
         );
+        assert_eq!(
+            license_status_line(LicenseStatus::ProDevOverride),
+            "License: Pro (dev override)"
+        );
         let expires_at = chrono::Utc::now() + chrono::Duration::days(3) + chrono::Duration::hours(2);
         let line = license_status_line(LicenseStatus::Pro {
             expires_at: Some(expires_at),
@@ -448,6 +491,7 @@
             LicenseStatus::Pro {
                 expires_at: Some(chrono::Utc::now() + chrono::Duration::days(1)),
             },
+            LicenseStatus::ProDevOverride,
             LicenseStatus::Expired,
             LicenseStatus::GracePeriodEnded,
         ];
@@ -555,6 +599,19 @@
     fn license_rows_pro_without_expiry() {
         assert_eq!(
             row_ids_and_enabled(LicenseStatus::Pro { expires_at: None }, None, true),
+            vec![
+                ("license-status", false),
+                ("license-activate-clipboard", true),
+                ("license-deactivate", true),
+                ("license-get", true),
+            ]
+        );
+    }
+
+    #[test]
+    fn license_rows_dev_override_without_record_still_offers_deactivate() {
+        assert_eq!(
+            row_ids_and_enabled(LicenseStatus::ProDevOverride, None, false),
             vec![
                 ("license-status", false),
                 ("license-activate-clipboard", true),

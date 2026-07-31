@@ -38,13 +38,21 @@ fn window(v: &Value) -> Option<QuotaUsage> {
 /// Human label for a Codex rate-limit window from its duration.
 pub fn window_label(window_seconds: Option<i64>, fallback: &str) -> String {
     match window_seconds {
-        Some(s) if (4 * 3600..6 * 3600).contains(&s) => "5h".into(),
-        Some(s) if (6 * 24 * 3600..8 * 24 * 3600).contains(&s) => "7d".into(),
+        Some(s) if is_five_hour_window(s) => "5h".into(),
+        Some(s) if is_week_window(s) => "7d".into(),
         Some(s) if s >= 3600 && s % 3600 == 0 => format!("{}h", s / 3600),
         Some(s) if s >= 86400 && s % 86400 == 0 => format!("{}d", s / 86400),
         Some(s) if s > 0 => format!("{s}s"),
         _ => fallback.into(),
     }
+}
+
+fn is_five_hour_window(window_seconds: i64) -> bool {
+    (4 * 3600..6 * 3600).contains(&window_seconds)
+}
+
+fn is_week_window(window_seconds: i64) -> bool {
+    (6 * 24 * 3600..8 * 24 * 3600).contains(&window_seconds)
 }
 
 /// Extracts the "Spark" (gpt-5.3-codex-spark) breakdown row from the
@@ -68,8 +76,8 @@ fn parse_spark_breakdown(root: &Value) -> Option<UsageBreakdownRow> {
 
 /// Classifies up to two Codex rate-limit windows into `(five_hour, week)`
 /// slots by their ACTUAL duration rather than by JSON position. This matters
-/// because Codex removed its 5-hour window from `wham/usage`: modern
-/// responses carry only a weekly `primary_window`, so positional mapping
+/// because the API can return the 5-hour window in either JSON position, or
+/// omit it and return only a weekly `primary_window`. Positional mapping
 /// (`primary_window` → `five_hour`) would misfile weekly usage into the 5h
 /// slot.
 ///
@@ -77,9 +85,11 @@ fn parse_spark_breakdown(root: &Value) -> Option<UsageBreakdownRow> {
 ///   `(4*3600..6*3600)` is placed in `five_hour`.
 /// - A window whose `window_seconds` falls in the weekly range
 ///   `(6*24*3600..8*24*3600)` is placed in `week`.
-/// - A window with unknown/out-of-range duration falls back to the first
-///   still-empty slot (`five_hour` then `week`), preserving legacy
-///   positional behavior for unrecognized durations.
+/// - Recognized windows claim their matching slots in a first pass. Only then
+///   do unknown/out-of-range durations fall back to the first still-empty
+///   slot (`five_hour` then `week`). This prevents an unknown primary window
+///   from consuming `five_hour` before a recognized returning 5h secondary
+///   window can claim it.
 ///
 /// `primary_window` is processed before `secondary_window`; a slot is never
 /// overwritten once filled (first writer wins).
@@ -89,26 +99,32 @@ fn classify_codex_windows(
 ) -> (Option<QuotaUsage>, Option<QuotaUsage>) {
     let mut five_hour: Option<QuotaUsage> = None;
     let mut week: Option<QuotaUsage> = None;
+    let windows = [primary, secondary];
 
-    for usage in [primary, secondary].into_iter().flatten() {
+    // Reserve duration-recognized slots first. `iter()` preserves primary
+    // before secondary while cloning only the first writer for each slot.
+    for usage in windows.iter().flatten() {
         match usage.window_seconds {
-            Some(s) if (4 * 3600..6 * 3600).contains(&s) => {
-                if five_hour.is_none() {
-                    five_hour = Some(usage);
-                }
+            Some(s) if is_five_hour_window(s) && five_hour.is_none() => {
+                five_hour = Some(usage.clone());
             }
-            Some(s) if (6 * 24 * 3600..8 * 24 * 3600).contains(&s) => {
-                if week.is_none() {
-                    week = Some(usage);
-                }
+            Some(s) if is_week_window(s) && week.is_none() => {
+                week = Some(usage.clone());
             }
-            _ => {
-                if five_hour.is_none() {
-                    five_hour = Some(usage);
-                } else if week.is_none() {
-                    week = Some(usage);
-                }
-            }
+            _ => {}
+        }
+    }
+
+    // Preserve the legacy positional fallback only after recognized windows
+    // have had their chance to claim their semantic slots.
+    for usage in windows.into_iter().flatten() {
+        if matches!(usage.window_seconds, Some(s) if is_five_hour_window(s) || is_week_window(s)) {
+            continue;
+        }
+        if five_hour.is_none() {
+            five_hour = Some(usage);
+        } else if week.is_none() {
+            week = Some(usage);
         }
     }
 
@@ -166,9 +182,8 @@ mod tests {
 
     #[test]
     fn weekly_only_primary_window_yields_no_five_hour() {
-        // Codex removed its 5-hour rate-limit window: wham/usage now returns
-        // only a weekly primary_window with a null secondary_window. This
-        // must NOT land in the five_hour slot (positional mapping bug).
+        // The API can still return only a weekly primary_window. This must
+        // NOT land in the five_hour slot (positional mapping bug).
         let v = json!({
             "rate_limit": {
                 "primary_window": {"used_percent": 15.0, "limit_window_seconds": 604800},
@@ -195,6 +210,53 @@ mod tests {
         let q = parse_codex_usage(&v);
         assert_eq!(q.five_hour.as_ref().unwrap().percent, 33.0);
         assert_eq!(q.five_hour.as_ref().unwrap().window_seconds, Some(3600));
+        assert!(q.week.is_none());
+    }
+
+    #[test]
+    fn swapped_weekly_primary_and_five_hour_secondary_fill_matching_slots() {
+        let v = json!({
+            "rate_limit": {
+                "primary_window": {"used_percent": 66.0, "limit_window_seconds": 604800},
+                "secondary_window": {"used_percent": 12.0, "limit_window_seconds": 18000}
+            }
+        });
+        let q = parse_codex_usage(&v);
+        assert_eq!(q.five_hour.as_ref().unwrap().percent, 12.0);
+        assert_eq!(q.five_hour.as_ref().unwrap().window_seconds, Some(18_000));
+        assert_eq!(q.week.as_ref().unwrap().percent, 66.0);
+        assert_eq!(q.week.as_ref().unwrap().window_seconds, Some(604_800));
+    }
+
+    #[test]
+    fn recognized_five_hour_secondary_beats_unknown_primary_fallback() {
+        // Classification must reserve recognized slots before applying the
+        // positional fallback, otherwise the 3600-second primary consumes
+        // five_hour and silently drops the returning 5h secondary window.
+        let v = json!({
+            "rate_limit": {
+                "primary_window": {"used_percent": 33.0, "limit_window_seconds": 3600},
+                "secondary_window": {"used_percent": 12.0, "limit_window_seconds": 18000}
+            }
+        });
+        let q = parse_codex_usage(&v);
+        assert_eq!(q.five_hour.as_ref().unwrap().percent, 12.0);
+        assert_eq!(q.five_hour.as_ref().unwrap().window_seconds, Some(18_000));
+        assert_eq!(q.week.as_ref().unwrap().percent, 33.0);
+        assert_eq!(q.week.as_ref().unwrap().window_seconds, Some(3600));
+    }
+
+    #[test]
+    fn five_hour_only_response_yields_no_week() {
+        let v = json!({
+            "rate_limit": {
+                "primary_window": {"used_percent": 12.0, "limit_window_seconds": 18000},
+                "secondary_window": null
+            }
+        });
+        let q = parse_codex_usage(&v);
+        assert_eq!(q.five_hour.as_ref().unwrap().percent, 12.0);
+        assert_eq!(q.five_hour.as_ref().unwrap().window_seconds, Some(18_000));
         assert!(q.week.is_none());
     }
 

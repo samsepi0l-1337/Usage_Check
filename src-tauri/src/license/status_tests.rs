@@ -1,6 +1,6 @@
 use super::*;
-use base64::{engine::general_purpose::STANDARD, Engine as _};
-use ed25519_dalek::SigningKey;
+use base64::{engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD}, Engine as _};
+use ed25519_dalek::{Signer, SigningKey};
 use std::ffi::OsString;
 
 fn test_signing_key() -> SigningKey {
@@ -260,6 +260,62 @@ fn valid_license_with_future_expiry_is_pro() {
             expires_at: Some(expires)
         }
     );
+}
+
+// ---------------------------------------------------------------------
+// Client-side wire-format compatibility: this independently builds a token
+// from serialized payload bytes and URL-safe, unpadded base64, then proves
+// that the verifier accepts it. The standalone example repeats the same
+// contract but is not exercised by this unit test.
+// ---------------------------------------------------------------------
+
+fn encode_dev_server_style_token(payload: &token::TokenPayload, signing_key: &SigningKey) -> String {
+    let payload_bytes = serde_json::to_vec(payload).expect("serialize dev-server token payload");
+    let signature = signing_key.sign(&payload_bytes);
+    format!(
+        "{}.{}",
+        URL_SAFE_NO_PAD.encode(payload_bytes),
+        URL_SAFE_NO_PAD.encode(signature.to_bytes())
+    )
+}
+
+#[test]
+fn dev_server_style_token_verifies_and_round_trips() {
+    let signing_key = test_signing_key();
+    let payload = token::TokenPayload {
+        v: 1,
+        key_id: "dev".into(),
+        plan: "pro".into(),
+        device: THIS_DEVICE.into(),
+        issued_at: Utc::now(),
+        expires_at: None,
+    };
+
+    let token = encode_dev_server_style_token(&payload, &signing_key);
+    assert_eq!(
+        token::verify_token(&token, &signing_key.verifying_key()).unwrap(),
+        payload
+    );
+}
+
+// ---------------------------------------------------------------------
+// Debug-only force-Pro gate. The pure helper receives the build kind so the
+// release refusal is testable without compiling a release binary.
+// ---------------------------------------------------------------------
+
+#[test]
+fn force_pro_is_enabled_only_by_truthy_values_in_debug_builds() {
+    assert!(force_pro_enabled_for(true, Some("1")));
+    assert!(force_pro_enabled_for(true, Some(" TRUE ")));
+    assert!(force_pro_enabled_for(true, Some("yes")));
+    assert!(force_pro_enabled_for(true, Some("On")));
+    assert!(!force_pro_enabled_for(true, Some("0")));
+    assert!(!force_pro_enabled_for(true, None));
+}
+
+#[test]
+fn force_pro_is_refused_for_release_builds() {
+    assert!(!force_pro_enabled_for(false, Some("1")));
 }
 
 // H1: `verified_at` is plain, unsigned JSON and must have ZERO influence on

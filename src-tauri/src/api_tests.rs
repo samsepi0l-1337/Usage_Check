@@ -59,11 +59,61 @@ fn state_with(usages: &[AccountUsage]) -> ApiState {
 }
 #[test]
 fn dto_renames_percent_and_labels_windows() {
-    let dto = AccountUsageDto::from_usage(&sample(Provider::Codex, "a", Some(38.0), Some(6.0)));
-    let five = dto.five_hour.unwrap();
-    assert_eq!(five.used_percent, 38.0);
-    assert_eq!(five.window_label, "5h");
-    assert_eq!(dto.week.unwrap().window_label, "7d");
+    let json = serde_json::to_value(AccountUsageDto::from_usage(&sample(
+        Provider::Codex,
+        "a",
+        Some(38.0),
+        Some(6.0),
+    )))
+    .unwrap();
+
+    assert_eq!(json["five_hour"]["used_percent"], 38.0);
+    assert_eq!(json["five_hour"]["window_label"], "5h");
+    assert_eq!(json["week"]["window_label"], "7d");
+}
+
+#[test]
+fn dto_serializes_null_window_label_for_higgsfield_credit_balance() {
+    let mut credits = sample(Provider::Higgsfield, "credits", None, Some(42.0));
+    credits.week.as_mut().unwrap().window_seconds = None;
+
+    let json = serde_json::to_value(AccountUsageDto::from_usage(&credits)).unwrap();
+
+    assert_eq!(json["week"]["window_label"], serde_json::Value::Null);
+}
+
+#[test]
+fn dto_serializes_known_slot_labels_when_duration_is_absent() {
+    let mut claude = sample(Provider::Claude, "claude", Some(12.0), Some(34.0));
+    claude.five_hour.as_mut().unwrap().window_seconds = None;
+    claude.week.as_mut().unwrap().window_seconds = None;
+
+    let json = serde_json::to_value(AccountUsageDto::from_usage(&claude)).unwrap();
+
+    assert_eq!(json["five_hour"]["window_label"], "5h");
+    assert_eq!(json["week"]["window_label"], "7d");
+}
+
+#[test]
+fn dto_derives_window_label_when_duration_is_known() {
+    let mut usage = sample(Provider::Codex, "duration", Some(12.0), None);
+    usage.five_hour.as_mut().unwrap().window_seconds = Some(7_200);
+
+    let json = serde_json::to_value(AccountUsageDto::from_usage(&usage)).unwrap();
+
+    assert_eq!(json["five_hour"]["window_label"], "2h");
+}
+
+#[test]
+fn dto_labels_cursor_and_grok_usage_as_billing_periods() {
+    for provider in [Provider::Cursor, Provider::Grok] {
+        let mut usage = sample(provider, "billing", None, Some(42.0));
+        usage.week.as_mut().unwrap().window_seconds = None;
+
+        let json = serde_json::to_value(AccountUsageDto::from_usage(&usage)).unwrap();
+
+        assert_eq!(json["week"]["window_label"], "billing period");
+    }
 }
 #[test]
 fn usage_endpoint_serializes_all_accounts() {
@@ -79,6 +129,38 @@ fn usage_endpoint_serializes_all_accounts() {
     assert_eq!(v["accounts"][0]["provider"], "codex");
     assert!(reply.body.contains("used_percent"));
     assert!(!reply.body.contains("access_token"));
+}
+
+#[test]
+fn license_endpoint_serves_poll_snapshot_without_rereading_environment() {
+    struct EnvGuard(Option<std::ffi::OsString>);
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match self.0.take() {
+                Some(previous) => std::env::set_var("USAGECHECK_FORCE_PRO", previous),
+                None => std::env::remove_var("USAGECHECK_FORCE_PRO"),
+            }
+        }
+    }
+
+    let _lock = crate::license::LICENSE_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let previous = std::env::var_os("USAGECHECK_FORCE_PRO");
+    std::env::set_var("USAGECHECK_FORCE_PRO", "yes");
+    let _restore = EnvGuard(previous);
+
+    let state = state_with(&[]);
+    std::env::set_var("USAGECHECK_FORCE_PRO", "0");
+    let reply = route(&state, "GET", "/v1/license");
+    assert_eq!(reply.status, 200);
+    let body: serde_json::Value = serde_json::from_str(&reply.body).unwrap();
+    assert_eq!(body["status"], "pro");
+    assert_eq!(body["expires_at"], serde_json::Value::Null);
+    assert_eq!(body["forced"], true);
+    for forbidden in ["token", "device", "key", "license.json"] {
+        assert!(!reply.body.contains(forbidden), "license endpoint leaked {forbidden}");
+    }
 }
 #[test]
 fn provider_filter_returns_only_matching() {
@@ -213,6 +295,11 @@ fn index_lists_endpoints() {
     let v: serde_json::Value = serde_json::from_str(&reply.body).unwrap();
     assert_eq!(v["service"], "usagecheck-local-api");
     assert!(v["endpoints"].as_array().unwrap().len() >= 3);
+    assert!(v["endpoints"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|endpoint| endpoint == "GET /v1/license"));
 }
 #[test]
 #[ignore]
