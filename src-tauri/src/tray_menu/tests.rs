@@ -59,6 +59,79 @@
     }
 
     #[test]
+    fn is_add_enabled_permits_a_free_provider_with_no_accounts() {
+        let spec = spec_for_event("add-codex-cli").expect("Codex CLI is registered");
+
+        assert!(is_add_enabled(&spec, false, &[]));
+    }
+
+    #[test]
+    fn is_add_enabled_refuses_a_free_provider_at_the_cap() {
+        let accounts = [account("codex-1", Provider::Codex)];
+        let specs = auth_action_specs_with(false);
+
+        for spec in specs
+            .iter()
+            .filter(|spec| spec.provider == Provider::Codex)
+        {
+            assert!(
+                !is_add_enabled(spec, false, &accounts),
+                "{} must be disabled once Codex reaches the Free cap",
+                spec.event_id
+            );
+        }
+        assert!(specs
+            .iter()
+            .filter(|spec| matches!(spec.provider, Provider::Claude | Provider::Agy))
+            .all(|spec| is_add_enabled(spec, false, &accounts)));
+    }
+
+    #[test]
+    fn is_add_enabled_permits_a_capped_free_provider_when_pro() {
+        let accounts = [account("codex-1", Provider::Codex)];
+        let spec = spec_for_event("add-codex-cli").expect("Codex CLI is registered");
+
+        assert!(is_add_enabled(&spec, true, &accounts));
+    }
+
+    #[test]
+    fn is_add_enabled_still_refuses_paid_providers_without_pro() {
+        let spec = spec_for_event("add-cursor-local").expect("Cursor local import is registered");
+
+        assert!(!is_add_enabled(&spec, false, &[]));
+    }
+
+    #[test]
+    fn is_add_enabled_ignores_other_providers_accounts() {
+        let accounts = [
+            account("claude-1", Provider::Claude),
+            account("claude-2", Provider::Claude),
+            account("claude-3", Provider::Claude),
+        ];
+        let spec = spec_for_event("add-codex-cli").expect("Codex CLI is registered");
+
+        assert!(is_add_enabled(&spec, false, &accounts));
+    }
+
+    #[test]
+    fn add_entry_label_is_unchanged_when_enabled() {
+        let spec = spec_for_event("add-codex-cli").expect("Codex CLI is registered");
+
+        assert_eq!(add_entry_label(&spec, true), spec.label);
+    }
+
+    #[test]
+    fn add_entry_label_explains_the_cap_when_disabled() {
+        let spec = spec_for_event("add-codex-cli").expect("Codex CLI is registered");
+        let enabled = add_entry_label(&spec, true);
+        let disabled = add_entry_label(&spec, false);
+
+        assert!(disabled.contains(spec.label));
+        assert!(disabled.contains("Pro required"));
+        assert_ne!(disabled, enabled);
+    }
+
+    #[test]
     fn spec_for_event_resolves_pro_registry_actions() {
         let spec = spec_for_event("add-grok-clipboard").expect("Grok clipboard is registered");
         assert_eq!(spec.provider, Provider::Grok);
@@ -73,6 +146,17 @@
     use usage_core::account::{Account, AuthSource};
     use usage_core::fetch::agy::AgyQuotaPool;
     use usage_core::models::{QuotaUsage, UsageBreakdownRow, WindowTotals};
+
+    fn account(id: &str, provider: Provider) -> Account {
+        Account {
+            id: id.into(),
+            provider,
+            label: format!("{id}@example.com"),
+            auth_source: AuthSource::BrowserOAuth {
+                credential_id: format!("credential-{id}"),
+            },
+        }
+    }
 
     fn quota(percent: f64) -> QuotaUsage {
         QuotaUsage {
@@ -476,6 +560,23 @@
     }
 
     #[test]
+    fn add_account_result_line_prefixes_and_truncates() {
+        let long = add_account_result_line(&"x".repeat(400));
+        assert!(long.starts_with("Add account: "));
+        assert!(
+            long.chars().count() <= "Add account: ".chars().count() + 120,
+            "line exceeded the prefix plus 120-character reason limit: {long}"
+        );
+        assert!(long.ends_with('…'));
+
+        assert_eq!(add_account_result_line("short reason"), "Add account: short reason");
+        assert_eq!(
+            add_account_result_line("line one\nline two"),
+            "Add account: line one line two"
+        );
+    }
+
+    #[test]
     fn no_license_tray_string_can_contain_a_key_or_token_shaped_value() {
         // Structural proof, not a substring scan of one sample: every row
         // this section can render comes from `license_status_line` (which
@@ -662,6 +763,32 @@
                 ("license-get", true),
             ]
         );
+    }
+
+    #[test]
+    fn add_section_and_license_section_agree_on_one_sample() {
+        let statuses = [
+            LicenseStatus::Free,
+            LicenseStatus::Pro { expires_at: None },
+            LicenseStatus::Pro {
+                expires_at: Some(chrono::Utc::now() + chrono::Duration::days(1)),
+            },
+            LicenseStatus::ProDevOverride,
+            LicenseStatus::Expired,
+            LicenseStatus::GracePeriodEnded,
+        ];
+
+        for status in statuses {
+            let add_section_is_pro = super::menu::is_pro_from(&status);
+            let license_section_is_pro = license_rows(status, None, false)
+                .iter()
+                .any(|row| row.id == "license-deactivate");
+
+            assert_eq!(
+                add_section_is_pro, license_section_is_pro,
+                "Add and license sections disagreed for {status:?}"
+            );
+        }
     }
 
     #[test]

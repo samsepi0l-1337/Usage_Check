@@ -240,7 +240,7 @@ components:
         - `identity_changed`: the CLI profile now belongs to a different identity than expected.
         - `experimental_error`: an experimental (reference/DB) provider probe failed.
         - `needs_setup`: provider connected but not yet configured (e.g. Higgsfield credits absent).
-        - `pro_required`: a configured paid-provider account is present but the runtime Pro gate is inactive.
+        - `pro_required`: the runtime Pro gate is inactive for this account — either a paid-provider account (Cursor/Grok/Higgsfield), or a free-provider account beyond the Free plan's one-account-per-provider limit. The account is retained and reports no quota numbers.
     Quota:
       type: object
       description: A single usage window (used percent).

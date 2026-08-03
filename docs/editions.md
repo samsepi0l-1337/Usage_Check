@@ -4,13 +4,16 @@
 > licensing service is not live, and shipped builds embed the documented
 > placeholder verification key, so every activation attempt fails and no
 > license key unlocks Cursor, Grok or Higgsfield — for anyone. Codex, Claude
-> and agy are unaffected. Already-configured paid accounts are preserved and
-> render as `pro_required`. This document describes the licensing **design**;
+> and agy remain free, with one active account per provider in the unlicensed
+> Free state. The runtime gate preserves already-configured paid accounts and
+> surplus free-provider accounts and renders them as `pro_required`. This
+> document describes the licensing **design**;
 > treat every "unlocks" statement below as what happens once a real
 > production key is embedded and the activation endpoint exists.
 
 UsageCheck ships as **one binary** for everyone. Codex, Claude, and agy
-(Gemini/Antigravity) are free. A **Pro license key** is designed to unlock
+(Gemini/Antigravity) are free, with one active account each in Free and
+unlimited accounts in Pro. A **Pro license key** is designed to unlock
 Cursor, Grok, and Higgsfield at **runtime** — there is no separate Free/Pro
 binary, no compile-time edition Cargo feature, and no `tauri.pro.conf.json`
 override.
@@ -31,7 +34,7 @@ For local development-only Pro verification, see [`docs/dev-pro.md`](dev-pro.md)
 | Product name | `UsageCheck` |
 | Bundle ID | `com.usagecheck.desktop` |
 | Config | `src-tauri/tauri.conf.json` (the only Tauri config — no per-edition override file) |
-| Providers | Codex, Claude, Gemini (agy) always; Cursor, Grok, Higgsfield once a Pro license is active |
+| Providers | Codex, Claude, Gemini (agy) free with one active account each while unlicensed; unlimited accounts plus Cursor, Grok, Higgsfield once Pro is active |
 
 **Gemini** is not a separate `Provider` enum variant. It is implemented as
 `Provider::Agy` (Antigravity), which polls the Antigravity **Gemini Models**
@@ -77,6 +80,21 @@ A Pro-gated provider is hidden from the **Add Account** menu (and its
 account, if one somehow exists, renders `pro_required`) until a Pro license
 is active — see `usage_core::edition::requires_pro` and the runtime gate in
 `src-tauri/src/tray_menu/actions.rs` / `src-tauri/src/poller/mod.rs`.
+
+### Free-state account limits
+
+`usage_core::edition::FREE_ACCOUNTS_PER_PROVIDER = 1`: in the Free runtime
+state, one account per provider remains active for Codex, Claude, and agy.
+"First" means the earliest account in index/insertion order, and that account
+remains fully polled. This limit does not delete additional accounts already
+stored: they stay listed but report `pro_required` with no quota numbers.
+Activating Pro restores every account on the next poll with no re-import.
+
+For these free providers, the tray's **Add Account** entry stays visible but
+is disabled at the cap, with the reason in its label. This differs from paid
+provider entries, which are hidden in Free. The shared policy and its
+add-time and poll-time gates live in `crates/usage-core/src/edition.rs`,
+`src-tauri/src/store/validation.rs`, and `src-tauri/src/poller/mod.rs`.
 
 ### Pro provider setup
 
@@ -219,7 +237,8 @@ A `guard` job runs first and checks the embedded license Ed25519 public key
 the mechanism. As of 2026-07-30 this check is advisory: a still-placeholder
 key emits a workflow warning and a job-summary note instead of failing the
 release, and the resulting build ships permanently Free — no customer key
-can unlock Pro (Codex/Claude/agy are unaffected). Dropping the
+can unlock Pro (Codex/Claude/agy remain free but are subject to Free's
+one-account-per-provider limit). Dropping the
 `continue-on-error` line on that step in the workflow makes it blocking
 again. The `build` job then runs regardless:
 

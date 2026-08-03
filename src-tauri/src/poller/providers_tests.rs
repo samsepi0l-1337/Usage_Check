@@ -112,7 +112,7 @@ fn auth_source_claude_usage_snapshot_round_trips_through_snapshot_reader() {
 async fn claude_cli_profile_falls_back_to_snapshot_without_profile_credentials() {
     let _lock = crate::import::CLAUDE_CONFIG_DIR_ENV_LOCK
         .lock()
-        .expect("environment lock");
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let _retain_unset_helper_without_invoking_it = ClaudeConfigDirGuard::unset;
     let temp = TempDir::new().expect("create temp directory");
     let config_root = temp.path().join("default-claude");
@@ -164,7 +164,7 @@ async fn claude_cli_profile_falls_back_to_snapshot_without_profile_credentials()
 async fn claude_cli_profile_caches_matching_live_credentials_unchanged_before_snapshot_fallback() {
     let _lock = crate::import::CLAUDE_CONFIG_DIR_ENV_LOCK
         .lock()
-        .expect("environment lock");
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let temp = TempDir::new().expect("create temp directory");
     let config_root = temp.path().join("default-claude");
     std::fs::create_dir(&config_root).expect("create default Claude config directory");
@@ -382,7 +382,7 @@ fn claude_cli_profile_cache_is_trusted_rejects_when_live_creds_present() {
 async fn claude_cli_profile_multi_account_ignores_cached_token_and_falls_through_to_snapshot() {
     let _lock = crate::import::CLAUDE_CONFIG_DIR_ENV_LOCK
         .lock()
-        .expect("environment lock");
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let temp = TempDir::new().expect("create temp directory");
     // A mismatched default identity makes Step A deterministically `Refuse` for
     // both accounts below, regardless of the sole-account ride flag — isolating
@@ -404,7 +404,7 @@ async fn claude_cli_profile_multi_account_ignores_cached_token_and_falls_through
     std::fs::create_dir(&profile_root_a).expect("create profile-a directory");
     let expected_identity = "account-a";
     let account_a = store
-        .add_reference(
+        .add_reference_with(
             usage_core::account::Provider::Claude,
             "account-a".to_string(),
             AuthSource::CliProfile {
@@ -412,11 +412,12 @@ async fn claude_cli_profile_multi_account_ignores_cached_token_and_falls_through
                 ownership: usage_core::account::ProfileOwnership::External,
                 expected_identity: expected_identity.to_string(),
             },
+            || true,
         )
         .expect("register first Claude CliProfile account");
     // A second Claude CliProfile account makes the store multi-account.
     store
-        .add_reference(
+        .add_reference_with(
             usage_core::account::Provider::Claude,
             "account-b".to_string(),
             AuthSource::CliProfile {
@@ -424,6 +425,7 @@ async fn claude_cli_profile_multi_account_ignores_cached_token_and_falls_through
                 ownership: usage_core::account::ProfileOwnership::External,
                 expected_identity: "account-b".to_string(),
             },
+            || true,
         )
         .expect("register second Claude CliProfile account");
 
@@ -564,8 +566,7 @@ fn read_claude_snapshot_outcome_trusts_every_source_when_trust_unverified_source
         if let Some(source) = source {
             body["source"] = json!(source);
         }
-        std::fs::write(&snapshot, serde_json::to_string(&body).unwrap())
-            .expect("write snapshot");
+        std::fs::write(&snapshot, serde_json::to_string(&body).unwrap()).expect("write snapshot");
 
         assert!(
             matches!(
@@ -606,8 +607,8 @@ fn read_claude_snapshot_outcome_rejects_live_ride_source_with_mismatched_identit
 }
 
 #[test]
-fn read_claude_snapshot_outcome_rejects_legacy_snapshot_without_source_and_mismatched_identity_when_untrusted()
-{
+fn read_claude_snapshot_outcome_rejects_legacy_snapshot_without_source_and_mismatched_identity_when_untrusted(
+) {
     let temp = TempDir::new().expect("create temp directory");
     let snapshot = temp.path().join("snapshot.json");
     std::fs::write(
@@ -650,8 +651,8 @@ fn read_claude_snapshot_outcome_reports_identity_changed_for_bridge_source_when_
 }
 
 #[test]
-fn read_claude_snapshot_outcome_reports_identity_changed_for_untrusted_source_when_trust_unverified_source_true()
-{
+fn read_claude_snapshot_outcome_reports_identity_changed_for_untrusted_source_when_trust_unverified_source_true(
+) {
     for source in [Some("live-ride"), None] {
         let temp = TempDir::new().expect("create temp directory");
         let snapshot = temp.path().join("snapshot.json");
@@ -662,8 +663,7 @@ fn read_claude_snapshot_outcome_reports_identity_changed_for_untrusted_source_wh
         if let Some(source) = source {
             body["source"] = json!(source);
         }
-        std::fs::write(&snapshot, serde_json::to_string(&body).unwrap())
-            .expect("write snapshot");
+        std::fs::write(&snapshot, serde_json::to_string(&body).unwrap()).expect("write snapshot");
 
         assert!(
             matches!(
@@ -683,7 +683,7 @@ fn read_claude_snapshot_outcome_reports_identity_changed_for_untrusted_source_wh
 
 fn agy_account_for_eviction_test(store: &crate::store::AccountStore, label: &str) -> Account {
     store
-        .add(
+        .add_with(
             Provider::Agy,
             label.to_string(),
             Credentials {
@@ -694,6 +694,7 @@ fn agy_account_for_eviction_test(store: &crate::store::AccountStore, label: &str
                 account_id: None,
                 expires_at: None,
             },
+            || true,
         )
         .expect("add agy account")
 }
@@ -752,8 +753,7 @@ async fn poll_agy_evicts_last_success_and_does_not_mutate_label_when_local_quota
         plan: None,
         pools: Vec::new(),
     };
-    let usage =
-        poll_agy_with_local_quota(&store, &client, &account, Some(rejected_quota)).await;
+    let usage = poll_agy_with_local_quota(&store, &client, &account, Some(rejected_quota)).await;
 
     assert!(
         !has_cached_last_success(&account.id),
@@ -761,7 +761,10 @@ async fn poll_agy_evicts_last_success_and_does_not_mutate_label_when_local_quota
     );
     assert_eq!(usage.status, "needs_login");
     assert_eq!(
-        store.account(&account.id).expect("account still present").label,
+        store
+            .account(&account.id)
+            .expect("account still present")
+            .label,
         "Antigravity",
         "rejection must not mutate the account label"
     );
@@ -782,8 +785,7 @@ async fn poll_agy_does_not_evict_last_success_when_local_quota_matches() {
         plan: None,
         pools: Vec::new(),
     };
-    let usage =
-        poll_agy_with_local_quota(&store, &client, &account, Some(matching_quota)).await;
+    let usage = poll_agy_with_local_quota(&store, &client, &account, Some(matching_quota)).await;
 
     assert_eq!(usage.status, "ok");
     assert!(

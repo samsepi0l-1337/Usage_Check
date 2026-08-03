@@ -97,6 +97,23 @@ pub(crate) fn activation_result_line(result: &Result<(), ActivationErrorClass>) 
     format!("Last attempt: {detail}")
 }
 
+/// Row shown under **Add Account** after a failed add attempt this run.
+///
+/// SECURITY: the reason is either `usage_core::edition::free_limit_reason` or an
+/// `AccountStore::add*` error string. Those are built from provider display
+/// names, fixed reason literals, and filesystem paths — no arm formats a
+/// `Credentials` field — so no token or license key can reach this row.
+pub(crate) fn add_account_result_line(reason: &str) -> String {
+    const MAX: usize = 120;
+    let one_line = reason.replace('\n', " ");
+    let trimmed: String = if one_line.chars().count() > MAX {
+        one_line.chars().take(MAX - 1).collect::<String>() + "…"
+    } else {
+        one_line
+    };
+    format!("Add account: {trimmed}")
+}
+
 fn format_quota_window(q: &QuotaUsage, fallback_label: &str) -> String {
     let label = window_label(q.window_seconds, fallback_label);
     format!("{label} {}", format_percent(q.percent))
