@@ -1,4 +1,4 @@
-use usage_core::account::Provider;
+use usage_core::account::{Account, Provider};
 
 use usage_core::AuthMethod;
 
@@ -83,6 +83,9 @@ pub(crate) fn auth_action_specs_with(is_pro: bool) -> Vec<AuthActionSpec> {
 
 /// Add Account actions available to the user right now, gated on the live
 /// license state.
+// Retained for callers/tests that want a live snapshot. `build_menu` must use
+// `auth_action_specs_with` so its single license sample is shared by every row.
+#[allow(dead_code)]
 pub fn auth_action_specs() -> Vec<AuthActionSpec> {
     auth_action_specs_with(crate::license::is_pro())
 }
@@ -108,4 +111,36 @@ pub fn spec_for_event(event_id: &str) -> Option<AuthActionSpec> {
 /// unit-testable without reading global license state.
 pub(crate) fn is_dispatch_allowed(spec: &AuthActionSpec, is_pro: bool) -> bool {
     is_pro || !usage_core::edition::requires_pro(spec.provider)
+}
+
+/// Whether the "Add Account" entry for `spec` should be CLICKABLE right now.
+///
+/// Two independent gates, ANDed:
+///  * [`is_dispatch_allowed`] — the paid-provider Pro gate (unchanged).
+///  * the Free-state per-provider cap.
+///
+/// `accounts` MUST come from `AccountStore::list()`, never from a poll
+/// snapshot: the first menu is built before any poll has run (`main.rs:150`
+/// passes an empty slice), so snapshot-derived enablement would show "Add" as
+/// clickable on a Free install that already holds an account (D7).
+pub(crate) fn is_add_enabled(spec: &AuthActionSpec, is_pro: bool, accounts: &[Account]) -> bool {
+    is_dispatch_allowed(spec, is_pro)
+        && (is_pro || !usage_core::edition::free_limit_reached(accounts, spec.provider))
+}
+
+/// The rendered label for an "Add Account" entry. When the entry is disabled by
+/// the Free-state cap, the reason is appended so the user learns WHY without
+/// clicking a row that would only fail. A paid-provider spec never reaches this
+/// in a disabled state — those are filtered out of `auth_action_specs_with`
+/// entirely — so the appended reason is always the cap.
+pub(crate) fn add_entry_label(spec: &AuthActionSpec, enabled: bool) -> String {
+    if enabled {
+        spec.label.to_string()
+    } else {
+        format!(
+            "{} — Pro required ({} account per provider on Free)",
+            spec.label,
+            usage_core::edition::FREE_ACCOUNTS_PER_PROVIDER,
+        )
+    }
 }

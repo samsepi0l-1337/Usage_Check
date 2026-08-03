@@ -37,12 +37,13 @@ mod menu;
 
 #[allow(unused_imports)]
 pub(crate) use actions::{
-    auth_action_specs, auth_action_specs_with, is_dispatch_allowed, spec_for_event, AuthActionSpec,
+    add_entry_label, auth_action_specs, auth_action_specs_with, is_add_enabled,
+    is_dispatch_allowed, spec_for_event, AuthActionSpec,
 };
 #[allow(unused_imports)]
 pub(crate) use format::{
-    account_usage_lines, activation_result_line, format_breakdown_row, format_usage_detail,
-    license_status_line,
+    account_usage_lines, activation_result_line, add_account_result_line, format_breakdown_row,
+    format_usage_detail, license_status_line,
 };
 #[allow(unused_imports)]
 pub(crate) use menu::{

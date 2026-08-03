@@ -1,14 +1,13 @@
 use chrono::{DateTime, Local, Utc};
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem, Submenu},
-    AppHandle, Runtime,
+    AppHandle, Manager, Runtime,
 };
 use tauri_plugin_autostart::ManagerExt;
 use usage_core::account::Provider;
 use crate::edition;
 use crate::license::{ActivationErrorClass, LicenseStatus};
 use crate::poller::AccountUsage;
-use super::actions::auth_action_specs;
 use super::format::{account_name_line, account_usage_lines, activation_result_line, format_breakdown_row, format_pool_detail, format_usage_detail, license_status_line, vendor_title};
 use super::TRAY_ID;
 
@@ -198,6 +197,18 @@ pub fn build_menu<R: Runtime>(
     usages: &[AccountUsage],
     updated_at: Option<DateTime<Utc>>,
 ) -> tauri::Result<Menu<R>> {
+    // INVARIANT: license state is sampled EXACTLY ONCE per menu build, and every
+    // consumer below is fed that one sample. Activation/deactivation are async,
+    // so two reads inside one build can straddle a transition and produce a menu
+    // that contradicts itself (D10). `is_pro` is derived from `license_status`
+    // by the same rule `license_rows` uses internally, so the Add section and
+    // the license section can never disagree.
+    let license_status = crate::license::status();
+    let is_pro = matches!(
+        license_status,
+        LicenseStatus::Pro { .. } | LicenseStatus::ProDevOverride
+    );
+
     let menu = Menu::new(app)?;
 
     // Prominent near-limit banner (disabled row) when any account is at/above
@@ -238,17 +249,43 @@ pub fn build_menu<R: Runtime>(
     menu.append(&PredefinedMenuItem::separator(app)?)?;
     let add_submenu = Submenu::with_id(app, "add-account", "Add Account", true)?;
 
-    for spec in auth_action_specs() {
+    // Enablement comes from the authoritative account index, NOT from `usages`:
+    // the first menu is built with an empty snapshot (`main.rs:150`), so a
+    // snapshot-derived check would render "Add" clickable on a Free install
+    // that already holds an account until the first poll lands (D7).
+    //
+    // `AccountStore::list()` is FAIL-OPEN (`store/index.rs:49-53` maps every
+    // read error to an empty Vec), so an unreadable index renders Add as
+    // ENABLED even at the cap. That is a cosmetic inconsistency, not a bypass:
+    // the store gate still refuses the write and reports the reason (§06.3).
+    // This menu is a hint, never the authority.
+    let accounts = app.state::<crate::store::AccountStore>().list();
+
+    for spec in super::auth_action_specs_with(is_pro) {
+        let enabled = super::is_add_enabled(&spec, is_pro, &accounts);
         add_submenu.append(&MenuItem::with_id(
             app,
             spec.event_id,
-            spec.label,
-            true,
+            super::add_entry_label(&spec, enabled),
+            enabled,
             None::<&str>,
         )?)?;
     }
 
     menu.append(&add_submenu)?;
+
+    // Add-Account result row: the reason the most recent add attempt failed
+    // this run. Mirrors the existing `license-result` row — informational,
+    // disabled, and absent until an attempt has actually failed.
+    if let Some(reason) = crate::menu_actions::last_add_account_attempt() {
+        menu.append(&MenuItem::with_id(
+            app,
+            "add-account-result",
+            super::add_account_result_line(&reason),
+            false,
+            None::<&str>,
+        )?)?;
+    }
 
     if !usages.is_empty() {
         let remove_submenu = Submenu::with_id(app, "remove-account", "Remove", true)?;
@@ -277,7 +314,7 @@ pub fn build_menu<R: Runtime>(
     // renders exactly what it returns, with no row logic left inline here.
     menu.append(&PredefinedMenuItem::separator(app)?)?;
     for row in license_rows(
-        crate::license::status(),
+        license_status,
         crate::menu_actions::last_license_attempt().as_ref(),
         crate::license::has_stored_license(),
     ) {

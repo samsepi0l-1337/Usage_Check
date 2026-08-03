@@ -4,6 +4,12 @@ use crate::{
 use crate::license::ActivationErrorClass;
 use tauri::Runtime;
 
+/// Monotonic refresh generation. Every `refresh_tray` claims the next value
+/// before polling and re-reads it immediately before publishing; a refresh
+/// whose stamp is no longer the newest discards its snapshot instead of
+/// publishing it.
+static REFRESH_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// Polls all accounts and rebuilds the tray menu on the main thread.
 ///
 /// Uses a fresh `AccountStore` handle (file-backed ZST) instead of holding
@@ -17,18 +23,35 @@ use tauri::Runtime;
 /// callers (`main.rs`) still resolve `R = Wry` as before; nothing about their
 /// behavior changes.
 pub(crate) async fn refresh_tray<R: Runtime>(app: &AppHandle<R>) {
+    use std::sync::atomic::Ordering;
+
+    let generation = REFRESH_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     let store = AccountStore::new();
     let snapshot = crate::poller::poll_all(&store).await;
-    // Publish to the local HTTP API so agents see the same data as the tray.
-    // Synchronous (no `.await`), so the managed-state guard never crosses a
-    // suspension point.
+
+    // PUBLICATION BOUNDARY. Refreshes overlap (:216-222, :365-369) and a poll
+    // takes seconds, so an older refresh can finish after a newer one. Before
+    // this stamp, publishing it overwrote newer data — and if the older refresh
+    // ran while Pro and the newer while Free, it republished real quota numbers
+    // for accounts the runtime is no longer entitled to show. Dropping the stale
+    // snapshot is correct on both counts: the newer refresh has already
+    // published, or is about to.
+    if REFRESH_GENERATION.load(Ordering::SeqCst) != generation {
+        return;
+    }
+
     app.state::<crate::api::ApiState>().publish(&snapshot);
     let updated_at = Some(chrono::Utc::now());
     let app2 = app.clone();
     let _ = app.run_on_main_thread(move || {
-        // Runs inside tao's `extern "C"` `send_event`; a panic unwinding across
-        // that FFI frame triggers `panic_cannot_unwind` → process abort. Contain it
-        // so a malformed snapshot can never take the whole app down.
+        // Re-read the generation HERE, next to its use. `run_on_main_thread`
+        // DEFERS this closure onto the platform event loop, so an arbitrary
+        // scheduling gap separates the check above from `apply_menu` below; a
+        // newer refresh can win that gap. Re-checking costs one atomic load and
+        // removes the larger of the two remaining windows (K12).
+        if REFRESH_GENERATION.load(Ordering::SeqCst) != generation {
+            return;
+        }
         if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             crate::tray_menu::apply_menu(&app2, &snapshot, updated_at);
         }))
@@ -50,10 +73,11 @@ pub(crate) fn import_provider<R: Runtime>(app: &AppHandle<R>, provider: Provider
         match crate::import::import_from_cli(provider) {
             Ok(imported) => {
                 let store = app2.state::<AccountStore>();
-                match store.add(provider, imported.label, imported.credentials) {
-                    Ok(_) => refresh_tray(&app2).await,
-                    Err(e) => eprintln!("import: failed to save account: {e}"),
-                }
+                record_add_outcome(
+                    "import",
+                    store.add(provider, imported.label, imported.credentials),
+                );
+                refresh_tray(&app2).await;
             }
             Err(e) => eprintln!("import: {e}"),
         }
@@ -87,28 +111,29 @@ pub(crate) fn cli_coordinator_setup<R: Runtime>(app: &AppHandle<R>, provider: Pr
         match coordinator.execute().await {
             Ok(account) => {
                 let store = app2.state::<AccountStore>();
-                match store.add_reference(
+                let saved = store.add_reference(
                     account.provider,
                     account.label.clone(),
                     account.auth_source,
-                ) {
-                    Ok(saved) => {
-                        if saved.provider == Provider::Claude {
-                            if let AuthSource::CliProfile { profile_root, .. } = &saved.auth_source
-                            {
-                                let settings_path = profile_root.join("settings.json");
-                                if let Err(error) = crate::claude_statusline::install_statusline_bridge(
+                );
+                let saved_account = saved.as_ref().ok().cloned();
+                record_add_outcome("cli setup", saved);
+                if let Some(saved) = saved_account {
+                    if saved.provider == Provider::Claude {
+                        if let AuthSource::CliProfile { profile_root, .. } = &saved.auth_source {
+                            let settings_path = profile_root.join("settings.json");
+                            if let Err(error) =
+                                crate::claude_statusline::install_statusline_bridge(
                                     &settings_path,
                                     &saved.id,
-                                ) {
-                                    eprintln!("cli setup: bridge install failed: {error}");
-                                }
+                                )
+                            {
+                                eprintln!("cli setup: bridge install failed: {error}");
                             }
                         }
-                        refresh_tray(&app2).await;
                     }
-                    Err(error) => eprintln!("cli setup: failed to save account: {error}"),
                 }
+                refresh_tray(&app2).await;
             }
             Err(error) => eprintln!("cli setup: {error:?}"),
         }
@@ -121,14 +146,56 @@ pub(crate) fn import_grok_clipboard<R: Runtime>(app: &AppHandle<R>) {
         match crate::import::import_grok_from_clipboard().await {
             Ok(imported) => {
                 let store = app2.state::<AccountStore>();
-                match store.add(Provider::Grok, imported.label, imported.credentials) {
-                    Ok(_) => refresh_tray(&app2).await,
-                    Err(e) => eprintln!("import: failed to save Grok account: {e}"),
-                }
+                record_add_outcome(
+                    "import grok",
+                    store.add(Provider::Grok, imported.label, imported.credentials),
+                );
+                refresh_tray(&app2).await;
             }
             Err(e) => eprintln!("import grok: {e}"),
         }
     });
+}
+
+/// Reason string of the most recent FAILED "Add Account" attempt in THIS
+/// process — never persisted. `None` when the last attempt succeeded or none
+/// has been made this run. Read by `tray_menu::build_menu`.
+///
+/// SECURITY: holds only `usage_core::edition::free_limit_reason` output or an
+/// `AccountStore::add*` error string — provider display names, fixed reason
+/// literals, and filesystem paths. No arm formats a credential value.
+static LAST_ADD_ACCOUNT_ATTEMPT: std::sync::Mutex<Option<String>> =
+    std::sync::Mutex::new(None);
+
+/// Publishes (or clears) the add-account reason shown in the tray. The single
+/// writer, so the refusal path and the store-rejection path cannot drift apart.
+fn set_add_account_reason(reason: Option<String>) {
+    *LAST_ADD_ACCOUNT_ATTEMPT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = reason;
+}
+
+/// Records the outcome of one add attempt and logs failures. Returns `true` on
+/// success. Every `store.add*` caller in this file funnels through here.
+fn record_add_outcome(context: &str, result: Result<usage_core::account::Account, String>) -> bool {
+    match result {
+        Ok(_) => {
+            set_add_account_reason(None);
+            true
+        }
+        Err(error) => {
+            eprintln!("{context}: failed to save account: {error}");
+            set_add_account_reason(Some(error));
+            false
+        }
+    }
+}
+
+pub(crate) fn last_add_account_attempt() -> Option<String> {
+    LAST_ADD_ACCOUNT_ATTEMPT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()
 }
 
 /// Outcome of the most recent tray "Activate from clipboard" attempt in THIS
@@ -270,10 +337,7 @@ pub(crate) fn oauth_provider<R: Runtime>(app: &AppHandle<R>, provider: Provider)
                         provider.display_name().to_string()
                     }
                 };
-                if let Err(e) = store.add(provider, label, creds) {
-                    eprintln!("oauth: failed to save account: {e}");
-                    return;
-                }
+                record_add_outcome("oauth", store.add(provider, label, creds));
                 refresh_tray(&app2).await;
             }
             Err(e) => eprintln!("oauth: {e}"),
@@ -332,8 +396,11 @@ pub(crate) enum DispatchOutcome {
     Other,
     /// `id` resolved to a registered auth action and dispatch was attempted.
     Dispatched,
-    /// `id` resolved to a Pro-gated auth action and was refused because the
-    /// license is not currently active.
+    /// `id` resolved to a registered auth action and was refused because it is
+    /// either a Pro-gated provider without an active license, or a free provider
+    /// already at the Free per-provider account cap. The reason is published via
+    /// `set_add_account_reason` and the menu is rebuilt, so the refusal is visible
+    /// rather than silent.
     Refused,
 }
 
@@ -438,17 +505,33 @@ pub(crate) fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, id: &str) -> Dis
             let Some(spec) = crate::tray_menu::spec_for_event(event_id) else {
                 return DispatchOutcome::Other;
             };
-            // Re-check entitlement HERE, at the point of side effect — the
-            // menu already filters paid providers out when rendering, but
-            // `spec_for_event` resolves through the full, ungated spec
-            // registry, so a stale/crafted event id (or a menu snapshot
-            // rendered before the license lapsed) must not still be able
-            // to trigger a paid-provider import/auth once Pro is gone.
-            if crate::tray_menu::is_dispatch_allowed(&spec, crate::license::is_pro()) {
+            // Re-check entitlement HERE, at the point of side effect.
+            // `spec_for_event` resolves through the full, ungated registry, so a
+            // stale/crafted event id — or a menu rendered before the license
+            // lapsed or before the cap was reached — must not still trigger an
+            // import. `is_add_enabled` is the same predicate the menu used,
+            // against the same `AccountStore::list()`.
+            let is_pro = crate::license::is_pro();
+            let accounts = app.state::<AccountStore>().list();
+            if crate::tray_menu::is_add_enabled(&spec, is_pro, &accounts) {
                 dispatch_auth_action(app, spec.provider, spec.method);
                 DispatchOutcome::Dispatched
             } else {
-                eprintln!("dispatch: {event_id} requires Pro; refusing (license not active)");
+                // A refusal the user cannot see is not a refusal they can act
+                // on: publish the same sentence the store rejection would have
+                // produced, and rebuild the tray so the row that should have
+                // been disabled becomes disabled.
+                let reason = if usage_core::edition::requires_pro(spec.provider) {
+                    format!("{} requires a Pro license.", spec.provider.display_name())
+                } else {
+                    usage_core::edition::free_limit_reason(spec.provider)
+                };
+                eprintln!("dispatch: {event_id} refused: {reason}");
+                set_add_account_reason(Some(reason));
+                let app2 = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    refresh_tray(&app2).await;
+                });
                 DispatchOutcome::Refused
             }
         }
