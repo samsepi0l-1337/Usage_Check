@@ -1,5 +1,5 @@
-use super::*;
 use super::claude::{resolve_claude_identity_decision, ClaudeLoginDecision};
+use super::*;
 use serde_json::json;
 use std::ffi::OsString;
 use std::path::Path;
@@ -330,10 +330,7 @@ fn claude_default_login_credentials_rides_live_login_when_no_identity_present() 
     .expect("write default Claude config without identity");
 
     assert_eq!(
-        resolve_claude_identity_decision(
-            "expected-account",
-            &crate::paths::claude_config_roots(),
-        ),
+        resolve_claude_identity_decision("expected-account", &crate::paths::claude_config_roots(),),
         ClaudeLoginDecision::RideUnverifiedLive
     );
 }
@@ -355,10 +352,7 @@ fn claude_default_login_credentials_refuses_when_identity_present_but_mismatched
     .expect("write mismatching default Claude identity");
 
     assert_eq!(
-        resolve_claude_identity_decision(
-            "expected-account",
-            &crate::paths::claude_config_roots(),
-        ),
+        resolve_claude_identity_decision("expected-account", &crate::paths::claude_config_roots(),),
         ClaudeLoginDecision::Refuse
     );
 }
@@ -442,11 +436,8 @@ fn grok_imported_account_accepts_valid_team_id() {
 
 #[test]
 fn grok_imported_account_rejects_invalid_team_id() {
-    let err = grok_imported_account(
-        "test-mgmt-key",
-        "Translated Report (Full Report Below)",
-    )
-    .unwrap_err();
+    let err = grok_imported_account("test-mgmt-key", "Translated Report (Full Report Below)")
+        .unwrap_err();
     assert!(err.contains("team id"), "{err}");
     assert!(grok_imported_account("test-mgmt-key", "").is_err());
     assert!(grok_imported_account("test-mgmt-key", "  ").is_err());
@@ -463,7 +454,7 @@ fn xai_stored_as_management_reference() {
 
     let raw_key = "xai-management-key-test-value";
     let account = store
-        .add(
+        .add_with(
             Provider::Grok,
             "xAI API credits".into(),
             Credentials {
@@ -472,6 +463,7 @@ fn xai_stored_as_management_reference() {
                 account_id: Some("test-team".into()),
                 expires_at: None,
             },
+            || true,
         )
         .expect("store xAI account");
 

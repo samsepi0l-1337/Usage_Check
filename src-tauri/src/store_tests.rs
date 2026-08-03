@@ -32,6 +32,27 @@ fn credentials(identity: &str) -> Credentials {
     }
 }
 
+/// Redirects `USAGECHECK_APP_DATA_DIR` for the duration of a test, restoring
+/// the previous value on drop. Taken only while holding `LICENSE_ENV_LOCK`.
+struct AppDataDirGuard(Option<std::ffi::OsString>);
+
+impl AppDataDirGuard {
+    fn set(path: &Path) -> Self {
+        let previous = std::env::var_os("USAGECHECK_APP_DATA_DIR");
+        std::env::set_var("USAGECHECK_APP_DATA_DIR", path);
+        Self(previous)
+    }
+}
+
+impl Drop for AppDataDirGuard {
+    fn drop(&mut self) {
+        match self.0.take() {
+            Some(previous) => std::env::set_var("USAGECHECK_APP_DATA_DIR", previous),
+            None => std::env::remove_var("USAGECHECK_APP_DATA_DIR"),
+        }
+    }
+}
+
 #[test]
 fn index_roundtrips() {
     let accts = vec![Account {
@@ -71,8 +92,15 @@ fn write_private_file_creates_file_at_mode_0600() {
     let path = sandbox.root.join("secret.txt");
     write_private_file(&path, "top secret").expect("write_private_file should succeed");
 
-    let mode = fs::metadata(&path).expect("stat written file").permissions().mode() & 0o777;
-    assert_eq!(mode, 0o600, "file must be created at exactly 0600, got {mode:o}");
+    let mode = fs::metadata(&path)
+        .expect("stat written file")
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(
+        mode, 0o600,
+        "file must be created at exactly 0600, got {mode:o}"
+    );
 }
 
 #[cfg(unix)]
@@ -192,7 +220,7 @@ fn mutation_preserves_unknown_provider_entries() {
     write_mixed_index(&store, &known);
 
     store
-        .add_reference(
+        .add_reference_with(
             Provider::Claude,
             "new@example.com".into(),
             AuthSource::CliProfile {
@@ -200,6 +228,7 @@ fn mutation_preserves_unknown_provider_entries() {
                 ownership: ProfileOwnership::External,
                 expected_identity: "new@example.com".into(),
             },
+            || true,
         )
         .unwrap();
 
@@ -307,7 +336,7 @@ fn remove_deletes_cli_profile_token_cache() {
     let sandbox = TestSandbox::new();
     let store = sandbox.store();
     let account = store
-        .add_reference(
+        .add_reference_with(
             Provider::Claude,
             "claude@example.com".into(),
             AuthSource::CliProfile {
@@ -315,6 +344,7 @@ fn remove_deletes_cli_profile_token_cache() {
                 ownership: ProfileOwnership::External,
                 expected_identity: "claude@example.com".into(),
             },
+            || true,
         )
         .unwrap();
     store
@@ -354,20 +384,22 @@ fn corrupt_index_is_not_silently_wiped_by_mutation() {
     let store = sandbox.store();
     store.initialize_v2().unwrap();
     store
-        .add(
+        .add_with(
             Provider::Codex,
             "user@example.com".into(),
             credentials("acct-1"),
+            || true,
         )
         .unwrap();
     assert_eq!(store.list().len(), 1);
 
     fs::write(store.index_path(), "{ this is not valid json").unwrap();
 
-    let result = store.add(
+    let result = store.add_with(
         Provider::Claude,
         "other@example.com".into(),
         credentials("acct-2"),
+        || true,
     );
     assert!(
         result.is_err(),
@@ -390,10 +422,11 @@ fn atomic_write_leaves_no_temp_files() {
     let store = sandbox.store();
     store.initialize_v2().unwrap();
     store
-        .add(
+        .add_with(
             Provider::Codex,
             "user@example.com".into(),
             credentials("acct-1"),
+            || true,
         )
         .unwrap();
     let leftovers: Vec<_> = fs::read_dir(store.index_path().parent().unwrap())
@@ -412,16 +445,18 @@ fn oauth_reimport_same_identity_is_rejected() {
     let store = sandbox.store();
     store.initialize_v2().unwrap();
     store
-        .add(
+        .add_with(
             Provider::Codex,
             "user@example.com".into(),
             credentials("acct-1"),
+            || true,
         )
         .unwrap();
-    let second = store.add(
+    let second = store.add_with(
         Provider::Codex,
         "user@example.com".into(),
         credentials("acct-1"),
+        || true,
     );
     assert!(
         second.is_err(),
@@ -446,12 +481,18 @@ fn oauth_email_only_then_id_reimport_is_rejected() {
         expires_at: None,
     };
     store
-        .add(Provider::Codex, "user@example.com".into(), email_only_creds)
+        .add_with(
+            Provider::Codex,
+            "user@example.com".into(),
+            email_only_creds,
+            || true,
+        )
         .unwrap();
-    let second = store.add(
+    let second = store.add_with(
         Provider::Codex,
         "user@example.com".into(),
         credentials("acct-1"),
+        || true,
     );
     assert!(
         second.is_err(),
@@ -466,17 +507,19 @@ fn oauth_distinct_identities_coexist() {
     let store = sandbox.store();
     store.initialize_v2().unwrap();
     store
-        .add(
+        .add_with(
             Provider::Codex,
             "a@example.com".into(),
             credentials("acct-a"),
+            || true,
         )
         .unwrap();
     store
-        .add(
+        .add_with(
             Provider::Codex,
             "b@example.com".into(),
             credentials("acct-b"),
+            || true,
         )
         .unwrap();
     assert_eq!(store.list().len(), 2);
@@ -516,7 +559,7 @@ fn v2_initialization_is_idempotent() {
     let store = sandbox.store();
     store.initialize_v2().unwrap();
     let account = store
-        .add_reference(
+        .add_reference_with(
             Provider::Codex,
             "work".into(),
             AuthSource::CliProfile {
@@ -524,6 +567,7 @@ fn v2_initialization_is_idempotent() {
                 ownership: ProfileOwnership::External,
                 expected_identity: "work@example.com".into(),
             },
+            || true,
         )
         .unwrap();
 
@@ -600,13 +644,14 @@ fn v2_rejects_symlinked_credentials_directory_without_writing_outside() {
     )
     .unwrap();
 
-    let result = store.add_secret(
+    let result = store.add_secret_with(
         Provider::Grok,
         "xAI API credits".into(),
         SecretSource::XaiManagement {
             team_id: "team-symlink".into(),
         },
         credentials("xai"),
+        || true,
     );
 
     assert!(result.is_err());
@@ -625,13 +670,14 @@ fn v2_rejects_symlinked_credential_file_without_overwriting_target() {
     let sandbox = TestSandbox::new();
     let store = sandbox.store();
     let account = store
-        .add_secret(
+        .add_secret_with(
             Provider::Grok,
             "xAI API credits".into(),
             SecretSource::XaiManagement {
                 team_id: "team-file-symlink".into(),
             },
             credentials("before"),
+            || true,
         )
         .unwrap();
     let AuthSource::XaiManagement { credential_id, .. } = &account.auth_source else {
@@ -654,10 +700,11 @@ fn v2_grok_compatibility_add_uses_credential_id_for_credentials() {
     let sandbox = TestSandbox::new();
     let store = sandbox.store();
     let account = store
-        .add(
+        .add_with(
             Provider::Grok,
             "xAI API credits".into(),
             credentials("team-compat"),
+            || true,
         )
         .unwrap();
 
@@ -681,7 +728,12 @@ fn cursor_add_reference_creates_no_secret_file() {
     };
 
     let account = store
-        .add_reference(Provider::Cursor, "cursor".into(), auth_source.clone())
+        .add_reference_with(
+            Provider::Cursor,
+            "cursor".into(),
+            auth_source.clone(),
+            || true,
+        )
         .unwrap();
 
     assert_eq!(account.auth_source, auth_source);
@@ -696,7 +748,7 @@ fn v2_reference_sources_create_no_secret_files() {
     store.initialize_v2().unwrap();
 
     store
-        .add_reference(
+        .add_reference_with(
             Provider::Codex,
             "codex".into(),
             AuthSource::CliProfile {
@@ -704,25 +756,28 @@ fn v2_reference_sources_create_no_secret_files() {
                 ownership: ProfileOwnership::Managed,
                 expected_identity: "codex@example.com".into(),
             },
+            || true,
         )
         .unwrap();
     store
-        .add_reference(
+        .add_reference_with(
             Provider::Cursor,
             "cursor".into(),
             AuthSource::CursorDatabase {
                 database_path: sandbox.root.join("state.vscdb"),
                 expected_identity: "cursor@example.com".into(),
             },
+            || true,
         )
         .unwrap();
     store
-        .add_reference(
+        .add_reference_with(
             Provider::Higgsfield,
             "higgsfield".into(),
             AuthSource::HiggsfieldCli {
                 expected_identity: "higgsfield@example.com".into(),
             },
+            || true,
         )
         .unwrap();
 
@@ -737,21 +792,23 @@ fn v2_app_owned_sources_resolve_and_update_credentials_by_credential_id() {
     store.initialize_v2().unwrap();
 
     let browser = store
-        .add_secret(
+        .add_secret_with(
             Provider::Agy,
             "agy".into(),
             SecretSource::BrowserOAuth,
             credentials("agy-before"),
+            || true,
         )
         .unwrap();
     let xai = store
-        .add_secret(
+        .add_secret_with(
             Provider::Grok,
             "xAI API credits".into(),
             SecretSource::XaiManagement {
                 team_id: "team-1".into(),
             },
             credentials("xai"),
+            || true,
         )
         .unwrap();
 
@@ -794,11 +851,12 @@ fn credential_key_uses_secret_credential_id_and_falls_back_to_account_id() {
     let store = sandbox.store();
 
     let browser = store
-        .add_secret(
+        .add_secret_with(
             Provider::Agy,
             "agy".into(),
             SecretSource::BrowserOAuth,
             credentials("agy-key-test"),
+            || true,
         )
         .unwrap();
     let AuthSource::BrowserOAuth { credential_id } = &browser.auth_source else {
@@ -811,7 +869,7 @@ fn credential_key_uses_secret_credential_id_and_falls_back_to_account_id() {
     assert_ne!(AccountStore::credential_key(&browser), browser.id.as_str());
 
     let reference = store
-        .add_reference(
+        .add_reference_with(
             Provider::Codex,
             "codex".into(),
             AuthSource::CliProfile {
@@ -819,6 +877,7 @@ fn credential_key_uses_secret_credential_id_and_falls_back_to_account_id() {
                 ownership: ProfileOwnership::External,
                 expected_identity: "codex@example.com".into(),
             },
+            || true,
         )
         .unwrap();
     assert_eq!(
@@ -832,11 +891,12 @@ fn credential_key_resolves_the_bug_account_id_keyed_read_fails() {
     let sandbox = TestSandbox::new();
     let store = sandbox.store();
     let account = store
-        .add_secret(
+        .add_secret_with(
             Provider::Agy,
             "agy".into(),
             SecretSource::BrowserOAuth,
             credentials("agy-regression"),
+            || true,
         )
         .unwrap();
 
@@ -852,11 +912,12 @@ fn update_credentials_by_credential_key_persists() {
     let sandbox = TestSandbox::new();
     let store = sandbox.store();
     let account = store
-        .add_secret(
+        .add_secret_with(
             Provider::Agy,
             "agy".into(),
             SecretSource::BrowserOAuth,
             credentials("agy-regression-before"),
+            || true,
         )
         .unwrap();
     let updated = credentials("agy-regression-updated");
@@ -881,7 +942,7 @@ fn v2_remove_deletes_only_the_removed_accounts_app_owned_secret() {
     fs::write(external_profile.join("provider-auth.json"), "keep").unwrap();
 
     let reference = store
-        .add_reference(
+        .add_reference_with(
             Provider::Claude,
             "claude".into(),
             AuthSource::CliProfile {
@@ -889,22 +950,25 @@ fn v2_remove_deletes_only_the_removed_accounts_app_owned_secret() {
                 ownership: ProfileOwnership::External,
                 expected_identity: "claude@example.com".into(),
             },
+            || true,
         )
         .unwrap();
     let first = store
-        .add_secret(
+        .add_secret_with(
             Provider::Agy,
             "first".into(),
             SecretSource::BrowserOAuth,
             credentials("first"),
+            || true,
         )
         .unwrap();
     let second = store
-        .add_secret(
+        .add_secret_with(
             Provider::Agy,
             "second".into(),
             SecretSource::BrowserOAuth,
             credentials("second"),
+            || true,
         )
         .unwrap();
     let AuthSource::BrowserOAuth {
@@ -940,7 +1004,7 @@ fn v2_duplicate_profile_roots_are_rejected_without_overwrite() {
     store.initialize_v2().unwrap();
     let profile_root = sandbox.root.join("shared-profile");
     let first = store
-        .add_reference(
+        .add_reference_with(
             Provider::Codex,
             "first".into(),
             AuthSource::CliProfile {
@@ -948,10 +1012,11 @@ fn v2_duplicate_profile_roots_are_rejected_without_overwrite() {
                 ownership: ProfileOwnership::External,
                 expected_identity: "first@example.com".into(),
             },
+            || true,
         )
         .unwrap();
 
-    let duplicate = store.add_reference(
+    let duplicate = store.add_reference_with(
         Provider::Codex,
         "replacement".into(),
         AuthSource::CliProfile {
@@ -959,6 +1024,7 @@ fn v2_duplicate_profile_roots_are_rejected_without_overwrite() {
             ownership: ProfileOwnership::Managed,
             expected_identity: "replacement@example.com".into(),
         },
+        || true,
     );
 
     assert!(duplicate.is_err());
@@ -971,23 +1037,25 @@ fn v2_duplicate_cursor_identities_are_rejected_without_overwrite() {
     let store = sandbox.store();
     store.initialize_v2().unwrap();
     let first = store
-        .add_reference(
+        .add_reference_with(
             Provider::Cursor,
             "first".into(),
             AuthSource::CursorDatabase {
                 database_path: sandbox.root.join("first.vscdb"),
                 expected_identity: "cursor-user".into(),
             },
+            || true,
         )
         .unwrap();
 
-    let duplicate = store.add_reference(
+    let duplicate = store.add_reference_with(
         Provider::Cursor,
         "replacement".into(),
         AuthSource::CursorDatabase {
             database_path: sandbox.root.join("replacement.vscdb"),
             expected_identity: "cursor-user".into(),
         },
+        || true,
     );
 
     assert!(duplicate.is_err());
@@ -1000,29 +1068,32 @@ fn v2_duplicate_higgsfield_identities_are_rejected_without_overwrite() {
     let store = sandbox.store();
     store.initialize_v2().unwrap();
     let first = store
-        .add_reference(
+        .add_reference_with(
             Provider::Higgsfield,
             "first".into(),
             AuthSource::HiggsfieldCli {
                 expected_identity: "hf-user-1".into(),
             },
+            || true,
         )
         .unwrap();
     let second = store
-        .add_reference(
+        .add_reference_with(
             Provider::Higgsfield,
             "second".into(),
             AuthSource::HiggsfieldCli {
                 expected_identity: "hf-user-2".into(),
             },
+            || true,
         )
         .unwrap();
-    let duplicate = store.add_reference(
+    let duplicate = store.add_reference_with(
         Provider::Higgsfield,
         "replacement".into(),
         AuthSource::HiggsfieldCli {
             expected_identity: "hf-user-1".into(),
         },
+        || true,
     );
 
     assert_eq!(store.list().len(), 2);
@@ -1037,13 +1108,14 @@ fn v2_duplicate_xai_team_ids_are_rejected_without_overwrite() {
     let store = sandbox.store();
     store.initialize_v2().unwrap();
     let first = store
-        .add_secret(
+        .add_secret_with(
             Provider::Grok,
             "first".into(),
             SecretSource::XaiManagement {
                 team_id: "team-1".into(),
             },
             credentials("first"),
+            || true,
         )
         .unwrap();
     let AuthSource::XaiManagement { credential_id, .. } = &first.auth_source else {
@@ -1051,13 +1123,14 @@ fn v2_duplicate_xai_team_ids_are_rejected_without_overwrite() {
     };
     let credential_id = credential_id.clone();
 
-    let duplicate = store.add_secret(
+    let duplicate = store.add_secret_with(
         Provider::Grok,
         "replacement".into(),
         SecretSource::XaiManagement {
             team_id: "team-1".into(),
         },
         credentials("replacement"),
+        || true,
     );
 
     assert!(duplicate.is_err());
@@ -1071,5 +1144,517 @@ fn v2_duplicate_xai_team_ids_are_rejected_without_overwrite() {
             .unwrap()
             .count(),
         1
+    );
+}
+
+#[test]
+fn free_cap_rejects_a_second_codex_account_and_does_not_write_it() {
+    let sandbox = TestSandbox::new();
+    let store = sandbox.store();
+    let first = store
+        .add_secret_with(
+            Provider::Codex,
+            "a@example.com".into(),
+            SecretSource::BrowserOAuth,
+            credentials("acct-a"),
+            || false,
+        )
+        .unwrap();
+
+    let error = store
+        .add_secret_with(
+            Provider::Codex,
+            "b@example.com".into(),
+            SecretSource::BrowserOAuth,
+            credentials("acct-b"),
+            || false,
+        )
+        .unwrap_err();
+
+    assert_eq!(
+        error,
+        usage_core::edition::free_limit_reason(Provider::Codex)
+    );
+    let accounts = store.list();
+    assert_eq!(accounts.len(), 1);
+    assert_eq!(accounts[0].id, first.id);
+}
+
+#[test]
+fn free_cap_rejects_a_second_claude_cli_profile() {
+    let sandbox = TestSandbox::new();
+    let store = sandbox.store();
+    let first = store
+        .add_reference_with(
+            Provider::Claude,
+            "a@example.com".into(),
+            AuthSource::CliProfile {
+                profile_root: sandbox.root.join("claude-a"),
+                ownership: ProfileOwnership::External,
+                expected_identity: "acct-a".into(),
+            },
+            || false,
+        )
+        .unwrap();
+
+    let error = store
+        .add_reference_with(
+            Provider::Claude,
+            "b@example.com".into(),
+            AuthSource::CliProfile {
+                profile_root: sandbox.root.join("claude-b"),
+                ownership: ProfileOwnership::External,
+                expected_identity: "acct-b".into(),
+            },
+            || false,
+        )
+        .unwrap_err();
+
+    assert_eq!(
+        error,
+        usage_core::edition::free_limit_reason(Provider::Claude)
+    );
+    let accounts = store.list();
+    assert_eq!(accounts.len(), 1);
+    assert_eq!(accounts[0].id, first.id);
+}
+
+#[test]
+fn free_cap_rejects_a_second_agy_account() {
+    let sandbox = TestSandbox::new();
+    let store = sandbox.store();
+    let first = store
+        .add_secret_with(
+            Provider::Agy,
+            "a@example.com".into(),
+            SecretSource::BrowserOAuth,
+            credentials("acct-a"),
+            || false,
+        )
+        .unwrap();
+
+    let error = store
+        .add_secret_with(
+            Provider::Agy,
+            "b@example.com".into(),
+            SecretSource::BrowserOAuth,
+            credentials("acct-b"),
+            || false,
+        )
+        .unwrap_err();
+
+    assert_eq!(error, usage_core::edition::free_limit_reason(Provider::Agy));
+    let accounts = store.list();
+    assert_eq!(accounts.len(), 1);
+    assert_eq!(accounts[0].id, first.id);
+}
+
+#[test]
+fn free_cap_allows_one_account_for_each_free_provider() {
+    let sandbox = TestSandbox::new();
+    let store = sandbox.store();
+    store
+        .add_secret_with(
+            Provider::Codex,
+            "codex@example.com".into(),
+            SecretSource::BrowserOAuth,
+            credentials("codex-account"),
+            || false,
+        )
+        .unwrap();
+    store
+        .add_reference_with(
+            Provider::Claude,
+            "claude@example.com".into(),
+            AuthSource::CliProfile {
+                profile_root: sandbox.root.join("claude-profile"),
+                ownership: ProfileOwnership::External,
+                expected_identity: "claude-account".into(),
+            },
+            || false,
+        )
+        .unwrap();
+    store
+        .add_secret_with(
+            Provider::Agy,
+            "agy@example.com".into(),
+            SecretSource::BrowserOAuth,
+            credentials("agy-account"),
+            || false,
+        )
+        .unwrap();
+
+    let accounts = store.list();
+    assert_eq!(accounts.len(), 3);
+    for provider in [Provider::Codex, Provider::Claude, Provider::Agy] {
+        assert!(accounts.iter().any(|account| account.provider == provider));
+    }
+}
+
+#[test]
+fn free_cap_does_not_apply_when_pro() {
+    let sandbox = TestSandbox::new();
+    let store = sandbox.store();
+    for (label, identity) in [
+        ("a@example.com", "acct-a"),
+        ("b@example.com", "acct-b"),
+        ("c@example.com", "acct-c"),
+    ] {
+        store
+            .add_secret_with(
+                Provider::Codex,
+                label.into(),
+                SecretSource::BrowserOAuth,
+                credentials(identity),
+                || true,
+            )
+            .unwrap();
+    }
+
+    assert_eq!(store.list().len(), 3);
+}
+
+#[test]
+fn free_cap_leaves_no_orphan_credential_file() {
+    let sandbox = TestSandbox::new();
+    let store = sandbox.store();
+    store
+        .add_secret_with(
+            Provider::Agy,
+            "a@example.com".into(),
+            SecretSource::BrowserOAuth,
+            credentials("acct-a"),
+            || false,
+        )
+        .unwrap();
+
+    assert!(store
+        .add_secret_with(
+            Provider::Agy,
+            "b@example.com".into(),
+            SecretSource::BrowserOAuth,
+            credentials("acct-b"),
+            || false,
+        )
+        .is_err());
+    assert_eq!(
+        fs::read_dir(sandbox.root.join("UsageCheck").join("credentials"))
+            .unwrap()
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn free_cap_promotes_the_next_account_after_removal() {
+    let sandbox = TestSandbox::new();
+    let store = sandbox.store();
+    let first = store
+        .add_secret_with(
+            Provider::Codex,
+            "a@example.com".into(),
+            SecretSource::BrowserOAuth,
+            credentials("acct-a"),
+            || true,
+        )
+        .unwrap();
+    let second = store
+        .add_secret_with(
+            Provider::Codex,
+            "b@example.com".into(),
+            SecretSource::BrowserOAuth,
+            credentials("acct-b"),
+            || true,
+        )
+        .unwrap();
+
+    store.remove(&first.id).unwrap();
+    let error = store
+        .add_secret_with(
+            Provider::Codex,
+            "c@example.com".into(),
+            SecretSource::BrowserOAuth,
+            credentials("acct-c"),
+            || false,
+        )
+        .unwrap_err();
+    assert_eq!(
+        error,
+        usage_core::edition::free_limit_reason(Provider::Codex)
+    );
+
+    store.remove(&second.id).unwrap();
+    store
+        .add_secret_with(
+            Provider::Codex,
+            "c@example.com".into(),
+            SecretSource::BrowserOAuth,
+            credentials("acct-c"),
+            || false,
+        )
+        .unwrap();
+}
+
+#[test]
+fn free_cap_removal_then_readd_succeeds() {
+    let sandbox = TestSandbox::new();
+    let store = sandbox.store();
+    let first = store
+        .add_secret_with(
+            Provider::Codex,
+            "a@example.com".into(),
+            SecretSource::BrowserOAuth,
+            credentials("acct-a"),
+            || false,
+        )
+        .unwrap();
+    assert!(store
+        .add_secret_with(
+            Provider::Codex,
+            "b@example.com".into(),
+            SecretSource::BrowserOAuth,
+            credentials("acct-b"),
+            || false,
+        )
+        .is_err());
+
+    store.remove(&first.id).unwrap();
+    store
+        .add_secret_with(
+            Provider::Codex,
+            "b@example.com".into(),
+            SecretSource::BrowserOAuth,
+            credentials("acct-b"),
+            || false,
+        )
+        .unwrap();
+    assert_eq!(store.list().len(), 1);
+}
+
+#[test]
+fn duplicate_rejection_wins_over_the_free_cap() {
+    let sandbox = TestSandbox::new();
+    let store = sandbox.store();
+    store
+        .add_secret_with(
+            Provider::Codex,
+            "same@example.com".into(),
+            SecretSource::BrowserOAuth,
+            credentials("same-account"),
+            || false,
+        )
+        .unwrap();
+
+    let error = store
+        .add_secret_with(
+            Provider::Codex,
+            "same@example.com".into(),
+            SecretSource::BrowserOAuth,
+            credentials("same-account"),
+            || false,
+        )
+        .unwrap_err();
+
+    assert_eq!(error, "account already registered");
+    assert_ne!(
+        error,
+        usage_core::edition::free_limit_reason(Provider::Codex)
+    );
+}
+
+#[test]
+fn duplicate_profile_root_rejection_wins_over_the_free_cap() {
+    let sandbox = TestSandbox::new();
+    let store = sandbox.store();
+    let profile_root = sandbox.root.join("same-profile");
+    store
+        .add_reference_with(
+            Provider::Claude,
+            "a@example.com".into(),
+            AuthSource::CliProfile {
+                profile_root: profile_root.clone(),
+                ownership: ProfileOwnership::External,
+                expected_identity: "acct-a".into(),
+            },
+            || false,
+        )
+        .unwrap();
+
+    let error = store
+        .add_reference_with(
+            Provider::Claude,
+            "b@example.com".into(),
+            AuthSource::CliProfile {
+                profile_root,
+                ownership: ProfileOwnership::Managed,
+                expected_identity: "acct-b".into(),
+            },
+            || false,
+        )
+        .unwrap_err();
+
+    assert_eq!(error, "profile root already registered");
+}
+
+#[test]
+fn free_cap_rejects_an_unidentifiable_second_oauth_account() {
+    let sandbox = TestSandbox::new();
+    let store = sandbox.store();
+    store
+        .add_secret_with(
+            Provider::Codex,
+            "anonymous-a".into(),
+            SecretSource::BrowserOAuth,
+            Credentials {
+                access_token: "token-a".into(),
+                refresh_token: None,
+                account_id: None,
+                expires_at: None,
+            },
+            || false,
+        )
+        .unwrap();
+
+    let error = store
+        .add_secret_with(
+            Provider::Codex,
+            "anonymous-b".into(),
+            SecretSource::BrowserOAuth,
+            Credentials {
+                access_token: "token-b".into(),
+                refresh_token: None,
+                account_id: None,
+                expires_at: None,
+            },
+            || false,
+        )
+        .unwrap_err();
+
+    assert_eq!(
+        error,
+        usage_core::edition::free_limit_reason(Provider::Codex)
+    );
+}
+
+#[test]
+fn free_cap_never_applies_to_paid_providers() {
+    let sandbox = TestSandbox::new();
+    let store = sandbox.store();
+    for identity in ["hf-a", "hf-b", "hf-c"] {
+        store
+            .add_reference_with(
+                Provider::Higgsfield,
+                identity.into(),
+                AuthSource::HiggsfieldCli {
+                    expected_identity: identity.into(),
+                },
+                || false,
+            )
+            .unwrap();
+    }
+
+    assert_eq!(store.list().len(), 3);
+}
+
+#[test]
+fn bare_add_reference_reads_real_license_state() {
+    let sandbox = TestSandbox::new();
+    let _lock = crate::license::LICENSE_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let app_data_dir = sandbox.root.join("bare-add-reference");
+    let _app_data = AppDataDirGuard::set(&app_data_dir);
+    let store = AccountStore::new();
+
+    store
+        .add_reference( // BARE-WRAPPER-WIRING
+            Provider::Codex,
+            "a@example.com".into(),
+            AuthSource::CliProfile {
+                profile_root: sandbox.root.join("profile-a"),
+                ownership: ProfileOwnership::External,
+                expected_identity: "acct-a".into(),
+            },
+        )
+        .unwrap();
+    let error = store
+        .add_reference( // BARE-WRAPPER-WIRING
+            Provider::Codex,
+            "b@example.com".into(),
+            AuthSource::CliProfile {
+                profile_root: sandbox.root.join("profile-b"),
+                ownership: ProfileOwnership::External,
+                expected_identity: "acct-b".into(),
+            },
+        )
+        .unwrap_err();
+
+    assert_eq!(
+        error,
+        usage_core::edition::free_limit_reason(Provider::Codex)
+    );
+}
+
+#[test]
+fn bare_add_secret_reads_real_license_state() {
+    let sandbox = TestSandbox::new();
+    let _lock = crate::license::LICENSE_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let app_data_dir = sandbox.root.join("bare-add-secret");
+    let _app_data = AppDataDirGuard::set(&app_data_dir);
+    let store = AccountStore::new();
+
+    store
+        .add_secret( // BARE-WRAPPER-WIRING
+            Provider::Codex,
+            "a@example.com".into(),
+            SecretSource::BrowserOAuth,
+            credentials("acct-a"),
+        )
+        .unwrap();
+    let error = store
+        .add_secret( // BARE-WRAPPER-WIRING
+            Provider::Codex,
+            "b@example.com".into(),
+            SecretSource::BrowserOAuth,
+            credentials("acct-b"),
+        )
+        .unwrap_err();
+
+    assert_eq!(
+        error,
+        usage_core::edition::free_limit_reason(Provider::Codex)
+    );
+}
+
+#[test]
+fn bare_add_reads_real_license_state() {
+    let sandbox = TestSandbox::new();
+    let _lock = crate::license::LICENSE_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let app_data_dir = sandbox.root.join("bare-add");
+    let _app_data = AppDataDirGuard::set(&app_data_dir);
+    let store = AccountStore::new();
+
+    store
+        .add( // BARE-WRAPPER-WIRING
+            Provider::Codex,
+            "a@example.com".into(),
+            credentials("acct-a"),
+        )
+        .unwrap();
+    let error = store
+        .add( // BARE-WRAPPER-WIRING
+            Provider::Codex,
+            "b@example.com".into(),
+            credentials("acct-b"),
+        )
+        .unwrap_err();
+
+    assert_eq!(
+        error,
+        usage_core::edition::free_limit_reason(Provider::Codex)
     );
 }

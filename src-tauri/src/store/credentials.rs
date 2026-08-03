@@ -4,7 +4,10 @@ use std::path::PathBuf;
 use usage_core::account::{Account, AuthSource, Credentials, Provider};
 
 use super::index::index_mutation_lock;
-use super::{reject_symlink, set_private_dir_permissions, write_private_file, AccountStore, SecretSource, CREDS_DIR};
+use super::{
+    reject_symlink, set_private_dir_permissions, write_private_file, AccountStore, SecretSource,
+    CREDS_DIR,
+};
 
 /// App-owned refreshable token cache for CLI-profile accounts, keyed by
 /// `account_id`. Restores the v0.1.0 model: the app owns a COPY of the imported
@@ -23,10 +26,7 @@ impl AccountStore {
             .join(format!("{credential_id}.json")))
     }
 
-    pub(super) fn credential_path_for_write(
-        &self,
-        credential_id: &str,
-    ) -> Result<PathBuf, String> {
+    pub(super) fn credential_path_for_write(&self, credential_id: &str) -> Result<PathBuf, String> {
         let directory = self.root.join(CREDS_DIR);
         reject_symlink(&directory, "credential directory")?;
         match fs::symlink_metadata(&directory) {
@@ -50,10 +50,7 @@ impl AccountStore {
         Ok(path)
     }
 
-    pub(super) fn credential_path_for_read(
-        &self,
-        credential_id: &str,
-    ) -> Result<PathBuf, String> {
+    pub(super) fn credential_path_for_read(&self, credential_id: &str) -> Result<PathBuf, String> {
         let directory = self.root.join(CREDS_DIR);
         reject_symlink(&directory, "credential directory")?;
         let metadata = fs::symlink_metadata(&directory)
@@ -69,12 +66,31 @@ impl AccountStore {
         Ok(path)
     }
 
+    #[allow(dead_code)]
     pub fn add_secret(
         &self,
         provider: Provider,
         label: String,
         source: SecretSource,
         credentials: Credentials,
+    ) -> Result<Account, String> {
+        self.add_secret_with(provider, label, source, credentials, crate::license::is_pro)
+    }
+
+    /// Core of [`Self::add_secret`], with entitlement injected so it is
+    /// evaluated at the linearization point inside the index mutation lock.
+    ///
+    /// `is_pro` is invoked WHILE `index_mutation_lock()` is held and MUST NOT
+    /// touch `AccountStore`, directly or transitively — that mutex is not
+    /// reentrant and re-entry self-deadlocks. `fn` rather than `impl Fn` so the
+    /// callback cannot capture a store to begin with.
+    pub(crate) fn add_secret_with(
+        &self,
+        provider: Provider,
+        label: String,
+        source: SecretSource,
+        credentials: Credentials,
+        is_pro: fn() -> bool,
     ) -> Result<Account, String> {
         self.add_secret_with_ids(
             provider,
@@ -83,9 +99,11 @@ impl AccountStore {
             credentials,
             uuid::Uuid::new_v4().to_string(),
             uuid::Uuid::new_v4().to_string(),
+            is_pro,
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn add_secret_with_ids(
         &self,
         provider: Provider,
@@ -94,6 +112,7 @@ impl AccountStore {
         credentials: Credentials,
         account_id: String,
         credential_id: String,
+        is_pro: fn() -> bool,
     ) -> Result<Account, String> {
         self.initialize_v2()?;
         Self::validate_secret_source(provider, &source)?;
@@ -117,6 +136,10 @@ impl AccountStore {
             if let Some(reason) = self.oauth_duplicate(&accounts, provider, &label, &credentials) {
                 return Err(reason.to_string());
             }
+        }
+        // Linearization point (§03.0) — same lock acquisition as `accounts`.
+        if let Some(reason) = Self::free_limit_rejection(&accounts, provider, is_pro()) {
+            return Err(reason);
         }
         let account = Account {
             id: account_id,
