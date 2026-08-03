@@ -15,18 +15,19 @@ fn store_with_all_paid_providers() -> (tempfile::TempDir, AccountStore) {
     let store = AccountStore::new_at(tmp.path().to_path_buf());
 
     store
-        .add_reference(
+        .add_reference_with(
             Provider::Cursor,
             "cursor-test".to_string(),
             AuthSource::CursorDatabase {
                 database_path: tmp.path().join("nonexistent-cursor.vscdb"),
                 expected_identity: "cursor-identity".to_string(),
             },
+            || true,
         )
         .expect("register Cursor account");
 
     store
-        .add_secret(
+        .add_secret_with(
             Provider::Grok,
             "grok-test".to_string(),
             SecretSource::XaiManagement {
@@ -38,16 +39,18 @@ fn store_with_all_paid_providers() -> (tempfile::TempDir, AccountStore) {
                 account_id: Some("team-test".to_string()),
                 expires_at: None,
             },
+            || true,
         )
         .expect("register Grok account");
 
     store
-        .add_reference(
+        .add_reference_with(
             Provider::Higgsfield,
             "higgsfield-test".to_string(),
             AuthSource::HiggsfieldCli {
                 expected_identity: "higgsfield-test".to_string(),
             },
+            || true,
         )
         .expect("register Higgsfield account");
 
