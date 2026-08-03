@@ -66,6 +66,7 @@ impl AccountStore {
         Ok(path)
     }
 
+    // Retained as a guard against a future bypass; exercised by the BARE-WRAPPER-WIRING test.
     #[allow(dead_code)]
     pub fn add_secret(
         &self,

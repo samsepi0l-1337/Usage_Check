@@ -266,6 +266,9 @@ async fn paid_and_free_gates_are_independent() {
     assert_is_gated_placeholder(&results[2]);
 }
 
+/// Pins `apply_last_success`'s status filter: a cached success must not replace
+/// `pro_required`. The ungated fixture is `needs_login`, so this does not prove
+/// whether the Free gate runs before or after `apply_last_success`.
 #[tokio::test]
 #[allow(clippy::await_holding_lock)] // Process-wide env mutation must remain serialized.
 async fn gated_account_does_not_inherit_a_cached_success() {

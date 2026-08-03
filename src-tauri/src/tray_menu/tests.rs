@@ -779,10 +779,7 @@
         ];
 
         for status in statuses {
-            let add_section_is_pro = matches!(
-                status,
-                LicenseStatus::Pro { .. } | LicenseStatus::ProDevOverride
-            );
+            let add_section_is_pro = super::menu::is_pro_from(&status);
             let license_section_is_pro = license_rows(status, None, false)
                 .iter()
                 .any(|row| row.id == "license-deactivate");

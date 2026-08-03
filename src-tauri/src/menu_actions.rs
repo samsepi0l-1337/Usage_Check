@@ -10,6 +10,69 @@ use tauri::Runtime;
 /// publishing it.
 static REFRESH_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+/// Most recently published poll snapshot, retained so render-only events can
+/// rebuild the tray without polling providers again. The initial empty value
+/// matches the pre-first-poll menu built at startup.
+#[derive(Clone)]
+struct RetainedSnapshot {
+    usages: Vec<crate::poller::AccountUsage>,
+    updated_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+static LAST_SNAPSHOT: std::sync::Mutex<RetainedSnapshot> =
+    std::sync::Mutex::new(RetainedSnapshot {
+        usages: Vec::new(),
+        updated_at: None,
+    });
+
+fn retain_last_snapshot(
+    snapshot: &[crate::poller::AccountUsage],
+    updated_at: Option<chrono::DateTime<chrono::Utc>>,
+) {
+    *LAST_SNAPSHOT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = RetainedSnapshot {
+        usages: snapshot.to_vec(),
+        updated_at,
+    };
+}
+
+fn last_snapshot() -> RetainedSnapshot {
+    LAST_SNAPSHOT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()
+}
+
+/// Rebuilds only the tray UI from the retained poll result. In particular,
+/// this does not construct an `AccountStore`, poll a provider, or require the
+/// local HTTP API state.
+fn rerender_last_snapshot<R: Runtime>(app: &AppHandle<R>) {
+    let retained = last_snapshot();
+    let app2 = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            crate::tray_menu::apply_menu(&app2, &retained.usages, retained.updated_at);
+        }))
+        .is_err()
+        {
+            eprintln!("tray: apply_menu panicked; suppressed to keep the tray alive");
+        }
+    });
+}
+
+/// Publishes a completed poll to the local HTTP API when that state is
+/// managed. Production always registers `ApiState`; headless Tauri tests do
+/// not, and an absent optional publication target must not panic a refresh.
+fn publish_api_snapshot<R: Runtime>(
+    app: &AppHandle<R>,
+    snapshot: &[crate::poller::AccountUsage],
+) {
+    if let Some(api_state) = app.try_state::<crate::api::ApiState>() {
+        api_state.publish(snapshot);
+    }
+}
+
 /// Polls all accounts and rebuilds the tray menu on the main thread.
 ///
 /// Uses a fresh `AccountStore` handle (file-backed ZST) instead of holding
@@ -40,8 +103,9 @@ pub(crate) async fn refresh_tray<R: Runtime>(app: &AppHandle<R>) {
         return;
     }
 
-    app.state::<crate::api::ApiState>().publish(&snapshot);
     let updated_at = Some(chrono::Utc::now());
+    retain_last_snapshot(&snapshot, updated_at);
+    publish_api_snapshot(app, &snapshot);
     let app2 = app.clone();
     let _ = app.run_on_main_thread(move || {
         // Re-read the generation HERE, next to its use. `run_on_main_thread`
@@ -528,10 +592,7 @@ pub(crate) fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, id: &str) -> Dis
                 };
                 eprintln!("dispatch: {event_id} refused: {reason}");
                 set_add_account_reason(Some(reason));
-                let app2 = app.clone();
-                tauri::async_runtime::spawn(async move {
-                    refresh_tray(&app2).await;
-                });
+                rerender_last_snapshot(app);
                 DispatchOutcome::Refused
             }
         }

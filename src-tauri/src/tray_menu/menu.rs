@@ -125,6 +125,16 @@ pub(crate) fn should_show_deactivate(is_pro: bool, has_stored_license: bool) -> 
     is_pro || has_stored_license
 }
 
+/// Derives the Add-section entitlement from the single license-status sample
+/// captured by `build_menu`. Kept as one production function so tests exercise
+/// the exact rule used by the menu, including the development override.
+pub(crate) fn is_pro_from(status: &LicenseStatus) -> bool {
+    matches!(
+        status,
+        LicenseStatus::Pro { .. } | LicenseStatus::ProDevOverride
+    )
+}
+
 /// (item 4 fix) One row of the tray's license section, in render order.
 /// Pure decision extracted from `build_menu` so the ordered row SET — ids,
 /// labels, and enabled/disabled flags — is unit-testable: a real
@@ -204,10 +214,7 @@ pub fn build_menu<R: Runtime>(
     // by the same rule `license_rows` uses internally, so the Add section and
     // the license section can never disagree.
     let license_status = crate::license::status();
-    let is_pro = matches!(
-        license_status,
-        LicenseStatus::Pro { .. } | LicenseStatus::ProDevOverride
-    );
+    let is_pro = is_pro_from(&license_status);
 
     let menu = Menu::new(app)?;
 
@@ -381,12 +388,12 @@ pub fn build_menu<R: Runtime>(
 }
 
 pub fn apply_menu<R: Runtime>(app: &AppHandle<R>, usages: &[AccountUsage], updated_at: Option<DateTime<Utc>>) {
-    let Ok(menu) = build_menu(app, usages, updated_at) else {
-        eprintln!("tray: failed to build menu");
-        return;
-    };
     let Some(tray) = app.tray_by_id(TRAY_ID) else {
         eprintln!("tray: icon '{TRAY_ID}' not found");
+        return;
+    };
+    let Ok(menu) = build_menu(app, usages, updated_at) else {
+        eprintln!("tray: failed to build menu");
         return;
     };
     if let Err(e) = tray.set_menu(Some(menu)) {

@@ -112,7 +112,7 @@ fn auth_source_claude_usage_snapshot_round_trips_through_snapshot_reader() {
 async fn claude_cli_profile_falls_back_to_snapshot_without_profile_credentials() {
     let _lock = crate::import::CLAUDE_CONFIG_DIR_ENV_LOCK
         .lock()
-        .expect("environment lock");
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let _retain_unset_helper_without_invoking_it = ClaudeConfigDirGuard::unset;
     let temp = TempDir::new().expect("create temp directory");
     let config_root = temp.path().join("default-claude");
@@ -164,7 +164,7 @@ async fn claude_cli_profile_falls_back_to_snapshot_without_profile_credentials()
 async fn claude_cli_profile_caches_matching_live_credentials_unchanged_before_snapshot_fallback() {
     let _lock = crate::import::CLAUDE_CONFIG_DIR_ENV_LOCK
         .lock()
-        .expect("environment lock");
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let temp = TempDir::new().expect("create temp directory");
     let config_root = temp.path().join("default-claude");
     std::fs::create_dir(&config_root).expect("create default Claude config directory");
@@ -382,7 +382,7 @@ fn claude_cli_profile_cache_is_trusted_rejects_when_live_creds_present() {
 async fn claude_cli_profile_multi_account_ignores_cached_token_and_falls_through_to_snapshot() {
     let _lock = crate::import::CLAUDE_CONFIG_DIR_ENV_LOCK
         .lock()
-        .expect("environment lock");
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let temp = TempDir::new().expect("create temp directory");
     // A mismatched default identity makes Step A deterministically `Refuse` for
     // both accounts below, regardless of the sole-account ride flag — isolating

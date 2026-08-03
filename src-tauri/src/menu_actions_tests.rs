@@ -212,6 +212,40 @@ fn refusal_publishes_a_user_visible_reason() {
     );
 }
 
+#[tokio::test]
+#[allow(clippy::await_holding_lock)] // Process-wide app-data env mutation must remain serialized.
+async fn refusal_rerenders_without_starting_a_poll_refresh() {
+    let _env_lock = LICENSE_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let tmp = tempfile::tempdir().expect("create isolated app-data directory");
+    let _app_data_env = AppDataDirGuard::set(tmp.path());
+    let app = build_mock_app(tmp.path().join("store"));
+    let retained_usage = crate::poller::account_usage_pro_required(&account(
+        "retained-claude",
+        Provider::Claude,
+    ));
+    let retained_at = chrono::Utc::now();
+    retain_last_snapshot(&[retained_usage], Some(retained_at));
+    let generation_before = REFRESH_GENERATION.load(Ordering::SeqCst);
+
+    assert_eq!(
+        handle_menu_event(app.handle(), "add-grok-clipboard"),
+        DispatchOutcome::Refused
+    );
+
+    // Give an incorrectly detached refresh ample opportunity to claim a
+    // generation before asserting that refusal is render-only.
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert_eq!(
+        REFRESH_GENERATION.load(Ordering::SeqCst),
+        generation_before,
+        "a refused Add action must not start a provider poll"
+    );
+    let retained = last_snapshot();
+    assert_eq!(retained.usages.len(), 1);
+    assert_eq!(retained.usages[0].account.id, "retained-claude");
+    assert_eq!(retained.updated_at, Some(retained_at));
+}
+
 #[test]
 fn record_add_outcome_publishes_the_reason_and_clears_it_on_success() {
     let _env_lock = LICENSE_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
@@ -248,13 +282,23 @@ fn the_cap_gate_keys_off_is_pro_not_has_stored_license() {
 
 #[test]
 fn a_superseded_refresh_does_not_publish() {
+    let _env_lock = LICENSE_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let generation = REFRESH_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     let _newer_generation = REFRESH_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
 
     // This exercises the stamp COMPARISON, not the publish path it guards.
-    // `build_mock_app` intentionally manages no `ApiState`, so calling the
-    // real `refresh_tray` under this mock runtime would panic (K13).
+    // `build_mock_app` intentionally manages no `ApiState`; optional API
+    // publication is covered separately above, without pretending this test
+    // drives the generation-guarded refresh publication path.
     assert_ne!(REFRESH_GENERATION.load(Ordering::SeqCst), generation);
+}
+
+#[test]
+fn publishing_a_snapshot_without_managed_api_state_is_a_noop() {
+    let tmp = tempfile::tempdir().expect("create isolated store directory");
+    let app = build_mock_app(tmp.path().join("store"));
+
+    publish_api_snapshot(app.handle(), &[]);
 }
 
 #[test]
