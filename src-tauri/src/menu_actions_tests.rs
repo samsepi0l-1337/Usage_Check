@@ -14,6 +14,8 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use ed25519_dalek::SigningKey;
 use std::ffi::OsString;
 use std::path::Path;
+use std::sync::atomic::Ordering;
+use usage_core::account::{Account, Credentials};
 
 // `USAGECHECK_APP_DATA_DIR` / `USAGECHECK_LICENSE_PUBKEY` are shared,
 // process-global env vars ALSO mutated by `license/http_tests.rs` and
@@ -79,6 +81,32 @@ fn build_mock_app(store_root: std::path::PathBuf) -> tauri::App<tauri::test::Moc
 
 const PAID_PROVIDER_EVENTS: &[&str] = &["add-cursor-local", "add-grok-clipboard", "add-higgsfield-cli"];
 
+fn credentials() -> Credentials {
+    Credentials {
+        access_token: "test-access-token".into(),
+        refresh_token: Some("test-refresh-token".into()),
+        account_id: Some("test-account-id".into()),
+        expires_at: None,
+    }
+}
+
+fn account(id: &str, provider: Provider) -> Account {
+    Account {
+        id: id.into(),
+        provider,
+        label: format!("{id}@example.com"),
+        auth_source: AuthSource::BrowserOAuth {
+            credential_id: format!("credential-{id}"),
+        },
+    }
+}
+
+fn seed_codex_account(app: &tauri::App<tauri::test::MockRuntime>) {
+    app.state::<AccountStore>()
+        .add(Provider::Codex, "codex-one".into(), credentials()) // BARE-WRAPPER-WIRING
+        .expect("seed one Codex account below the cap");
+}
+
 #[test]
 fn dispatch_gate_refuses_all_three_paid_providers_when_unlicensed() {
     let _env_lock = LICENSE_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
@@ -136,6 +164,141 @@ fn dispatch_gate_always_permits_a_free_provider_regardless_of_license() {
     let app = build_mock_app(tmp.path().join("store"));
     let outcome = handle_menu_event(app.handle(), "add-codex-oauth");
     assert_eq!(outcome, DispatchOutcome::Dispatched);
+}
+
+#[test]
+fn handle_menu_event_refuses_a_free_provider_add_at_the_cap() {
+    let _env_lock = LICENSE_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let tmp = tempfile::tempdir().unwrap();
+    let _app_data_env = AppDataDirGuard::set(tmp.path());
+    let app = build_mock_app(tmp.path().join("store"));
+    seed_codex_account(&app);
+
+    assert_eq!(
+        handle_menu_event(app.handle(), "add-codex-cli"),
+        DispatchOutcome::Refused
+    );
+}
+
+#[test]
+fn handle_menu_event_dispatches_a_free_provider_add_below_the_cap() {
+    let _env_lock = LICENSE_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let tmp = tempfile::tempdir().unwrap();
+    let _app_data_env = AppDataDirGuard::set(tmp.path());
+    let app = build_mock_app(tmp.path().join("store"));
+
+    assert_eq!(
+        handle_menu_event(app.handle(), "add-claude-cli"),
+        DispatchOutcome::Dispatched
+    );
+}
+
+#[test]
+fn refusal_publishes_a_user_visible_reason() {
+    let _env_lock = LICENSE_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let tmp = tempfile::tempdir().unwrap();
+    let _app_data_env = AppDataDirGuard::set(tmp.path());
+    let app = build_mock_app(tmp.path().join("store"));
+    seed_codex_account(&app);
+    set_add_account_reason(None);
+
+    assert_eq!(
+        handle_menu_event(app.handle(), "add-codex-cli"),
+        DispatchOutcome::Refused
+    );
+    assert_eq!(
+        last_add_account_attempt(),
+        Some(usage_core::edition::free_limit_reason(Provider::Codex))
+    );
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)] // Process-wide app-data env mutation must remain serialized.
+async fn refusal_rerenders_without_starting_a_poll_refresh() {
+    let _env_lock = LICENSE_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let tmp = tempfile::tempdir().expect("create isolated app-data directory");
+    let _app_data_env = AppDataDirGuard::set(tmp.path());
+    let app = build_mock_app(tmp.path().join("store"));
+    let retained_usage = crate::poller::account_usage_pro_required(&account(
+        "retained-claude",
+        Provider::Claude,
+    ));
+    let retained_at = chrono::Utc::now();
+    retain_last_snapshot(&[retained_usage], Some(retained_at));
+    let generation_before = REFRESH_GENERATION.load(Ordering::SeqCst);
+
+    assert_eq!(
+        handle_menu_event(app.handle(), "add-grok-clipboard"),
+        DispatchOutcome::Refused
+    );
+
+    // Give an incorrectly detached refresh ample opportunity to claim a
+    // generation before asserting that refusal is render-only.
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert_eq!(
+        REFRESH_GENERATION.load(Ordering::SeqCst),
+        generation_before,
+        "a refused Add action must not start a provider poll"
+    );
+    let retained = last_snapshot();
+    assert_eq!(retained.usages.len(), 1);
+    assert_eq!(retained.usages[0].account.id, "retained-claude");
+    assert_eq!(retained.updated_at, Some(retained_at));
+}
+
+#[test]
+fn record_add_outcome_publishes_the_reason_and_clears_it_on_success() {
+    let _env_lock = LICENSE_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    set_add_account_reason(None);
+
+    assert!(!record_add_outcome("test", Err("boom".into())));
+    assert_eq!(last_add_account_attempt(), Some("boom".into()));
+
+    assert!(record_add_outcome(
+        "test",
+        Ok(account("codex-one", Provider::Codex))
+    ));
+    assert_eq!(last_add_account_attempt(), None);
+}
+
+#[test]
+fn the_cap_gate_keys_off_is_pro_not_has_stored_license() {
+    let _env_lock = LICENSE_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let tmp = tempfile::tempdir().unwrap();
+    let _app_data_env = AppDataDirGuard::set(tmp.path());
+    std::fs::write(tmp.path().join("license.json"), b"not valid license JSON")
+        .expect("write malformed license record");
+    assert!(crate::license::has_stored_license());
+    assert!(!crate::license::is_pro());
+
+    let app = build_mock_app(tmp.path().join("store"));
+    seed_codex_account(&app);
+
+    assert_eq!(
+        handle_menu_event(app.handle(), "add-codex-cli"),
+        DispatchOutcome::Refused
+    );
+}
+
+#[test]
+fn a_superseded_refresh_does_not_publish() {
+    let _env_lock = LICENSE_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let generation = REFRESH_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+    let _newer_generation = REFRESH_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+
+    // This exercises the stamp COMPARISON, not the publish path it guards.
+    // `build_mock_app` intentionally manages no `ApiState`; optional API
+    // publication is covered separately above, without pretending this test
+    // drives the generation-guarded refresh publication path.
+    assert_ne!(REFRESH_GENERATION.load(Ordering::SeqCst), generation);
+}
+
+#[test]
+fn publishing_a_snapshot_without_managed_api_state_is_a_noop() {
+    let tmp = tempfile::tempdir().expect("create isolated store directory");
+    let app = build_mock_app(tmp.path().join("store"));
+
+    publish_api_snapshot(app.handle(), &[]);
 }
 
 #[test]

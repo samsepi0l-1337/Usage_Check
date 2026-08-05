@@ -9,8 +9,10 @@ impl AccountStore {
     ) -> Result<(), String> {
         let valid = matches!(
             (provider, source),
-            (Provider::Codex | Provider::Claude, AuthSource::CliProfile { .. })
-                | (Provider::Cursor, AuthSource::CursorDatabase { .. })
+            (
+                Provider::Codex | Provider::Claude,
+                AuthSource::CliProfile { .. }
+            ) | (Provider::Cursor, AuthSource::CursorDatabase { .. })
                 | (Provider::Higgsfield, AuthSource::HiggsfieldCli { .. })
         );
         if valid {
@@ -138,5 +140,29 @@ impl AccountStore {
             }
         }
         None
+    }
+
+    /// Free-state per-provider account cap. Returns the user-facing reason when
+    /// a Free installation may NOT register another `provider` account.
+    ///
+    /// Checked AFTER `duplicate_source`/`oauth_duplicate` (see the call sites):
+    /// re-adding an account that is ALREADY registered must report "already
+    /// registered" — the true cause — rather than a cap that would only have
+    /// applied to a genuinely new account.
+    ///
+    /// This refuses a WRITE; it never deletes. Accounts already past the cap
+    /// keep their index entry and surface as `pro_required` at poll time
+    /// (`poller::poll_all_with`). The text comes from
+    /// `usage_core::edition::free_limit_reason` so the store and the tray emit
+    /// the identical sentence (D8).
+    pub(super) fn free_limit_rejection(
+        accounts: &[Account],
+        provider: Provider,
+        is_pro: bool,
+    ) -> Option<String> {
+        if is_pro || !usage_core::edition::free_limit_reached(accounts, provider) {
+            return None;
+        }
+        Some(usage_core::edition::free_limit_reason(provider))
     }
 }

@@ -10,7 +10,7 @@ rows, Add/Remove account actions, Refresh, and Quit.
 
 ## What It Shows
 
-- **Multi-account**: add any number of Codex, Claude, and agy accounts.
+- **Multi-account**: Free keeps one Codex, Claude, and agy account active per provider; Pro supports any number, and stored extras are preserved while inactive.
 - **Codex** and **Claude**: 5-hour and 7-day quota percentages in the tray
   menu, fetched from each provider's usage API.
 - **agy**: Antigravity Model Quota (Gemini / Claude+GPT pools) as used % in
@@ -29,22 +29,28 @@ rows, Add/Remove account actions, Refresh, and Quit.
 > service is not live yet, and this build embeds the documented placeholder
 > verification key, so `resolve_public_key()` returns `None` in a release
 > build and **no license key can unlock Cursor, Grok or Higgsfield — for
-> anyone.** Codex, Claude and agy are unaffected and fully functional. Paid
-> accounts you already configured are never deleted; they are shown as
-> `pro_required`. Everything below this note describes the licensing design,
+> anyone.** Codex, Claude and agy remain free, with one active account per
+> provider in the unlicensed Free state. The runtime gate does not delete
+> paid accounts you already configured; it shows them as `pro_required`.
+> Everything below this note describes the licensing design,
 > not a capability of this build.
 
 UsageCheck ships as **one binary** for everyone. Codex, Claude, and agy
 (Gemini/Antigravity) are free. A Pro license key is designed to unlock Cursor,
 Grok, and Higgsfield at **runtime** — no separate Free/Pro build, no
-compile-time edition flag. Deep reference:
+compile-time edition flag. Without a valid Pro license, one account per provider
+stays active for each free provider. If several are already stored,
+this limit deletes nothing: the first by index/insertion order stays live,
+the rest are preserved and shown as `pro_required` with no quota numbers,
+and activating Pro restores them all on the next poll with no re-import.
+Deep reference:
 [`docs/editions.md`](docs/editions.md) (provider matrix, setup) and
 [`docs/LICENSE_API.md`](docs/LICENSE_API.md) (the signed activation-token wire
 contract).
 
 | | Product name | Bundle ID | Providers |
 | --- | --- | --- | --- |
-| UsageCheck | `UsageCheck` | `com.usagecheck.desktop` | Codex, Claude, agy free; Cursor/Grok/Higgsfield gated behind a Pro license (not activatable in this release) |
+| UsageCheck | `UsageCheck` | `com.usagecheck.desktop` | Codex, Claude, agy free (one active account each while unlicensed); unlimited accounts and Cursor/Grok/Higgsfield with Pro (not activatable in this release) |
 
 **Gemini** is `Provider::Agy` (Antigravity Gemini Models quota), not a
 separate enum.
@@ -236,6 +242,10 @@ The tray shows one of these per account (see `src-tauri/src/poller.rs`):
   the identity UsageCheck registered.
 - `needs_setup` — the CLI or its JSON output is unavailable (e.g. Higgsfield
   CLI not installed).
+- `pro_required` — the account is preserved but inactive in Free: either it
+  belongs to a paid provider or it is beyond a free provider's one-account
+  limit. No quota numbers are reported; activating Pro restores it without
+  re-importing.
 
 When any account is at or above the alert threshold (default 90%, configurable
 via `USAGECHECK_ALERT_THRESHOLD`), a **⚠ N account(s) near limit** banner
