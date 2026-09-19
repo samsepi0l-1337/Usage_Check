@@ -5,9 +5,15 @@ use usage_core::fetch::agy::{compact_windows, AgyQuota, AgyQuotaPool};
 use usage_core::fetch::claude::ClaudeQuota;
 use usage_core::fetch::codex::CodexQuota;
 use usage_core::fetch::cursor::CursorQuota;
+use usage_core::fetch::deepseek::DeepSeekBalance;
 use usage_core::fetch::grok::GrokPrepaid;
 use usage_core::fetch::higgsfield::HiggsfieldCredits;
-use usage_core::models::{LocalProvenance, LocalUsage, QuotaUsage, UsageBreakdownRow, WindowTotals};
+use usage_core::fetch::kimi::KimiUsage;
+use usage_core::fetch::opencode::OpenCodeUsage;
+use usage_core::fetch::openrouter::OpenRouterUsage;
+use usage_core::models::{
+    LocalProvenance, LocalUsage, QuotaUsage, UsageBreakdownRow, WindowTotals,
+};
 
 /// A single account's usage snapshot: live quota (when available) plus
 /// local-log token totals (Codex/Claude fallback only), ready for the tray.
@@ -147,6 +153,90 @@ pub(super) fn account_usage_from_higgsfield(
         pool_breakdown: Vec::new(),
         breakdown: Vec::new(),
         detail_suffix: credits.detail_suffix(),
+        status: status.to_string(),
+        local_status: None,
+    }
+}
+
+pub(super) fn account_usage_from_kimi(
+    account: &Account,
+    quota: &KimiUsage,
+    status: &str,
+) -> AccountUsage {
+    AccountUsage {
+        display_name: display_name_for(account, None, None),
+        plan: None,
+        account: account.clone(),
+        five_hour: quota.five_hour.clone(),
+        week: quota.week.clone(),
+        totals: WindowTotals::default(),
+        pool_breakdown: Vec::new(),
+        breakdown: Vec::new(),
+        detail_suffix: None,
+        status: status.to_string(),
+        local_status: None,
+    }
+}
+
+pub(super) fn account_usage_from_opencode(
+    account: &Account,
+    quota: &OpenCodeUsage,
+    status: &str,
+) -> AccountUsage {
+    let monthly = quota.monthly.clone().map(|usage| UsageBreakdownRow {
+        label: "monthly".into(),
+        usage,
+    });
+    AccountUsage {
+        display_name: display_name_for(account, None, quota.plan.as_deref()),
+        plan: quota.plan.clone(),
+        account: account.clone(),
+        five_hour: quota.five_hour.clone(),
+        week: quota.week.clone(),
+        totals: WindowTotals::default(),
+        pool_breakdown: Vec::new(),
+        breakdown: monthly.into_iter().collect(),
+        detail_suffix: None,
+        status: status.to_string(),
+        local_status: None,
+    }
+}
+
+pub(super) fn account_usage_from_deepseek(
+    account: &Account,
+    balance: &DeepSeekBalance,
+    status: &str,
+) -> AccountUsage {
+    AccountUsage {
+        display_name: display_name_for(account, None, None),
+        plan: None,
+        account: account.clone(),
+        five_hour: None,
+        week: None,
+        totals: WindowTotals::default(),
+        pool_breakdown: Vec::new(),
+        breakdown: Vec::new(),
+        detail_suffix: balance.detail_suffix.clone(),
+        status: status.to_string(),
+        local_status: None,
+    }
+}
+
+pub(super) fn account_usage_from_openrouter(
+    account: &Account,
+    usage: &OpenRouterUsage,
+    status: &str,
+) -> AccountUsage {
+    AccountUsage {
+        display_name: display_name_for(account, None, None),
+        plan: None,
+        account: account.clone(),
+        five_hour: None,
+        week: usage.period.clone(),
+        totals: WindowTotals::default(),
+        pool_breakdown: Vec::new(),
+        breakdown: Vec::new(),
+        detail_suffix: usage.detail_suffix.clone(),
         status: status.to_string(),
         local_status: None,
     }

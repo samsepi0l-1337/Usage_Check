@@ -1,7 +1,7 @@
+use crate::license::ActivationErrorClass;
 use crate::{
     AccountStore, AppHandle, AuthMethod, AuthSource, Manager, ManagerExt, OsStr, Provider,
 };
-use crate::license::ActivationErrorClass;
 use tauri::Runtime;
 
 /// Monotonic refresh generation. Every `refresh_tray` claims the next value
@@ -64,10 +64,7 @@ fn rerender_last_snapshot<R: Runtime>(app: &AppHandle<R>) {
 /// Publishes a completed poll to the local HTTP API when that state is
 /// managed. Production always registers `ApiState`; headless Tauri tests do
 /// not, and an absent optional publication target must not panic a refresh.
-fn publish_api_snapshot<R: Runtime>(
-    app: &AppHandle<R>,
-    snapshot: &[crate::poller::AccountUsage],
-) {
+fn publish_api_snapshot<R: Runtime>(app: &AppHandle<R>, snapshot: &[crate::poller::AccountUsage]) {
     if let Some(api_state) = app.try_state::<crate::api::ApiState>() {
         api_state.publish(snapshot);
     }
@@ -186,12 +183,10 @@ pub(crate) fn cli_coordinator_setup<R: Runtime>(app: &AppHandle<R>, provider: Pr
                     if saved.provider == Provider::Claude {
                         if let AuthSource::CliProfile { profile_root, .. } = &saved.auth_source {
                             let settings_path = profile_root.join("settings.json");
-                            if let Err(error) =
-                                crate::claude_statusline::install_statusline_bridge(
-                                    &settings_path,
-                                    &saved.id,
-                                )
-                            {
+                            if let Err(error) = crate::claude_statusline::install_statusline_bridge(
+                                &settings_path,
+                                &saved.id,
+                            ) {
                                 eprintln!("cli setup: bridge install failed: {error}");
                             }
                         }
@@ -228,8 +223,7 @@ pub(crate) fn import_grok_clipboard<R: Runtime>(app: &AppHandle<R>) {
 /// SECURITY: holds only `usage_core::edition::free_limit_reason` output or an
 /// `AccountStore::add*` error string — provider display names, fixed reason
 /// literals, and filesystem paths. No arm formats a credential value.
-static LAST_ADD_ACCOUNT_ATTEMPT: std::sync::Mutex<Option<String>> =
-    std::sync::Mutex::new(None);
+static LAST_ADD_ACCOUNT_ATTEMPT: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
 /// Publishes (or clears) the add-account reason shown in the tray. The single
 /// writer, so the refusal path and the store-rejection path cannot drift apart.
@@ -397,9 +391,7 @@ pub(crate) fn oauth_provider<R: Runtime>(app: &AppHandle<R>, provider: Provider)
                     Provider::Agy => crate::oauth::agy_email_from_access_token(&creds.access_token)
                         .await
                         .unwrap_or_else(|| "agy".to_string()),
-                    Provider::Cursor | Provider::Grok | Provider::Higgsfield => {
-                        provider.display_name().to_string()
-                    }
+                    _ => provider.display_name().to_string(),
                 };
                 record_add_outcome("oauth", store.add(provider, label, creds));
                 refresh_tray(&app2).await;
@@ -532,10 +524,12 @@ pub(crate) fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, id: &str) -> Dis
                                 &removed.auth_source
                             {
                                 let settings_path = profile_root.join("settings.json");
-                                if let Err(error) = crate::claude_statusline::remove_statusline_bridge(
-                                    &settings_path,
-                                    &account_id,
-                                ) {
+                                if let Err(error) =
+                                    crate::claude_statusline::remove_statusline_bridge(
+                                        &settings_path,
+                                        &account_id,
+                                    )
+                                {
                                     eprintln!("remove: bridge teardown failed: {error}");
                                 }
                             }

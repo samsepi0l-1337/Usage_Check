@@ -184,7 +184,13 @@ impl AccountStore {
         is_pro: fn() -> bool,
     ) -> Result<Account, String> {
         match provider {
-            Provider::Codex | Provider::Claude | Provider::Agy => self.add_secret_with(
+            Provider::Codex
+            | Provider::Claude
+            | Provider::Agy
+            | Provider::Kimi
+            | Provider::OpenCode
+            | Provider::DeepSeek
+            | Provider::OpenRouter => self.add_secret_with(
                 provider,
                 label,
                 SecretSource::BrowserOAuth,

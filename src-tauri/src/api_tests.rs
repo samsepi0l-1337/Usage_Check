@@ -22,6 +22,11 @@ fn sample_auth_source(provider: Provider, identity: &str) -> AuthSource {
         Provider::Higgsfield => AuthSource::HiggsfieldCli {
             expected_identity: identity.into(),
         },
+        Provider::Kimi | Provider::OpenCode | Provider::DeepSeek | Provider::OpenRouter => {
+            AuthSource::BrowserOAuth {
+                credential_id: format!("{identity}-credential"),
+            }
+        }
     }
 }
 fn sample(provider: Provider, id: &str, five: Option<f64>, week: Option<f64>) -> AccountUsage {
@@ -159,7 +164,10 @@ fn license_endpoint_serves_poll_snapshot_without_rereading_environment() {
     assert_eq!(body["expires_at"], serde_json::Value::Null);
     assert_eq!(body["forced"], true);
     for forbidden in ["token", "device", "key", "license.json"] {
-        assert!(!reply.body.contains(forbidden), "license endpoint leaked {forbidden}");
+        assert!(
+            !reply.body.contains(forbidden),
+            "license endpoint leaked {forbidden}"
+        );
     }
 }
 #[test]
@@ -247,7 +255,9 @@ fn csv_endpoint_serves_text_csv() {
     let reply = route(&state, "GET", "/v1/usage.csv");
     assert_eq!(reply.status, 200);
     assert!(reply.content_type.starts_with("text/csv"));
-    assert!(reply.body.starts_with("provider,account,plan,status,window,pool,used_percent\n"));
+    assert!(reply
+        .body
+        .starts_with("provider,account,plan,status,window,pool,used_percent\n"));
     assert!(reply.body.contains("codex,a@example.com,,ok,5h,,42.5"));
     assert!(!reply.body.contains("access_token"));
 }
@@ -268,9 +278,9 @@ fn metrics_endpoint_serves_prometheus_text() {
     assert_eq!(reply.status, 200);
     assert!(reply.content_type.starts_with("text/plain"));
     assert!(reply.body.contains("usagecheck_account_count 2"));
-    assert!(reply
-        .body
-        .contains("usagecheck_used_percent{provider=\"codex\",account=\"a@example.com\",window=\"5h\"} 42.5"));
+    assert!(reply.body.contains(
+        "usagecheck_used_percent{provider=\"codex\",account=\"a@example.com\",window=\"5h\"} 42.5"
+    ));
     assert!(!reply.body.contains("access_token"));
 }
 
@@ -313,9 +323,7 @@ fn live_server_round_trip() {
     std::thread::sleep(std::time::Duration::from_millis(300));
     let mut stream = TcpStream::connect("127.0.0.1:5199").unwrap();
     stream
-        .write_all(
-            b"GET /v1/usage/codex HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
-        )
+        .write_all(b"GET /v1/usage/codex HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
         .unwrap();
     let mut raw = String::new();
     stream.read_to_string(&mut raw).unwrap();
@@ -357,7 +365,9 @@ fn dto_includes_detail_suffix() {
     usage.detail_suffix = Some("809 credits".into());
     let dto = AccountUsageDto::from_usage(&usage);
     assert_eq!(dto.detail_suffix, Some("809 credits".to_string()));
-    assert!(serde_json::to_string(&dto).unwrap().contains("detail_suffix"));
+    assert!(serde_json::to_string(&dto)
+        .unwrap()
+        .contains("detail_suffix"));
 }
 #[test]
 fn dto_never_serializes_auth_metadata() {
@@ -369,8 +379,13 @@ fn dto_never_serializes_auth_metadata() {
     for usage in usages {
         let json = serde_json::to_string(&AccountUsageDto::from_usage(&usage)).unwrap();
         for private in [
-            "auth_source", "profile_root", "credential_id", "team_id", "database_path",
-            "access_token", "management",
+            "auth_source",
+            "profile_root",
+            "credential_id",
+            "team_id",
+            "database_path",
+            "access_token",
+            "management",
         ] {
             assert!(!json.contains(private), "DTO leaked {private}: {json}");
         }
@@ -380,11 +395,15 @@ fn dto_never_serializes_auth_metadata() {
 fn status_stale_serializes() {
     let mut usage = sample(Provider::Codex, "a", None, None);
     usage.status = "stale".to_string();
-    assert!(serde_json::to_string(&AccountUsageDto::from_usage(&usage)).unwrap().contains("\"stale\""));
+    assert!(serde_json::to_string(&AccountUsageDto::from_usage(&usage))
+        .unwrap()
+        .contains("\"stale\""));
 }
 #[test]
 fn openapi_declares_detail_suffix_and_stale() {
-    assert!(["detail_suffix", "stale", "higgsfield"].into_iter().all(|v| OPENAPI_YAML.contains(v)));
+    assert!(["detail_suffix", "stale", "higgsfield"]
+        .into_iter()
+        .all(|v| OPENAPI_YAML.contains(v)));
 }
 #[test]
 fn provider_filter_accepts_pro_providers() {
@@ -392,8 +411,20 @@ fn provider_filter_accepts_pro_providers() {
         sample(Provider::Cursor, "cursor", None, None),
         sample(Provider::Grok, "grok", None, None),
         sample(Provider::Higgsfield, "higgsfield", None, None),
+        sample(Provider::Kimi, "kimi", None, None),
+        sample(Provider::OpenCode, "opencode", None, None),
+        sample(Provider::DeepSeek, "deepseek", None, None),
+        sample(Provider::OpenRouter, "openrouter", None, None),
     ]);
-    for provider in ["cursor", "grok", "higgsfield"] {
+    for provider in [
+        "cursor",
+        "grok",
+        "higgsfield",
+        "kimi",
+        "opencode",
+        "deepseek",
+        "openrouter",
+    ] {
         let reply = route(&state, "GET", &format!("/v1/usage/{provider}"));
         assert_eq!(reply.status, 200);
         let body: serde_json::Value = serde_json::from_str(&reply.body).unwrap();

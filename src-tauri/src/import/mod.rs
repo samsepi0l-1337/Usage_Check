@@ -15,26 +15,39 @@ use usage_core::account::{Credentials, Provider};
 
 mod claude;
 mod codex;
+mod deepseek;
 mod grok;
 mod higgsfield;
+mod kimi;
+mod opencode;
+mod openrouter;
 
 #[cfg(test)]
 pub(crate) static CLAUDE_CONFIG_DIR_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+#[cfg(test)]
+use claude::claude_profile_is_default;
 #[allow(unused_imports)]
 pub(crate) use claude::{
     claude_oauth_identity_set_in, load_claude_cli_auth, load_claude_default_login_credentials,
     load_claude_profile_credentials, parse_claude_credentials_json,
 };
-#[cfg(test)]
-use claude::claude_profile_is_default;
-pub(crate) use codex::{parse_codex_auth_json, load_codex_cli_auth};
+pub(crate) use codex::{load_codex_cli_auth, parse_codex_auth_json};
+pub(crate) use deepseek::{load_deepseek_cli_auth, parse_deepseek_api_key};
 #[allow(unused_imports)]
 pub(crate) use grok::{
-    import_grok_from_clipboard, load_grok_env_auth, grok_imported_account,
+    grok_imported_account, import_grok_from_clipboard, load_grok_env_auth,
     validate_grok_management_key,
 };
 pub(crate) use higgsfield::load_higgsfield_cli_auth;
+#[allow(unused_imports)]
+pub(crate) use kimi::{load_kimi_cli_auth, parse_kimi_credentials_json};
+#[allow(unused_imports)]
+pub(crate) use opencode::{load_opencode_cli_auth, parse_opencode_go_auth_json};
+#[allow(unused_imports)]
+pub(crate) use openrouter::{
+    load_openrouter_cli_auth, parse_openrouter_opencode_auth, parse_ori_api_key,
+};
 
 /// Result of a CLI import: credentials plus a human-readable label
 /// (email when available).
@@ -72,6 +85,10 @@ pub fn import_from_cli(provider: Provider) -> Result<ImportedAccount, String> {
         Provider::Cursor => crate::cursor_local::load_cursor_local_auth(),
         Provider::Grok => load_grok_env_auth(),
         Provider::Higgsfield => load_higgsfield_cli_auth(),
+        Provider::Kimi => load_kimi_cli_auth(),
+        Provider::OpenCode => load_opencode_cli_auth(),
+        Provider::DeepSeek => load_deepseek_cli_auth(),
+        Provider::OpenRouter => load_openrouter_cli_auth(),
     }
 }
 

@@ -135,7 +135,7 @@ paths:
                 $ref: "#/components/schemas/Error"
               example:
                 error: unknown_provider
-                message: "unknown provider 'foo' (expected codex, claude, or agy)"
+                message: "unknown provider 'foo' (expected codex, claude, agy, cursor, grok, higgsfield, kimi, opencode, deepseek, or openrouter)"
   /v1/accounts:
     get:
       tags: [usage]
@@ -224,7 +224,7 @@ components:
   schemas:
     Provider:
       type: string
-      enum: [codex, claude, agy, cursor, grok, higgsfield]
+      enum: [codex, claude, agy, cursor, grok, higgsfield, kimi, opencode, deepseek, openrouter]
       description: Usage provider category.
     Status:
       type: string
@@ -240,7 +240,7 @@ components:
         - `identity_changed`: the CLI profile now belongs to a different identity than expected.
         - `experimental_error`: an experimental (reference/DB) provider probe failed.
         - `needs_setup`: provider connected but not yet configured (e.g. Higgsfield credits absent).
-        - `pro_required`: the runtime Pro gate is inactive for this account — either a paid-provider account (Cursor/Grok/Higgsfield), or a free-provider account beyond the Free plan's one-account-per-provider limit. The account is retained and reports no quota numbers.
+        - `pro_required`: the runtime Pro gate is inactive for this account — either a paid-provider account (Cursor/Grok/Higgsfield/Kimi/OpenCode/DeepSeek/OpenRouter), or a free-provider account beyond the Free plan's one-account-per-provider limit. The account is retained and reports no quota numbers.
     Quota:
       type: object
       description: A single usage window (used percent).
@@ -503,4 +503,4 @@ components:
           example: unknown_provider
         message:
           type: string
-          example: "unknown provider 'foo' (expected codex, claude, or agy)"
+          example: "unknown provider 'foo' (expected codex, claude, agy, cursor, grok, higgsfield, kimi, opencode, deepseek, or openrouter)"

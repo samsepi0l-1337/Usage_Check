@@ -5,7 +5,11 @@ use usage_core::fetch::agy::{parse_agy_quota_summary, AgyQuota};
 use usage_core::fetch::claude::{parse_claude_usage, ClaudeQuota};
 use usage_core::fetch::codex::{parse_codex_usage, CodexQuota};
 use usage_core::fetch::cursor::{parse_cursor_period_usage, CursorQuota};
+use usage_core::fetch::deepseek::{parse_deepseek_balance, DeepSeekBalance};
 use usage_core::fetch::grok::{parse_grok_prepaid_balance, GrokPrepaid};
+use usage_core::fetch::kimi::{parse_kimi_usages, KimiUsage};
+use usage_core::fetch::opencode::{parse_opencode_usage, OpenCodeUsage};
+use usage_core::fetch::openrouter::{parse_openrouter_key, OpenRouterUsage};
 
 const AGY_USER_AGENT: &str = "antigravity/usagecheck macos/arm64";
 const AGY_QUOTA_SUMMARY_URLS: &[&str] = &[
@@ -228,6 +232,90 @@ pub(super) async fn fetch_grok_prepaid(
     }
     let body: serde_json::Value = resp.json().await.map_err(|_| Some(status.as_u16()))?;
     Ok(parse_grok_prepaid_balance(&body))
+}
+
+const USAGECHECK_UA: &str = "UsageCheck";
+
+async fn bearer_json(
+    client: &reqwest::Client,
+    url: &str,
+    token: &str,
+) -> Result<serde_json::Value, Option<u16>> {
+    let resp = client
+        .get(url)
+        .header("Accept", "application/json")
+        .header("User-Agent", USAGECHECK_UA)
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|_| None)?;
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(Some(status.as_u16()));
+    }
+    resp.json().await.map_err(|_| Some(status.as_u16()))
+}
+
+const KIMI_USAGE_URLS: &[&str] = &[
+    "https://api.kimi.com/coding/v1/usages",
+    "https://api.kimi.ai/coding/v1/usages",
+];
+
+pub(super) async fn fetch_kimi_usages(
+    client: &reqwest::Client,
+    creds: &Credentials,
+) -> Result<KimiUsage, Option<u16>> {
+    let mut last_status: Option<u16> = None;
+    for url in KIMI_USAGE_URLS {
+        match bearer_json(client, url, &creds.access_token).await {
+            Ok(body) => return Ok(parse_kimi_usages(&body)),
+            Err(Some(404)) => {
+                last_status = Some(404);
+                continue;
+            }
+            Err(status) => return Err(status),
+        }
+    }
+    Err(last_status)
+}
+
+pub(super) async fn fetch_opencode_usage(
+    client: &reqwest::Client,
+    creds: &Credentials,
+) -> Result<OpenCodeUsage, Option<u16>> {
+    let body = bearer_json(
+        client,
+        "https://opencode.ai/zen/go/v1/usage",
+        &creds.access_token,
+    )
+    .await?;
+    Ok(parse_opencode_usage(&body))
+}
+
+pub(super) async fn fetch_deepseek_balance(
+    client: &reqwest::Client,
+    creds: &Credentials,
+) -> Result<DeepSeekBalance, Option<u16>> {
+    let body = bearer_json(
+        client,
+        "https://api.deepseek.com/user/balance",
+        &creds.access_token,
+    )
+    .await?;
+    Ok(parse_deepseek_balance(&body))
+}
+
+pub(super) async fn fetch_openrouter_key(
+    client: &reqwest::Client,
+    creds: &Credentials,
+) -> Result<OpenRouterUsage, Option<u16>> {
+    let body = bearer_json(
+        client,
+        "https://openrouter.ai/api/v1/key",
+        &creds.access_token,
+    )
+    .await?;
+    Ok(parse_openrouter_key(&body))
 }
 
 pub(super) fn fetch_higgsfield_account_json() -> Result<serde_json::Value, ()> {

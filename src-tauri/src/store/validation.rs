@@ -28,7 +28,16 @@ impl AccountStore {
     ) -> Result<(), String> {
         let valid = match source {
             SecretSource::BrowserOAuth => {
-                matches!(provider, Provider::Codex | Provider::Claude | Provider::Agy)
+                matches!(
+                    provider,
+                    Provider::Codex
+                        | Provider::Claude
+                        | Provider::Agy
+                        | Provider::Kimi
+                        | Provider::OpenCode
+                        | Provider::DeepSeek
+                        | Provider::OpenRouter
+                )
             }
             SecretSource::XaiManagement { .. } => provider == Provider::Grok,
         };

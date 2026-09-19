@@ -21,6 +21,17 @@ fn cursor_rpc_failure_maps_experimental_error() {
 }
 
 #[test]
+fn kimi_and_opencode_status_maps() {
+    assert_eq!(kimi_status(Some(401)), "needs_login");
+    assert_eq!(kimi_status(Some(404)), "needs_setup");
+    assert_eq!(kimi_status(Some(429)), "throttled");
+    assert_eq!(kimi_status(Some(500)), "error");
+    assert_eq!(opencode_status(Some(401)), "needs_login");
+    assert_eq!(opencode_status(Some(403)), "needs_setup");
+    assert_eq!(opencode_status(Some(429)), "throttled");
+}
+
+#[test]
 fn cursor_success_maps_ok() {
     assert_eq!(
         cursor_outcome_status("cursor-user", "cursor-user", Ok(())),

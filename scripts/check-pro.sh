@@ -62,7 +62,7 @@ for account in usage_state["accounts"]:
     name = account.get("display_name") or account.get("id", "unknown")
     account_status = account.get("status", "unknown")
     print(f"{provider}\t{name}\t{account_status}")
-    if provider in {"cursor", "grok", "higgsfield"}:
+    if provider in {"cursor", "grok", "higgsfield", "kimi", "opencode", "deepseek", "openrouter"}:
         paid_count += 1
         if account_status == "pro_required":
             pro_required.append(f"{provider}:{name}")

@@ -15,16 +15,19 @@ use usage_core::account::{Credentials, Provider};
 #[cfg(test)]
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 
-mod google_secret;
 mod flow;
+mod google_secret;
 mod identity;
 
 #[allow(unused_imports)]
-pub(crate) use google_secret::{resolve_agy_oauth_client, extract_google_oauth_pair};
+pub(crate) use flow::{build_authorize_url, make_pkce, parse_callback_query};
 #[allow(unused_imports)]
-pub(crate) use flow::{make_pkce, build_authorize_url, parse_callback_query};
+pub(crate) use google_secret::{extract_google_oauth_pair, resolve_agy_oauth_client};
 #[allow(unused_imports)]
-pub(crate) use identity::{account_id_from_token_response, chatgpt_account_id_from_id_token, google_sub_from_id_token, agy_identity_from_access_token, agy_email_from_access_token, TokenResponse};
+pub(crate) use identity::{
+    account_id_from_token_response, agy_email_from_access_token, agy_identity_from_access_token,
+    chatgpt_account_id_from_id_token, google_sub_from_id_token, TokenResponse,
+};
 
 /// Codex CLI registers this exact loopback redirect with OpenAI Hydra.
 /// Using an ephemeral port or `/callback` (instead of `/auth/callback`)
@@ -125,7 +128,22 @@ pub fn config(provider: Provider) -> Result<ProviderOAuth, String> {
                 use_pkce: false,
             })
         }
-        Provider::Cursor | Provider::Grok | Provider::Higgsfield => Err(format!(
+        Provider::Kimi => Ok(ProviderOAuth {
+            client_id: "17e5f671-d194-4dfb-9706-5516cb48c098".to_string(),
+            client_secret: None,
+            auth_url: "https://auth.kimi.com/api/oauth/authorize".to_string(),
+            token_url: "https://auth.kimi.com/api/oauth/token".to_string(),
+            scopes: "kimi-code".to_string(),
+            fixed_redirect: None,
+            extra_authorize_params: Vec::new(),
+            use_pkce: true,
+        }),
+        Provider::Cursor
+        | Provider::Grok
+        | Provider::Higgsfield
+        | Provider::OpenCode
+        | Provider::DeepSeek
+        | Provider::OpenRouter => Err(format!(
             "{} uses local import — choose Import from the tray Add Account menu",
             provider.display_name()
         )),
@@ -140,6 +158,13 @@ pub fn config(provider: Provider) -> Result<ProviderOAuth, String> {
 ///
 /// SECURITY: no verifier/code/token value is ever logged.
 pub async fn begin_login(provider: Provider) -> Result<Credentials, String> {
+    // Refresh uses `config(Provider::Kimi)`; in-app browser login is CLI-import only.
+    if provider == Provider::Kimi {
+        return Err(format!(
+            "{} uses local import — choose Import from the tray Add Account menu",
+            provider.display_name()
+        ));
+    }
     let cfg = config(provider)?;
 
     let (server, redirect_uri) = flow::bind_callback_server(&cfg)?;
@@ -163,7 +188,9 @@ pub async fn begin_login(provider: Provider) -> Result<Credentials, String> {
         .ok_or_else(|| "callback missing code/state parameters".to_string())?;
 
     if params.state != state {
-        let _ = request.respond(Response::from_string("State mismatch. You may close this tab."));
+        let _ = request.respond(Response::from_string(
+            "State mismatch. You may close this tab.",
+        ));
         return Err("state mismatch on OAuth callback — rejecting".to_string());
     }
 
@@ -227,9 +254,15 @@ pub async fn begin_login(provider: Provider) -> Result<Credentials, String> {
 /// when `expires_at` is within `threshold` of `now` (including already
 /// expired), false when there is no known expiry (nothing to refresh
 /// against) or expiry is comfortably in the future. Pure function — no I/O.
-pub fn should_refresh(expires_at: Option<chrono::DateTime<Utc>>, now: chrono::DateTime<Utc>, threshold: Duration) -> bool {
+pub fn should_refresh(
+    expires_at: Option<chrono::DateTime<Utc>>,
+    now: chrono::DateTime<Utc>,
+    threshold: Duration,
+) -> bool {
     match expires_at {
-        Some(exp) => exp - now <= chrono::Duration::from_std(threshold).unwrap_or(chrono::Duration::zero()),
+        Some(exp) => {
+            exp - now <= chrono::Duration::from_std(threshold).unwrap_or(chrono::Duration::zero())
+        }
         None => false,
     }
 }
@@ -241,7 +274,10 @@ pub fn should_refresh(expires_at: Option<chrono::DateTime<Utc>>, now: chrono::Da
 ///
 /// SECURITY: no verifier/code/token value is ever logged; error strings
 /// carry only status codes / non-secret text.
-pub async fn refresh_access_token(provider: Provider, creds: &Credentials) -> Result<Credentials, String> {
+pub async fn refresh_access_token(
+    provider: Provider,
+    creds: &Credentials,
+) -> Result<Credentials, String> {
     let cfg = config(provider)?;
 
     let refresh_token = creds

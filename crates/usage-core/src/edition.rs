@@ -9,9 +9,17 @@ pub fn free_providers() -> &'static [Provider] {
     &[Provider::Codex, Provider::Claude, Provider::Agy]
 }
 
-/// Providers that require a Pro license to use at runtime (Cursor, Grok, Higgsfield).
+/// Providers that require a Pro license to use at runtime.
 pub fn paid_providers() -> &'static [Provider] {
-    &[Provider::Cursor, Provider::Grok, Provider::Higgsfield]
+    &[
+        Provider::Cursor,
+        Provider::Grok,
+        Provider::Higgsfield,
+        Provider::Kimi,
+        Provider::OpenCode,
+        Provider::DeepSeek,
+        Provider::OpenRouter,
+    ]
 }
 
 /// True when `provider` requires a Pro license at runtime.
@@ -116,8 +124,8 @@ mod tests {
 
     #[test]
     fn all_providers_includes_free_and_paid() {
-        assert_eq!(paid_providers().len(), 3);
-        assert_eq!(all_providers().len(), 6);
+        assert_eq!(paid_providers().len(), 7);
+        assert_eq!(all_providers().len(), 10);
     }
 
     #[test]
@@ -125,6 +133,10 @@ mod tests {
         assert!(requires_pro(Provider::Cursor));
         assert!(requires_pro(Provider::Grok));
         assert!(requires_pro(Provider::Higgsfield));
+        assert!(requires_pro(Provider::Kimi));
+        assert!(requires_pro(Provider::OpenCode));
+        assert!(requires_pro(Provider::DeepSeek));
+        assert!(requires_pro(Provider::OpenRouter));
         assert!(!requires_pro(Provider::Codex));
         assert!(!requires_pro(Provider::Claude));
         assert!(!requires_pro(Provider::Agy));
@@ -148,7 +160,15 @@ mod tests {
 
     #[test]
     fn free_limit_reached_is_always_false_for_paid_providers() {
-        for provider in [Provider::Cursor, Provider::Grok, Provider::Higgsfield] {
+        for provider in [
+            Provider::Cursor,
+            Provider::Grok,
+            Provider::Higgsfield,
+            Provider::Kimi,
+            Provider::OpenCode,
+            Provider::DeepSeek,
+            Provider::OpenRouter,
+        ] {
             let accounts = [
                 account("paid-1", provider),
                 account("paid-2", provider),

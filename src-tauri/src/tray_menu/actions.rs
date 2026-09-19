@@ -2,7 +2,6 @@ use usage_core::account::{Account, Provider};
 
 use usage_core::AuthMethod;
 
-
 #[derive(Clone, Copy, Debug)]
 pub struct AuthActionSpec {
     pub provider: Provider,
@@ -13,61 +12,85 @@ pub struct AuthActionSpec {
 
 /// The full registry of Add Account actions, independent of license state.
 const ALL_AUTH_ACTION_SPECS: &[AuthActionSpec] = &[
-        AuthActionSpec {
-            provider: Provider::Codex,
-            method: AuthMethod::Cli,
-            event_id: "add-codex-cli",
-            label: "Add Codex (CLI)",
-        },
-        AuthActionSpec {
-            provider: Provider::Codex,
-            method: AuthMethod::BrowserOAuth,
-            event_id: "add-codex-oauth",
-            label: "Login Codex (browser)",
-        },
-        AuthActionSpec {
-            provider: Provider::Claude,
-            method: AuthMethod::Cli,
-            event_id: "add-claude-cli",
-            label: "Add Claude (CLI)",
-        },
-        AuthActionSpec {
-            provider: Provider::Claude,
-            method: AuthMethod::BrowserOAuth,
-            event_id: "add-claude-oauth",
-            label: "Login Claude (browser)",
-        },
-        AuthActionSpec {
-            provider: Provider::Agy,
-            method: AuthMethod::BrowserOAuth,
-            event_id: "add-agy-oauth",
-            label: "Login Antigravity (browser)",
-        },
-        AuthActionSpec {
-            provider: Provider::Cursor,
-            method: AuthMethod::LocalDatabase,
-            event_id: "add-cursor-local",
-            label: "Import Cursor (local, Experimental)",
-        },
-        AuthActionSpec {
-            provider: Provider::Grok,
-            method: AuthMethod::ManagementKeyClipboard,
-            event_id: "add-grok-clipboard",
-            label: "Import xAI API credits (clipboard)",
-        },
-        AuthActionSpec {
-            provider: Provider::Grok,
-            method: AuthMethod::ManagementKeyEnvironment,
-            event_id: "add-grok-env",
-            label: "Import xAI API credits (env vars)",
-        },
-        AuthActionSpec {
-            provider: Provider::Higgsfield,
-            method: AuthMethod::Cli,
-            event_id: "add-higgsfield-cli",
-            label: "Add Higgsfield (CLI)",
-        },
-    ];
+    AuthActionSpec {
+        provider: Provider::Codex,
+        method: AuthMethod::Cli,
+        event_id: "add-codex-cli",
+        label: "Add Codex (CLI)",
+    },
+    AuthActionSpec {
+        provider: Provider::Codex,
+        method: AuthMethod::BrowserOAuth,
+        event_id: "add-codex-oauth",
+        label: "Login Codex (browser)",
+    },
+    AuthActionSpec {
+        provider: Provider::Claude,
+        method: AuthMethod::Cli,
+        event_id: "add-claude-cli",
+        label: "Add Claude (CLI)",
+    },
+    AuthActionSpec {
+        provider: Provider::Claude,
+        method: AuthMethod::BrowserOAuth,
+        event_id: "add-claude-oauth",
+        label: "Login Claude (browser)",
+    },
+    AuthActionSpec {
+        provider: Provider::Agy,
+        method: AuthMethod::BrowserOAuth,
+        event_id: "add-agy-oauth",
+        label: "Login Antigravity (browser)",
+    },
+    AuthActionSpec {
+        provider: Provider::Cursor,
+        method: AuthMethod::LocalDatabase,
+        event_id: "add-cursor-local",
+        label: "Import Cursor (local, Experimental)",
+    },
+    AuthActionSpec {
+        provider: Provider::Grok,
+        method: AuthMethod::ManagementKeyClipboard,
+        event_id: "add-grok-clipboard",
+        label: "Import xAI API credits (clipboard)",
+    },
+    AuthActionSpec {
+        provider: Provider::Grok,
+        method: AuthMethod::ManagementKeyEnvironment,
+        event_id: "add-grok-env",
+        label: "Import xAI API credits (env vars)",
+    },
+    AuthActionSpec {
+        provider: Provider::Higgsfield,
+        method: AuthMethod::Cli,
+        event_id: "add-higgsfield-cli",
+        label: "Add Higgsfield (CLI)",
+    },
+    AuthActionSpec {
+        provider: Provider::Kimi,
+        method: AuthMethod::Cli,
+        event_id: "add-kimi-cli",
+        label: "Add Kimi (CLI)",
+    },
+    AuthActionSpec {
+        provider: Provider::OpenCode,
+        method: AuthMethod::Cli,
+        event_id: "add-opencode-cli",
+        label: "Add OpenCode Go (CLI)",
+    },
+    AuthActionSpec {
+        provider: Provider::DeepSeek,
+        method: AuthMethod::Cli,
+        event_id: "add-deepseek-cli",
+        label: "Add DeepSeek (dsh)",
+    },
+    AuthActionSpec {
+        provider: Provider::OpenRouter,
+        method: AuthMethod::Cli,
+        event_id: "add-openrouter-cli",
+        label: "Add OpenRouter (CLI)",
+    },
+];
 
 /// Add Account actions available to the user right now: paid-provider specs
 /// are omitted unless `is_pro` — the account stays hidden from "Add Account"

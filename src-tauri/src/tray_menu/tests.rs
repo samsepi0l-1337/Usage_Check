@@ -27,6 +27,10 @@
         assert!(!specs.iter().any(|s| s.provider == Provider::Cursor));
         assert!(!specs.iter().any(|s| s.provider == Provider::Grok));
         assert!(!specs.iter().any(|s| s.provider == Provider::Higgsfield));
+        assert!(!specs.iter().any(|s| s.provider == Provider::Kimi));
+        assert!(!specs.iter().any(|s| s.provider == Provider::OpenCode));
+        assert!(!specs.iter().any(|s| s.provider == Provider::DeepSeek));
+        assert!(!specs.iter().any(|s| s.provider == Provider::OpenRouter));
     }
 
     #[test]
@@ -35,6 +39,10 @@
         assert!(specs.iter().any(|s| s.provider == Provider::Cursor));
         assert!(specs.iter().any(|s| s.provider == Provider::Grok));
         assert!(specs.iter().any(|s| s.provider == Provider::Higgsfield));
+        assert!(specs.iter().any(|s| s.provider == Provider::Kimi));
+        assert!(specs.iter().any(|s| s.provider == Provider::OpenCode));
+        assert!(specs.iter().any(|s| s.provider == Provider::DeepSeek));
+        assert!(specs.iter().any(|s| s.provider == Provider::OpenRouter));
     }
 
     #[test]
@@ -140,6 +148,22 @@
         let spec = spec_for_event("add-higgsfield-cli").expect("Higgsfield CLI is registered");
         assert_eq!(spec.provider, Provider::Higgsfield);
         assert_eq!(spec.method, AuthMethod::Cli);
+
+        let spec = spec_for_event("add-kimi-cli").expect("Kimi CLI is registered");
+        assert_eq!(spec.provider, Provider::Kimi);
+        assert_eq!(spec.label, "Add Kimi (CLI)");
+
+        let spec = spec_for_event("add-opencode-cli").expect("OpenCode CLI is registered");
+        assert_eq!(spec.provider, Provider::OpenCode);
+        assert_eq!(spec.label, "Add OpenCode Go (CLI)");
+
+        let spec = spec_for_event("add-deepseek-cli").expect("DeepSeek CLI is registered");
+        assert_eq!(spec.provider, Provider::DeepSeek);
+        assert_eq!(spec.label, "Add DeepSeek (dsh)");
+
+        let spec = spec_for_event("add-openrouter-cli").expect("OpenRouter CLI is registered");
+        assert_eq!(spec.provider, Provider::OpenRouter);
+        assert_eq!(spec.label, "Add OpenRouter (CLI)");
     }
 
     use crate::poller::AccountUsage;

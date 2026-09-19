@@ -25,7 +25,11 @@ pub fn auth_capability(provider: Provider) -> AuthCapability {
             AuthMethod::ManagementKeyClipboard,
             AuthMethod::ManagementKeyEnvironment,
         ],
-        Provider::Higgsfield => &[AuthMethod::Cli],
+        Provider::Higgsfield
+        | Provider::Kimi
+        | Provider::OpenCode
+        | Provider::DeepSeek
+        | Provider::OpenRouter => &[AuthMethod::Cli],
     };
     AuthCapability { methods }
 }

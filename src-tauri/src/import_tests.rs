@@ -483,3 +483,159 @@ fn xai_stored_as_management_reference() {
         );
     }
 }
+
+#[test]
+fn kimi_import_reads_first_usable_credentials_file() {
+    let dir = TempDir::new().unwrap();
+    let creds_dir = dir.path().join("credentials");
+    std::fs::create_dir_all(&creds_dir).unwrap();
+    std::fs::write(
+        creds_dir.join("kimi-code.json"),
+        r#"{"access_token":"kimi-at","refresh_token":"kimi-rt","expires_at":1769861835.261056,"scope":"kimi-code","token_type":"Bearer"}"#,
+    )
+    .unwrap();
+    let imported = super::kimi::load_kimi_cli_auth_from_files(&[creds_dir.join("kimi-code.json")])
+        .expect("kimi import");
+    assert_eq!(imported.credentials.access_token, "kimi-at");
+    assert_eq!(
+        imported.credentials.refresh_token.as_deref(),
+        Some("kimi-rt")
+    );
+    assert!(imported.credentials.expires_at.is_some());
+}
+
+#[test]
+fn kimi_import_skips_expired_without_refresh() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("expired.json");
+    std::fs::write(&path, r#"{"access_token":"old","expires_at":1000}"#).unwrap();
+    let err = super::kimi::load_kimi_cli_auth_from_files(&[path]).unwrap_err();
+    assert!(err.contains("Kimi Code credentials not found"), "{err}");
+}
+
+#[test]
+fn opencode_import_reads_only_go_key() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("auth.json");
+    std::fs::write(
+        &path,
+        r#"{
+            "opencode": { "type": "api", "key": "zen-should-be-ignored" },
+            "opencode-go": { "type": "api", "key": "oc_go_key" },
+            "openrouter": { "type": "api", "key": "sk-or-should-not-go-here" }
+        }"#,
+    )
+    .unwrap();
+    let imported = super::opencode::load_opencode_cli_auth_from(&path).expect("opencode-go import");
+    assert_eq!(imported.credentials.access_token, "oc_go_key");
+    assert_eq!(imported.label, "OpenCode Go");
+}
+
+#[test]
+fn opencode_import_missing_go_entry_mentions_login() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("auth.json");
+    std::fs::write(&path, r#"{"opencode":{"type":"api","key":"zen"}}"#).unwrap();
+    let err = super::opencode::load_opencode_cli_auth_from(&path).unwrap_err();
+    assert!(err.contains("opencode auth login"), "{err}");
+    assert!(err.contains("OpenCode Go"), "{err}");
+}
+
+#[test]
+fn deepseek_yaml_refs_and_flat_and_env() {
+    assert_eq!(
+        parse_deepseek_api_key("version: 1\nrefs:\n  DEEPSEEK_API_KEY: sk-from-refs\n").as_deref(),
+        Some("sk-from-refs")
+    );
+    assert_eq!(
+        parse_deepseek_api_key("DEEPSEEK_API_KEY: sk-flat\n").as_deref(),
+        Some("sk-flat")
+    );
+    assert_eq!(
+        parse_deepseek_api_key("export DEEPSEEK_API_KEY=\"sk-env\"\n").as_deref(),
+        Some("sk-env")
+    );
+
+    let dir = TempDir::new().unwrap();
+    std::fs::write(
+        dir.path().join(".credentials.yaml"),
+        "DEEPSEEK_API_KEY: sk-yaml\n",
+    )
+    .unwrap();
+    let imported = super::deepseek::load_deepseek_cli_auth_from(dir.path()).unwrap();
+    assert_eq!(imported.credentials.access_token, "sk-yaml");
+
+    let env_only = TempDir::new().unwrap();
+    std::fs::write(env_only.path().join(".env"), "DEEPSEEK_API_KEY=sk-dotenv\n").unwrap();
+    let imported = super::deepseek::load_deepseek_cli_auth_from(env_only.path()).unwrap();
+    assert_eq!(imported.credentials.access_token, "sk-dotenv");
+}
+
+#[test]
+fn deepseek_missing_files_mentions_dsh() {
+    let dir = TempDir::new().unwrap();
+    let err = super::deepseek::load_deepseek_cli_auth_from(dir.path()).unwrap_err();
+    assert!(err.contains("npx @deepseek-ai/dsh"), "{err}");
+    assert!(err.contains("~/.dsh/.env"), "{err}");
+}
+
+#[test]
+fn openrouter_prefers_ori_config_over_opencode_auth() {
+    let dir = TempDir::new().unwrap();
+    let ori = dir.path().join("config.json");
+    let oc = dir.path().join("auth.json");
+    std::fs::write(&ori, r#"{"env":{"OPENROUTER_API_KEY":"sk-or-from-ori"}}"#).unwrap();
+    std::fs::write(
+        &oc,
+        r#"{"openrouter":{"type":"api","key":"sk-or-from-opencode"},"opencode-go":{"type":"api","key":"oc_ignored"}}"#,
+    )
+    .unwrap();
+    let imported = super::openrouter::load_openrouter_cli_auth_from(Some(&ori), Some(&oc)).unwrap();
+    assert_eq!(imported.credentials.access_token, "sk-or-from-ori");
+}
+
+#[test]
+fn openrouter_falls_back_to_opencode_auth_entry() {
+    let dir = TempDir::new().unwrap();
+    let oc = dir.path().join("auth.json");
+    std::fs::write(
+        &oc,
+        r#"{"openrouter":{"type":"api","key":"sk-or-from-opencode"},"opencode-go":{"type":"api","key":"oc_ignored"}}"#,
+    )
+    .unwrap();
+    let imported = super::openrouter::load_openrouter_cli_auth_from(None, Some(&oc)).unwrap();
+    assert_eq!(imported.credentials.access_token, "sk-or-from-opencode");
+}
+
+#[test]
+fn new_pro_providers_store_as_browser_oauth_secrets() {
+    use crate::store::AccountStore;
+    use usage_core::account::AuthSource;
+
+    let root = TempDir::new().unwrap();
+    let store = AccountStore::new_at(root.path().to_path_buf());
+    for provider in [
+        Provider::Kimi,
+        Provider::OpenCode,
+        Provider::DeepSeek,
+        Provider::OpenRouter,
+    ] {
+        let account = store
+            .add_with(
+                provider,
+                provider.display_name().into(),
+                Credentials {
+                    access_token: format!("{provider:?}-token"),
+                    refresh_token: None,
+                    account_id: None,
+                    expires_at: None,
+                },
+                || true,
+            )
+            .expect("store secret");
+        assert!(
+            matches!(account.auth_source, AuthSource::BrowserOAuth { .. }),
+            "{provider:?} should persist as BrowserOAuth"
+        );
+    }
+}
