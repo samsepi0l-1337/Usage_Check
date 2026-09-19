@@ -325,6 +325,14 @@ fn windsurf_status(
     }
 }
 
+fn windsurf_quota_status(quota: &WindsurfQuota) -> &'static str {
+    if quota.five_hour.is_none() && quota.week.is_none() {
+        "experimental_error"
+    } else {
+        "ok"
+    }
+}
+
 pub(super) async fn poll_copilot(
     store: &AccountStore,
     client: &reqwest::Client,
@@ -385,11 +393,7 @@ pub(super) async fn poll_windsurf(
             if quota.plan.is_none() {
                 quota.plan = session.plan.clone();
             }
-            account_usage_from_windsurf(
-                account,
-                &quota,
-                windsurf_status(&session.identity, &expected_identity, Ok(())),
-            )
+            account_usage_from_windsurf(account, &quota, windsurf_quota_status(&quota))
         }
         Err(status) => account_usage_from_windsurf(
             account,

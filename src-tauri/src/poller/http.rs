@@ -368,6 +368,17 @@ const WINDSURF_STATUS_URLS: &[&str] = &[
     "https://server.codeium.com/exa.seat_management_pb.SeatManagementService/GetUserStatus",
 ];
 
+/// Continue to the Codeium host only on 404, 5xx, or transport failure.
+/// 401/403 (and other client errors) must not be overwritten by the fallback.
+fn windsurf_should_try_fallback(status: Option<u16>) -> bool {
+    match status {
+        None => true,
+        Some(404) => true,
+        Some(code) if (500..600).contains(&code) => true,
+        _ => false,
+    }
+}
+
 pub(super) async fn fetch_windsurf_status(
     client: &reqwest::Client,
     api_key: &str,
@@ -380,7 +391,7 @@ pub(super) async fn fetch_windsurf_status(
     });
     let mut last_status: Option<u16> = None;
     for url in WINDSURF_STATUS_URLS {
-        let resp = client
+        let resp = match client
             .post(*url)
             .header("Accept", "application/json")
             .header("Content-Type", "application/json")
@@ -390,10 +401,17 @@ pub(super) async fn fetch_windsurf_status(
             .json(&body)
             .send()
             .await
-            .map_err(|_| None)?;
+        {
+            Ok(resp) => resp,
+            Err(_) => continue,
+        };
         let status = resp.status();
         if !status.is_success() {
-            last_status = Some(status.as_u16());
+            let code = status.as_u16();
+            if !windsurf_should_try_fallback(Some(code)) {
+                return Err(Some(code));
+            }
+            last_status = Some(code);
             continue;
         }
         let root: serde_json::Value = resp.json().await.map_err(|_| Some(status.as_u16()))?;
@@ -413,4 +431,24 @@ pub(super) fn fetch_higgsfield_account_json() -> Result<serde_json::Value, ()> {
         return Err(());
     }
     serde_json::from_slice(&output.stdout).map_err(|_| ())
+}
+
+#[cfg(test)]
+mod windsurf_fallback_tests {
+    use super::windsurf_should_try_fallback;
+
+    #[test]
+    fn auth_errors_do_not_fall_through() {
+        assert!(!windsurf_should_try_fallback(Some(401)));
+        assert!(!windsurf_should_try_fallback(Some(403)));
+        assert!(!windsurf_should_try_fallback(Some(429)));
+    }
+
+    #[test]
+    fn not_found_server_errors_and_transport_fall_through() {
+        assert!(windsurf_should_try_fallback(Some(404)));
+        assert!(windsurf_should_try_fallback(Some(500)));
+        assert!(windsurf_should_try_fallback(Some(503)));
+        assert!(windsurf_should_try_fallback(None));
+    }
 }

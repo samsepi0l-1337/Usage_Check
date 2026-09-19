@@ -76,6 +76,8 @@ fn overage_suffix(root: &Value) -> Option<String> {
     let micros = first_f64(
         root,
         &[
+            &["userStatus", "planStatus", "overageBalanceMicros"],
+            &["user_status", "plan_status", "overage_balance_micros"],
             &["overageBalanceMicros"],
             &["overage_balance_micros"],
             &["planStatus", "overageBalanceMicros"],
@@ -95,11 +97,20 @@ fn overage_suffix(root: &Value) -> Option<String> {
 pub fn parse_windsurf_user_status(root: &Value) -> WindsurfQuota {
     let email = first_str(
         root,
-        &[&["email"], &["user", "email"], &["userStatus", "email"]],
+        &[
+            &["email"],
+            &["user", "email"],
+            &["userStatus", "email"],
+            &["user_status", "email"],
+        ],
     );
     let plan = first_str(
         root,
         &[
+            &["userStatus", "planStatus", "planInfo", "planName"],
+            &["user_status", "plan_status", "plan_info", "plan_name"],
+            &["userStatus", "planStatus", "planName"],
+            &["planStatus", "planInfo", "planName"],
             &["planStatus", "planName"],
             &["plan_status", "plan_name"],
             &["planName"],
@@ -111,6 +122,12 @@ pub fn parse_windsurf_user_status(root: &Value) -> WindsurfQuota {
     let daily = first_f64(
         root,
         &[
+            &["userStatus", "planStatus", "dailyQuotaRemainingPercent"],
+            &[
+                "user_status",
+                "plan_status",
+                "daily_quota_remaining_percent",
+            ],
             &["planStatus", "dailyQuotaRemainingPercent"],
             &["plan_status", "daily_quota_remaining_percent"],
             &["dailyQuotaRemainingPercent"],
@@ -124,6 +141,12 @@ pub fn parse_windsurf_user_status(root: &Value) -> WindsurfQuota {
     let week = first_f64(
         root,
         &[
+            &["userStatus", "planStatus", "weeklyQuotaRemainingPercent"],
+            &[
+                "user_status",
+                "plan_status",
+                "weekly_quota_remaining_percent",
+            ],
             &["planStatus", "weeklyQuotaRemainingPercent"],
             &["plan_status", "weekly_quota_remaining_percent"],
             &["weeklyQuotaRemainingPercent"],
@@ -197,5 +220,24 @@ mod tests {
         assert!(q.five_hour.is_none());
         assert!(q.week.is_none());
         assert!(q.detail_suffix.is_none());
+    }
+
+    #[test]
+    fn parses_live_user_status_plan_status_nest() {
+        let v = json!({
+            "userStatus": {
+                "planStatus": {
+                    "planInfo": { "planName": "Pro" },
+                    "dailyQuotaRemainingPercent": 80,
+                    "weeklyQuotaRemainingPercent": 55,
+                    "overageBalanceMicros": "964220000"
+                }
+            }
+        });
+        let q = parse_windsurf_user_status(&v);
+        assert_eq!(q.plan.as_deref(), Some("Pro"));
+        assert!((q.five_hour.as_ref().unwrap().percent - 20.0).abs() < 0.001);
+        assert!((q.week.as_ref().unwrap().percent - 45.0).abs() < 0.001);
+        assert_eq!(q.detail_suffix.as_deref(), Some("$964.22 left"));
     }
 }

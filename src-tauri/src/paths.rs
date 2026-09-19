@@ -236,13 +236,35 @@ fn xdg_config_dir() -> Option<PathBuf> {
     env_path("XDG_CONFIG_HOME").or_else(|| home_dir().map(|h| h.join(".config")))
 }
 
+fn github_copilot_token_files_from(
+    xdg: Option<PathBuf>,
+    localappdata: Option<PathBuf>,
+) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    for root in [xdg, localappdata].into_iter().flatten() {
+        let dir = root.join("github-copilot");
+        files.push(dir.join("apps.json"));
+        files.push(dir.join("hosts.json"));
+    }
+    files
+}
+
 /// GitHub Copilot token JSON files (`apps.json` then `hosts.json`).
+/// Windows also tries `%LOCALAPPDATA%/github-copilot/` after XDG/`~/.config`.
 pub fn github_copilot_token_files() -> Vec<PathBuf> {
-    let Some(config) = xdg_config_dir() else {
-        return Vec::new();
-    };
-    let dir = config.join("github-copilot");
-    vec![dir.join("apps.json"), dir.join("hosts.json")]
+    github_copilot_token_files_from(
+        xdg_config_dir(),
+        {
+            #[cfg(target_os = "windows")]
+            {
+                env_path("LOCALAPPDATA")
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                None
+            }
+        },
+    )
 }
 
 /// `gh` `hosts.yml` candidates (`oauth_token` / `token` under github.com).
@@ -380,6 +402,23 @@ mod tests {
             assert_eq!(suffix.len(), 8);
             assert!(suffix.chars().all(|c| c.is_ascii_hexdigit()));
         }
+    }
+
+    #[test]
+    fn copilot_token_files_prefer_apps_then_windows_localappdata() {
+        let files = github_copilot_token_files_from(
+            Some(PathBuf::from("/xdg")),
+            Some(PathBuf::from("/local")),
+        );
+        assert_eq!(
+            files,
+            vec![
+                PathBuf::from("/xdg/github-copilot/apps.json"),
+                PathBuf::from("/xdg/github-copilot/hosts.json"),
+                PathBuf::from("/local/github-copilot/apps.json"),
+                PathBuf::from("/local/github-copilot/hosts.json"),
+            ]
+        );
     }
 
     #[test]

@@ -47,6 +47,19 @@ fn copilot_and_windsurf_status_maps() {
         "experimental_error"
     );
     assert_eq!(windsurf_status("ws-a", "ws-b", Ok(())), "identity_changed");
+    assert_eq!(
+        windsurf_quota_status(&WindsurfQuota::default()),
+        "experimental_error"
+    );
+    let filled = WindsurfQuota {
+        week: Some(usage_core::models::QuotaUsage {
+            percent: 10.0,
+            resets_at: None,
+            window_seconds: None,
+        }),
+        ..WindsurfQuota::default()
+    };
+    assert_eq!(windsurf_quota_status(&filled), "ok");
 }
 
 #[test]

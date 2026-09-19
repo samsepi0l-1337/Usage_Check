@@ -59,13 +59,21 @@ fn key_fingerprint(api_key: &str) -> String {
     format!("key:{hex}")
 }
 
+fn root_str(root: &serde_json::Value, keys: &[&str]) -> Option<String> {
+    let map = root.as_object()?;
+    for key in keys {
+        if let Some(found) = map.get(*key).and_then(nonempty_str) {
+            return Some(found);
+        }
+    }
+    None
+}
+
 fn identity_from_status(root: &serde_json::Value, api_key: &str) -> String {
     first_named_string(root, &["email"])
         .map(|email| email.to_ascii_lowercase())
-        .or_else(|| first_named_string(root, &["userId", "user_id", "id"]))
-        .or_else(|| {
-            first_named_string(root, &["name"]).map(|name| name.trim().to_ascii_lowercase())
-        })
+        .or_else(|| root_str(root, &["userId", "user_id"]))
+        .or_else(|| root_str(root, &["name"]).map(|name| name.to_ascii_lowercase()))
         .unwrap_or_else(|| key_fingerprint(api_key))
 }
 
@@ -187,11 +195,23 @@ mod tests {
     #[test]
     fn accepts_nested_api_key() {
         let db = create_test_db(&serde_json::json!({
-            "status": { "api_key": "nested-key", "userId": "user-1" }
+            "userId": "user-1",
+            "status": { "api_key": "nested-key" }
         }));
         let session = read_windsurf_session(db.path()).unwrap();
         assert_eq!(session.api_key, "nested-key");
         assert_eq!(session.identity, "user-1");
+    }
+
+    #[test]
+    fn nested_generic_id_is_not_identity() {
+        let db = create_test_db(&serde_json::json!({
+            "apiKey": "ws-key",
+            "session": { "id": "rotating-session" }
+        }));
+        let session = read_windsurf_session(db.path()).unwrap();
+        assert!(session.identity.starts_with("key:"));
+        assert_ne!(session.identity, "rotating-session");
     }
 
     #[test]
