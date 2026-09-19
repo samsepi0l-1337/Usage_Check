@@ -143,7 +143,9 @@ pub fn config(provider: Provider) -> Result<ProviderOAuth, String> {
         | Provider::Higgsfield
         | Provider::OpenCode
         | Provider::DeepSeek
-        | Provider::OpenRouter => Err(format!(
+        | Provider::OpenRouter
+        | Provider::Copilot
+        | Provider::Windsurf => Err(format!(
             "{} uses local import — choose Import from the tray Add Account menu",
             provider.display_name()
         )),

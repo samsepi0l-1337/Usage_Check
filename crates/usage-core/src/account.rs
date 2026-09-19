@@ -15,6 +15,8 @@ pub enum Provider {
     OpenCode,
     DeepSeek,
     OpenRouter,
+    Copilot,
+    Windsurf,
 }
 
 impl Provider {
@@ -30,6 +32,8 @@ impl Provider {
             Provider::OpenCode => "opencode",
             Provider::DeepSeek => "deepseek",
             Provider::OpenRouter => "openrouter",
+            Provider::Copilot => "copilot",
+            Provider::Windsurf => "windsurf",
         }
     }
     #[allow(clippy::should_implement_trait)]
@@ -45,6 +49,8 @@ impl Provider {
             "opencode" => Some(Provider::OpenCode),
             "deepseek" => Some(Provider::DeepSeek),
             "openrouter" => Some(Provider::OpenRouter),
+            "copilot" => Some(Provider::Copilot),
+            "windsurf" => Some(Provider::Windsurf),
             _ => None,
         }
     }
@@ -61,6 +67,8 @@ impl Provider {
             Provider::OpenCode => "OpenCode Go",
             Provider::DeepSeek => "DeepSeek",
             Provider::OpenRouter => "OpenRouter",
+            Provider::Copilot => "GitHub Copilot",
+            Provider::Windsurf => "Windsurf",
         }
     }
 }
@@ -91,6 +99,10 @@ pub enum AuthSource {
         credential_id: String,
     },
     CursorDatabase {
+        database_path: PathBuf,
+        expected_identity: String,
+    },
+    WindsurfDatabase {
         database_path: PathBuf,
         expected_identity: String,
     },
@@ -178,6 +190,14 @@ mod tests {
             auth_capability(Provider::OpenRouter).methods,
             &[AuthMethod::Cli]
         );
+        assert_eq!(
+            auth_capability(Provider::Copilot).methods,
+            &[AuthMethod::Cli]
+        );
+        assert_eq!(
+            auth_capability(Provider::Windsurf).methods,
+            &[AuthMethod::LocalDatabase]
+        );
     }
 
     #[test]
@@ -211,6 +231,29 @@ mod tests {
                 expected_identity: "user@example.com".into(),
             },
         );
+    }
+
+    #[test]
+    fn windsurf_database_account_round_trips_json() {
+        assert_account_json_round_trip(
+            Provider::Windsurf,
+            AuthSource::WindsurfDatabase {
+                database_path: PathBuf::from("/profiles/windsurf/state.vscdb"),
+                expected_identity: "user@example.com".into(),
+            },
+        );
+        let json = serde_json::to_value(AuthSource::WindsurfDatabase {
+            database_path: PathBuf::from("/profiles/windsurf/state.vscdb"),
+            expected_identity: "user@example.com".into(),
+        })
+        .unwrap();
+        assert_eq!(json["kind"], "windsurf_database");
+        let cursor = serde_json::to_value(AuthSource::CursorDatabase {
+            database_path: PathBuf::from("/profiles/cursor/state.vscdb"),
+            expected_identity: "user@example.com".into(),
+        })
+        .unwrap();
+        assert_eq!(cursor["kind"], "cursor_database");
     }
 
     #[test]
@@ -250,5 +293,11 @@ mod tests {
         assert_eq!(Provider::DeepSeek.display_name(), "DeepSeek");
         assert_eq!(Provider::OpenRouter.as_str(), "openrouter");
         assert_eq!(Provider::OpenRouter.display_name(), "OpenRouter");
+        assert_eq!(Provider::from_str("copilot"), Some(Provider::Copilot));
+        assert_eq!(Provider::Copilot.as_str(), "copilot");
+        assert_eq!(Provider::Copilot.display_name(), "GitHub Copilot");
+        assert_eq!(Provider::from_str("windsurf"), Some(Provider::Windsurf));
+        assert_eq!(Provider::Windsurf.as_str(), "windsurf");
+        assert_eq!(Provider::Windsurf.display_name(), "Windsurf");
     }
 }

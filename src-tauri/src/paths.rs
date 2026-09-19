@@ -232,14 +232,41 @@ fn hex_prefix(bytes: impl AsRef<[u8]>, n: usize) -> String {
         .collect()
 }
 
-/// Cursor `state.vscdb` (read-only) under globalStorage.
-pub fn cursor_state_vscdb() -> Option<PathBuf> {
+fn xdg_config_dir() -> Option<PathBuf> {
+    env_path("XDG_CONFIG_HOME").or_else(|| home_dir().map(|h| h.join(".config")))
+}
+
+/// GitHub Copilot token JSON files (`apps.json` then `hosts.json`).
+pub fn github_copilot_token_files() -> Vec<PathBuf> {
+    let Some(config) = xdg_config_dir() else {
+        return Vec::new();
+    };
+    let dir = config.join("github-copilot");
+    vec![dir.join("apps.json"), dir.join("hosts.json")]
+}
+
+/// `gh` `hosts.yml` candidates (`oauth_token` / `token` under github.com).
+pub fn gh_hosts_yml_files() -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    if let Some(config) = xdg_config_dir() {
+        files.push(config.join("gh").join("hosts.yml"));
+    }
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(appdata) = env_path("APPDATA") {
+            files.push(appdata.join("GitHub CLI").join("hosts.yml"));
+        }
+    }
+    files
+}
+
+fn editor_state_vscdb(app_name: &str) -> Option<PathBuf> {
     #[cfg(target_os = "macos")]
     {
         home_dir().map(|h| {
             h.join("Library")
                 .join("Application Support")
-                .join("Cursor")
+                .join(app_name)
                 .join("User")
                 .join("globalStorage")
                 .join("state.vscdb")
@@ -251,7 +278,7 @@ pub fn cursor_state_vscdb() -> Option<PathBuf> {
             .map(PathBuf::from)
             .or_else(home_dir)
             .map(|h| {
-                h.join("Cursor")
+                h.join(app_name)
                     .join("User")
                     .join("globalStorage")
                     .join("state.vscdb")
@@ -261,12 +288,22 @@ pub fn cursor_state_vscdb() -> Option<PathBuf> {
     {
         return home_dir().map(|h| {
             h.join(".config")
-                .join("Cursor")
+                .join(app_name)
                 .join("User")
                 .join("globalStorage")
                 .join("state.vscdb")
         });
     }
+}
+
+/// Cursor `state.vscdb` (read-only) under globalStorage.
+pub fn cursor_state_vscdb() -> Option<PathBuf> {
+    editor_state_vscdb("Cursor")
+}
+
+/// Windsurf `state.vscdb` (read-only) under globalStorage.
+pub fn windsurf_state_vscdb() -> Option<PathBuf> {
+    editor_state_vscdb("Windsurf")
 }
 
 #[cfg(test)]
@@ -342,6 +379,28 @@ mod tests {
             let suffix = name.rsplit('-').next().unwrap();
             assert_eq!(suffix.len(), 8);
             assert!(suffix.chars().all(|c| c.is_ascii_hexdigit()));
+        }
+    }
+
+    #[test]
+    fn copilot_and_windsurf_paths_are_stable() {
+        let files = github_copilot_token_files();
+        assert!(
+            files
+                .iter()
+                .any(|p| p.file_name().and_then(|n| n.to_str()) == Some("apps.json")),
+            "expected apps.json in {files:?}"
+        );
+        let hosts = gh_hosts_yml_files();
+        assert!(
+            hosts
+                .iter()
+                .any(|p| p.file_name().and_then(|n| n.to_str()) == Some("hosts.yml")),
+            "expected hosts.yml in {hosts:?}"
+        );
+        if let Some(p) = windsurf_state_vscdb() {
+            assert_eq!(p.file_name().and_then(|n| n.to_str()), Some("state.vscdb"));
+            assert!(p.to_string_lossy().contains("Windsurf"));
         }
     }
 

@@ -19,6 +19,8 @@ pub fn paid_providers() -> &'static [Provider] {
         Provider::OpenCode,
         Provider::DeepSeek,
         Provider::OpenRouter,
+        Provider::Copilot,
+        Provider::Windsurf,
     ]
 }
 
@@ -124,8 +126,8 @@ mod tests {
 
     #[test]
     fn all_providers_includes_free_and_paid() {
-        assert_eq!(paid_providers().len(), 7);
-        assert_eq!(all_providers().len(), 10);
+        assert_eq!(paid_providers().len(), 9);
+        assert_eq!(all_providers().len(), 12);
     }
 
     #[test]
@@ -137,6 +139,8 @@ mod tests {
         assert!(requires_pro(Provider::OpenCode));
         assert!(requires_pro(Provider::DeepSeek));
         assert!(requires_pro(Provider::OpenRouter));
+        assert!(requires_pro(Provider::Copilot));
+        assert!(requires_pro(Provider::Windsurf));
         assert!(!requires_pro(Provider::Codex));
         assert!(!requires_pro(Provider::Claude));
         assert!(!requires_pro(Provider::Agy));
@@ -168,6 +172,8 @@ mod tests {
             Provider::OpenCode,
             Provider::DeepSeek,
             Provider::OpenRouter,
+            Provider::Copilot,
+            Provider::Windsurf,
         ] {
             let accounts = [
                 account("paid-1", provider),

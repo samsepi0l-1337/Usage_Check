@@ -32,6 +32,24 @@ fn kimi_and_opencode_status_maps() {
 }
 
 #[test]
+fn copilot_and_windsurf_status_maps() {
+    assert_eq!(copilot_status(Some(401)), "needs_login");
+    assert_eq!(copilot_status(Some(403)), "needs_login");
+    assert_eq!(copilot_status(Some(404)), "needs_setup");
+    assert_eq!(copilot_status(Some(429)), "throttled");
+    assert_eq!(copilot_status(Some(500)), "experimental_error");
+    assert_eq!(
+        windsurf_status("ws-user", "ws-user", Err(Some(401))),
+        "needs_login"
+    );
+    assert_eq!(
+        windsurf_status("ws-user", "ws-user", Err(Some(500))),
+        "experimental_error"
+    );
+    assert_eq!(windsurf_status("ws-a", "ws-b", Ok(())), "identity_changed");
+}
+
+#[test]
 fn cursor_success_maps_ok() {
     assert_eq!(
         cursor_outcome_status("cursor-user", "cursor-user", Ok(())),

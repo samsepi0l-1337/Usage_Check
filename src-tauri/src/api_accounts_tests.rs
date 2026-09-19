@@ -54,6 +54,11 @@ fn pro_auth_kind_labels_avoid_leak_denylist() {
         expected_identity: "id".into(),
     };
     assert_eq!(auth_kind(&hf), "higgsfield_cli");
+    let windsurf = AuthSource::WindsurfDatabase {
+        database_path: "/db".into(),
+        expected_identity: "id".into(),
+    };
+    assert_eq!(auth_kind(&windsurf), "windsurf_database");
 }
 
 #[test]

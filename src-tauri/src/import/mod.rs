@@ -15,6 +15,7 @@ use usage_core::account::{Credentials, Provider};
 
 mod claude;
 mod codex;
+mod copilot;
 mod deepseek;
 mod grok;
 mod higgsfield;
@@ -33,6 +34,8 @@ pub(crate) use claude::{
     load_claude_profile_credentials, parse_claude_credentials_json,
 };
 pub(crate) use codex::{load_codex_cli_auth, parse_codex_auth_json};
+#[allow(unused_imports)]
+pub(crate) use copilot::{load_copilot_cli_auth, parse_copilot_oauth_token, parse_gh_hosts_yml};
 pub(crate) use deepseek::{load_deepseek_cli_auth, parse_deepseek_api_key};
 #[allow(unused_imports)]
 pub(crate) use grok::{
@@ -89,6 +92,8 @@ pub fn import_from_cli(provider: Provider) -> Result<ImportedAccount, String> {
         Provider::OpenCode => load_opencode_cli_auth(),
         Provider::DeepSeek => load_deepseek_cli_auth(),
         Provider::OpenRouter => load_openrouter_cli_auth(),
+        Provider::Copilot => load_copilot_cli_auth(),
+        Provider::Windsurf => crate::windsurf_local::load_windsurf_local_auth(),
     }
 }
 

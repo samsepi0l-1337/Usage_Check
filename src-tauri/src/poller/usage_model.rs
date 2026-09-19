@@ -4,6 +4,7 @@ use usage_core::account::{Account, AuthSource, Provider};
 use usage_core::fetch::agy::{compact_windows, AgyQuota, AgyQuotaPool};
 use usage_core::fetch::claude::ClaudeQuota;
 use usage_core::fetch::codex::CodexQuota;
+use usage_core::fetch::copilot::CopilotQuota;
 use usage_core::fetch::cursor::CursorQuota;
 use usage_core::fetch::deepseek::DeepSeekBalance;
 use usage_core::fetch::grok::GrokPrepaid;
@@ -11,6 +12,7 @@ use usage_core::fetch::higgsfield::HiggsfieldCredits;
 use usage_core::fetch::kimi::KimiUsage;
 use usage_core::fetch::opencode::OpenCodeUsage;
 use usage_core::fetch::openrouter::OpenRouterUsage;
+use usage_core::fetch::windsurf::WindsurfQuota;
 use usage_core::models::{
     LocalProvenance, LocalUsage, QuotaUsage, UsageBreakdownRow, WindowTotals,
 };
@@ -217,6 +219,46 @@ pub(super) fn account_usage_from_deepseek(
         pool_breakdown: Vec::new(),
         breakdown: Vec::new(),
         detail_suffix: balance.detail_suffix.clone(),
+        status: status.to_string(),
+        local_status: None,
+    }
+}
+
+pub(super) fn account_usage_from_copilot(
+    account: &Account,
+    quota: &CopilotQuota,
+    status: &str,
+) -> AccountUsage {
+    AccountUsage {
+        display_name: display_name_for(account, None, quota.plan.as_deref()),
+        plan: quota.plan.clone(),
+        account: account.clone(),
+        five_hour: None,
+        week: quota.period.clone(),
+        totals: WindowTotals::default(),
+        pool_breakdown: Vec::new(),
+        breakdown: Vec::new(),
+        detail_suffix: quota.detail_suffix.clone(),
+        status: status.to_string(),
+        local_status: None,
+    }
+}
+
+pub(super) fn account_usage_from_windsurf(
+    account: &Account,
+    quota: &WindsurfQuota,
+    status: &str,
+) -> AccountUsage {
+    AccountUsage {
+        display_name: display_name_for(account, quota.email.as_deref(), quota.plan.as_deref()),
+        plan: quota.plan.clone(),
+        account: account.clone(),
+        five_hour: quota.five_hour.clone(),
+        week: quota.week.clone(),
+        totals: WindowTotals::default(),
+        pool_breakdown: Vec::new(),
+        breakdown: Vec::new(),
+        detail_suffix: quota.detail_suffix.clone(),
         status: status.to_string(),
         local_status: None,
     }

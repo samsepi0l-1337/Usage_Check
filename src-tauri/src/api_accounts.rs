@@ -19,6 +19,7 @@ pub(crate) fn auth_kind(source: &AuthSource) -> &'static str {
         AuthSource::CliProfile { .. } => "cli_profile",
         AuthSource::BrowserOAuth { .. } => "browser_oauth",
         AuthSource::CursorDatabase { .. } => "cursor_database",
+        AuthSource::WindsurfDatabase { .. } => "windsurf_database",
         AuthSource::XaiManagement { .. } => "xai_key",
         AuthSource::HiggsfieldCli { .. } => "higgsfield_cli",
     }

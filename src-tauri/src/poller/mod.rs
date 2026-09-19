@@ -29,8 +29,8 @@ use providers::{
 };
 mod providers_pro;
 use providers_pro::{
-    poll_cursor, poll_deepseek, poll_grok, poll_higgsfield, poll_kimi, poll_opencode,
-    poll_openrouter,
+    poll_copilot, poll_cursor, poll_deepseek, poll_grok, poll_higgsfield, poll_kimi, poll_opencode,
+    poll_openrouter, poll_windsurf,
 };
 pub use usage_model::{account_usage_pro_required, assemble_account_usage, AccountUsage};
 
@@ -164,6 +164,8 @@ async fn poll_all_with(store: &AccountStore, is_pro: bool) -> Vec<AccountUsage> 
                 Provider::OpenCode => poll_opencode(store, &client, &account).await,
                 Provider::DeepSeek => poll_deepseek(store, &client, &account).await,
                 Provider::OpenRouter => poll_openrouter(store, &client, &account).await,
+                Provider::Copilot => poll_copilot(store, &client, &account).await,
+                Provider::Windsurf => poll_windsurf(store, &client, &account).await,
             }
         };
         let usage = {
