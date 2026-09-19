@@ -63,11 +63,14 @@ impl WindowLabelHint {
             | Provider::Agy
             | Provider::Kimi
             | Provider::OpenCode
-            | Provider::Windsurf => WindowLabelHint::SevenDay,
+            | Provider::Windsurf
+            | Provider::MiniMax => WindowLabelHint::SevenDay,
             Provider::Cursor | Provider::Grok | Provider::OpenRouter | Provider::Copilot => {
                 WindowLabelHint::BillingPeriod
             }
-            Provider::Higgsfield | Provider::DeepSeek => WindowLabelHint::NoLabel,
+            Provider::Higgsfield | Provider::DeepSeek | Provider::Augment => {
+                WindowLabelHint::NoLabel
+            }
         }
     }
 
@@ -83,7 +86,9 @@ impl WindowLabelHint {
             | Provider::Kimi
             | Provider::OpenCode
             | Provider::DeepSeek
-            | Provider::Windsurf => WindowLabelHint::NoLabel,
+            | Provider::Windsurf
+            | Provider::MiniMax
+            | Provider::Augment => WindowLabelHint::NoLabel,
         }
     }
 }
@@ -439,7 +444,7 @@ pub(crate) fn route(state: &ApiState, method: &str, path: &str) -> Reply {
                         serde_json::json!({
                             "error": "unknown_provider",
                             "message": format!(
-                                "unknown provider '{}' (expected codex, claude, agy, cursor, grok, higgsfield, kimi, opencode, deepseek, openrouter, copilot, or windsurf)",
+                                "unknown provider '{}' (expected codex, claude, agy, cursor, grok, higgsfield, kimi, opencode, deepseek, openrouter, copilot, windsurf, minimax, or augment)",
                                 name
                             ),
                         })

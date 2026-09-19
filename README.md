@@ -18,7 +18,8 @@ rows, Add/Remove account actions, Refresh, and Quit.
 - **Cursor** (local, Experimental), **Grok** (xAI API management-key credits,
   not consumer SuperGrok), **Higgsfield** (credits via CLI), **Kimi Code**,
   **OpenCode Go**, **DeepSeek**, **OpenRouter**, **GitHub Copilot** (local,
-  Experimental), and **Windsurf** (local, Experimental) are Pro providers,
+  Experimental), **Windsurf** (local, Experimental), **MiniMax** (CLI Token
+  Plan), and **Augment** (Auggie CLI credits) are Pro providers,
   designed to unlock at runtime from a license key rather than a
   separate binary. **Pro activation is not available in this release** — see
   the status note below.
@@ -30,7 +31,7 @@ rows, Add/Remove account actions, Refresh, and Quit.
 > **Status in this release: Pro activation is NOT available.** The licensing
 > service is not live yet, and this build embeds the documented placeholder
 > verification key, so `resolve_public_key()` returns `None` in a release
-> build and **no license key can unlock Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot or Windsurf — for
+> build and **no license key can unlock Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot, Windsurf, MiniMax or Augment — for
 > anyone.** Codex, Claude and agy remain free, with one active account per
 > provider in the unlicensed Free state. The runtime gate does not delete
 > paid accounts you already configured; it shows them as `pro_required`.
@@ -39,7 +40,7 @@ rows, Add/Remove account actions, Refresh, and Quit.
 
 UsageCheck ships as **one binary** for everyone. Codex, Claude, and agy
 (Gemini/Antigravity) are free. A Pro license key is designed to unlock Cursor,
-Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot, and Windsurf at **runtime** — no separate Free/Pro build, no
+Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot, Windsurf, MiniMax, and Augment at **runtime** — no separate Free/Pro build, no
 compile-time edition flag. Without a valid Pro license, one account per provider
 stays active for each free provider. If several are already stored,
 this limit deletes nothing: the first by index/insertion order stays live,
@@ -52,7 +53,7 @@ contract).
 
 | | Product name | Bundle ID | Providers |
 | --- | --- | --- | --- |
-| UsageCheck | `UsageCheck` | `com.usagecheck.desktop` | Codex, Claude, agy free (one active account each while unlicensed); unlimited accounts and Cursor/Grok/Higgsfield/Kimi/OpenCode/DeepSeek/OpenRouter/Copilot/Windsurf with Pro (not activatable in this release) |
+| UsageCheck | `UsageCheck` | `com.usagecheck.desktop` | Codex, Claude, agy free (one active account each while unlicensed); unlimited accounts and Cursor/Grok/Higgsfield/Kimi/OpenCode/DeepSeek/OpenRouter/Copilot/Windsurf/MiniMax/Augment with Pro (not activatable in this release) |
 
 **Gemini** is `Provider::Agy` (Antigravity Gemini Models quota), not a
 separate enum.
@@ -91,6 +92,12 @@ active — so **not visible in this release**), exact menu labels from
   `gh` token, then undocumented `GET /copilot_internal/user`.
 - **Import Windsurf (local, Experimental)** — read-only Windsurf `state.vscdb`
   plus undocumented `GetUserStatus` Connect RPC.
+- **Add MiniMax (CLI)** — pure CLI reference via `mmx quota show --output json`
+  (no credential file read). Status is `needs_setup` when the CLI or its JSON
+  remaining-percent windows are unavailable.
+- **Add Augment (CLI)** — pure CLI reference via `auggie account status --json`
+  (Auggie 0.24.0+). Remaining-only JSON shows `N credits remaining`; used %
+  only when included credits are also present.
 
 Plain `cargo build` (or `./scripts/build-edition.sh`) produces the single
 unified binary — see `scripts/build-edition.sh` for a wrapped
@@ -112,13 +119,13 @@ Free — Pro cannot be unlocked. Artifacts: `UsageCheck-macos` (.dmg + .app),
 
 - `crates/usage-core` — pure Rust core: provider/account models, usage
   aggregation, provider fetchers (Codex/Claude API clients; Pro:
-  Cursor/Grok/Higgsfield parsers), local log scanners (Codex/Claude/agy),
+  Cursor/Grok/Higgsfield/MiniMax/Augment parsers), local log scanners (Codex/Claude/agy),
   edition helpers (`edition.rs`), all covered by unit tests.
 - `src-tauri` (`usage-app`) — Tauri v2 tray shell: native menu bar menu,
   PKCE OAuth, file-backed account store under Application Support /
   `%APPDATA%`, background poller, CLI credential import (including Claude
   Keychain on macOS; Pro: Cursor `state.vscdb`, Grok clipboard/env, Higgsfield
-  pure CLI reference).
+  / MiniMax / Augment pure CLI references).
 - `ui/` — legacy Vite frontend (unused by the tray-menu shell; kept for
   optional future UI work).
 - `Sources/` — the original Swift/macOS-only menu bar app. **Reference only**;
@@ -253,8 +260,8 @@ The tray shows one of these per account (see `src-tauri/src/poller.rs`):
   emitted a status-line usage sample yet.
 - `identity_changed` — the CLI profile's logged-in identity no longer matches
   the identity UsageCheck registered.
-- `needs_setup` — the CLI or its JSON output is unavailable (e.g. Higgsfield
-  CLI not installed).
+- `needs_setup` — the CLI or its JSON output is unavailable (e.g. Higgsfield,
+  MiniMax, or Augment CLI not installed).
 - `pro_required` — the account is preserved but inactive in Free: either it
   belongs to a paid provider or it is beyond a free provider's one-account
   limit. No quota numbers are reported; activating Pro restores it without

@@ -145,7 +145,9 @@ pub fn config(provider: Provider) -> Result<ProviderOAuth, String> {
         | Provider::DeepSeek
         | Provider::OpenRouter
         | Provider::Copilot
-        | Provider::Windsurf => Err(format!(
+        | Provider::Windsurf
+        | Provider::MiniMax
+        | Provider::Augment => Err(format!(
             "{} uses local import — choose Import from the tray Add Account menu",
             provider.display_name()
         )),

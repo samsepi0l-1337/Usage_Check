@@ -700,3 +700,78 @@ fn windsurf_import_reads_sqlite_api_key() {
     assert_eq!(session.api_key, "ws-secret");
     assert_eq!(session.identity, "ws@example.com");
 }
+
+#[test]
+fn minimax_import_parses_fake_cli_quota_json() {
+    let dir = TempDir::new().unwrap();
+    let bin = super::minimax::write_fake_minimax_cli(
+        dir.path(),
+        r#"{
+            "email": "mmx@example.com",
+            "plan_name": "Token Plan",
+            "model_remains": [{
+                "model_name": "general",
+                "current_interval_remaining_percent": 60,
+                "current_weekly_remaining_percent": 90
+            }]
+        }"#,
+    );
+    let imported = super::minimax::load_minimax_cli_auth_from(&bin).unwrap();
+    assert_eq!(imported.label, "mmx@example.com");
+    assert!(imported.credentials.access_token.is_empty());
+}
+
+#[test]
+fn minimax_import_falls_back_to_display_name_without_email() {
+    let dir = TempDir::new().unwrap();
+    let bin = super::minimax::write_fake_minimax_cli(
+        dir.path(),
+        r#"{
+            "model_remains": [{
+                "model_name": "general",
+                "current_interval_remaining_percent": 100
+            }]
+        }"#,
+    );
+    let imported = super::minimax::load_minimax_cli_auth_from(&bin).unwrap();
+    assert_eq!(imported.label, "MiniMax");
+}
+
+#[test]
+fn minimax_import_missing_binary_tells_user_to_install_mmx() {
+    let err = super::minimax::load_minimax_cli_auth_with(None).unwrap_err();
+    assert!(err.contains("install mmx"), "{err}");
+    assert!(err.contains("mmx auth login"), "{err}");
+}
+
+#[test]
+fn augment_import_parses_fake_cli_status_json() {
+    let dir = TempDir::new().unwrap();
+    let bin = super::augment::write_fake_augment_cli(
+        dir.path(),
+        r#"{
+            "email": "aug@example.com",
+            "plan": "Developer",
+            "credits_remaining": 25000,
+            "included_credits": 100000
+        }"#,
+    );
+    let imported = super::augment::load_augment_cli_auth_from(&bin).unwrap();
+    assert_eq!(imported.label, "aug@example.com");
+    assert!(imported.credentials.access_token.is_empty());
+}
+
+#[test]
+fn augment_import_falls_back_to_display_name_without_email() {
+    let dir = TempDir::new().unwrap();
+    let bin = super::augment::write_fake_augment_cli(dir.path(), r#"{ "credits_remaining": 12 }"#);
+    let imported = super::augment::load_augment_cli_auth_from(&bin).unwrap();
+    assert_eq!(imported.label, "Augment");
+}
+
+#[test]
+fn augment_import_missing_binary_tells_user_to_install_auggie() {
+    let err = super::augment::load_augment_cli_auth_with(None).unwrap_err();
+    assert!(err.contains("install auggie"), "{err}");
+    assert!(err.contains("auggie login"), "{err}");
+}

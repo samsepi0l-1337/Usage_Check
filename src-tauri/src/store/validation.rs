@@ -15,6 +15,8 @@ impl AccountStore {
             ) | (Provider::Cursor, AuthSource::CursorDatabase { .. })
                 | (Provider::Windsurf, AuthSource::WindsurfDatabase { .. })
                 | (Provider::Higgsfield, AuthSource::HiggsfieldCli { .. })
+                | (Provider::MiniMax, AuthSource::MiniMaxCli { .. })
+                | (Provider::Augment, AuthSource::AugmentCli { .. })
         );
         if valid {
             Ok(())
@@ -103,6 +105,22 @@ impl AccountStore {
                         expected_identity: candidate,
                     },
                 ) if existing == candidate => Some("Higgsfield CLI account already registered"),
+                (
+                    AuthSource::MiniMaxCli {
+                        expected_identity: existing,
+                    },
+                    AuthSource::MiniMaxCli {
+                        expected_identity: candidate,
+                    },
+                ) if existing == candidate => Some("MiniMax CLI account already registered"),
+                (
+                    AuthSource::AugmentCli {
+                        expected_identity: existing,
+                    },
+                    AuthSource::AugmentCli {
+                        expected_identity: candidate,
+                    },
+                ) if existing == candidate => Some("Augment CLI account already registered"),
                 _ => None,
             })
     }

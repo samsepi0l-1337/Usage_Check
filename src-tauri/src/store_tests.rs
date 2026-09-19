@@ -1094,6 +1094,60 @@ fn v2_duplicate_windsurf_identities_are_rejected_without_overwrite() {
 }
 
 #[test]
+fn v2_duplicate_minimax_identities_are_rejected_without_overwrite() {
+    let sandbox = TestSandbox::new();
+    let store = sandbox.store();
+    store.initialize_v2().unwrap();
+    let first = store
+        .add_reference_with(
+            Provider::MiniMax,
+            "first".into(),
+            AuthSource::MiniMaxCli {
+                expected_identity: "mmx-user-1".into(),
+            },
+            || true,
+        )
+        .unwrap();
+    let duplicate = store.add_reference_with(
+        Provider::MiniMax,
+        "replacement".into(),
+        AuthSource::MiniMaxCli {
+            expected_identity: "mmx-user-1".into(),
+        },
+        || true,
+    );
+    assert!(duplicate.is_err());
+    assert_eq!(store.list(), vec![first]);
+}
+
+#[test]
+fn v2_duplicate_augment_identities_are_rejected_without_overwrite() {
+    let sandbox = TestSandbox::new();
+    let store = sandbox.store();
+    store.initialize_v2().unwrap();
+    let first = store
+        .add_reference_with(
+            Provider::Augment,
+            "first".into(),
+            AuthSource::AugmentCli {
+                expected_identity: "aug-user-1".into(),
+            },
+            || true,
+        )
+        .unwrap();
+    let duplicate = store.add_reference_with(
+        Provider::Augment,
+        "replacement".into(),
+        AuthSource::AugmentCli {
+            expected_identity: "aug-user-1".into(),
+        },
+        || true,
+    );
+    assert!(duplicate.is_err());
+    assert_eq!(store.list(), vec![first]);
+}
+
+#[test]
 fn v2_duplicate_higgsfield_identities_are_rejected_without_overwrite() {
     let sandbox = TestSandbox::new();
     let store = sandbox.store();

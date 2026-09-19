@@ -91,6 +91,28 @@ fn store_with_all_paid_providers() -> (tempfile::TempDir, AccountStore) {
         )
         .expect("register Windsurf account");
 
+    store
+        .add_reference_with(
+            Provider::MiniMax,
+            "minimax-test".to_string(),
+            AuthSource::MiniMaxCli {
+                expected_identity: "minimax-test".to_string(),
+            },
+            || true,
+        )
+        .expect("register MiniMax account");
+
+    store
+        .add_reference_with(
+            Provider::Augment,
+            "augment-test".to_string(),
+            AuthSource::AugmentCli {
+                expected_identity: "augment-test".to_string(),
+            },
+            || true,
+        )
+        .expect("register Augment account");
+
     (tmp, store)
 }
 
@@ -100,7 +122,7 @@ async fn unlicensed_poll_skips_io_for_every_paid_provider() {
 
     let results = poll_all_with(&store, false).await;
 
-    assert_eq!(results.len(), 9, "expected one result per paid account");
+    assert_eq!(results.len(), 11, "expected one result per paid account");
     for usage in &results {
         assert_eq!(
             usage.status, "pro_required",

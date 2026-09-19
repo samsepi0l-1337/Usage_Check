@@ -31,6 +31,7 @@ mod api_server;
 mod claude_cli;
 mod claude_statusline;
 mod cli_auth;
+mod cli_bin;
 mod codex_cli;
 mod cursor_local;
 mod edition;
