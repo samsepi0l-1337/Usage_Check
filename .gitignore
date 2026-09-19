@@ -15,3 +15,6 @@ xcuserdata/
 /src-tauri/icons/ios/
 /src-tauri/icons/app-icon-1024.png
 /src-tauri/icons/icon-source.png
+
+# Agent review scratch files
+.review-*.md
