@@ -190,7 +190,8 @@ impl AccountStore {
             | Provider::Kimi
             | Provider::OpenCode
             | Provider::DeepSeek
-            | Provider::OpenRouter => self.add_secret_with(
+            | Provider::OpenRouter
+            | Provider::Copilot => self.add_secret_with(
                 provider,
                 label,
                 SecretSource::BrowserOAuth,
@@ -207,6 +208,21 @@ impl AccountStore {
                     provider,
                     label.clone(),
                     AuthSource::CursorDatabase {
+                        database_path: db_path,
+                        expected_identity: session.identity.clone(),
+                    },
+                    is_pro,
+                )
+            }
+            Provider::Windsurf => {
+                let db_path = crate::paths::windsurf_state_vscdb()
+                    .ok_or_else(|| "could not resolve Windsurf database path".to_string())?;
+                let session = crate::windsurf_local::read_windsurf_session(&db_path)
+                    .map_err(|e| format!("Failed to read Windsurf session: {e}"))?;
+                self.add_reference_with(
+                    provider,
+                    label.clone(),
+                    AuthSource::WindsurfDatabase {
                         database_path: db_path,
                         expected_identity: session.identity.clone(),
                     },

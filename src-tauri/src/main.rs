@@ -43,10 +43,11 @@ mod poller;
 mod store;
 mod terminal;
 mod tray_menu;
+mod windsurf_local;
 
-use store::AccountStore;
 #[allow(unused_imports)]
 pub(crate) use menu_actions::{classify_auth_action, AuthAction};
+use store::AccountStore;
 
 /// Default seconds between background usage-poll ticks that refresh the tray.
 const DEFAULT_POLL_SECS: u64 = 60;

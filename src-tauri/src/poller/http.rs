@@ -4,12 +4,14 @@ use usage_core::account::Credentials;
 use usage_core::fetch::agy::{parse_agy_quota_summary, AgyQuota};
 use usage_core::fetch::claude::{parse_claude_usage, ClaudeQuota};
 use usage_core::fetch::codex::{parse_codex_usage, CodexQuota};
+use usage_core::fetch::copilot::{parse_copilot_user, CopilotQuota};
 use usage_core::fetch::cursor::{parse_cursor_period_usage, CursorQuota};
 use usage_core::fetch::deepseek::{parse_deepseek_balance, DeepSeekBalance};
 use usage_core::fetch::grok::{parse_grok_prepaid_balance, GrokPrepaid};
 use usage_core::fetch::kimi::{parse_kimi_usages, KimiUsage};
 use usage_core::fetch::opencode::{parse_opencode_usage, OpenCodeUsage};
 use usage_core::fetch::openrouter::{parse_openrouter_key, OpenRouterUsage};
+use usage_core::fetch::windsurf::{parse_windsurf_user_status, WindsurfQuota};
 
 const AGY_USER_AGENT: &str = "antigravity/usagecheck macos/arm64";
 const AGY_QUOTA_SUMMARY_URLS: &[&str] = &[
@@ -318,6 +320,106 @@ pub(super) async fn fetch_openrouter_key(
     Ok(parse_openrouter_key(&body))
 }
 
+const COPILOT_USER_URL: &str = "https://api.github.com/copilot_internal/user";
+const COPILOT_EDITOR_VERSION: &str = "vscode/1.98.1";
+const COPILOT_PLUGIN_VERSION: &str = "copilot-chat/0.26.7";
+
+fn copilot_request<'a>(
+    client: &'a reqwest::Client,
+    authorization: &str,
+) -> reqwest::RequestBuilder {
+    client
+        .get(COPILOT_USER_URL)
+        .header("Accept", "application/json")
+        .header("Authorization", authorization)
+        .header("Editor-Version", COPILOT_EDITOR_VERSION)
+        .header("Editor-Plugin-Version", COPILOT_PLUGIN_VERSION)
+        .header("User-Agent", USAGECHECK_UA)
+}
+
+pub(super) async fn fetch_copilot_user(
+    client: &reqwest::Client,
+    creds: &Credentials,
+) -> Result<CopilotQuota, Option<u16>> {
+    let token_auth = format!("token {}", creds.access_token);
+    let resp = copilot_request(client, &token_auth)
+        .send()
+        .await
+        .map_err(|_| None)?;
+    let status = resp.status();
+    let resp = if status.as_u16() == 401 {
+        copilot_request(client, &format!("Bearer {}", creds.access_token))
+            .send()
+            .await
+            .map_err(|_| None)?
+    } else {
+        resp
+    };
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(Some(status.as_u16()));
+    }
+    let body: serde_json::Value = resp.json().await.map_err(|_| Some(status.as_u16()))?;
+    Ok(parse_copilot_user(&body))
+}
+
+const WINDSURF_STATUS_URLS: &[&str] = &[
+    "https://server.self-serve.windsurf.com/exa.seat_management_pb.SeatManagementService/GetUserStatus",
+    "https://server.codeium.com/exa.seat_management_pb.SeatManagementService/GetUserStatus",
+];
+
+/// Continue to the Codeium host only on 404, 5xx, or transport failure.
+/// 401/403 (and other client errors) must not be overwritten by the fallback.
+fn windsurf_should_try_fallback(status: Option<u16>) -> bool {
+    match status {
+        None => true,
+        Some(404) => true,
+        Some(code) if (500..600).contains(&code) => true,
+        _ => false,
+    }
+}
+
+pub(super) async fn fetch_windsurf_status(
+    client: &reqwest::Client,
+    api_key: &str,
+) -> Result<WindsurfQuota, Option<u16>> {
+    let body = serde_json::json!({
+        "metadata": {
+            "apiKey": api_key,
+            "ideName": "windsurf"
+        }
+    });
+    let mut last_status: Option<u16> = None;
+    for url in WINDSURF_STATUS_URLS {
+        let resp = match client
+            .post(*url)
+            .header("Accept", "application/json")
+            .header("Content-Type", "application/json")
+            .header("Connect-Protocol-Version", "1")
+            .header("User-Agent", USAGECHECK_UA)
+            .bearer_auth(api_key)
+            .json(&body)
+            .send()
+            .await
+        {
+            Ok(resp) => resp,
+            Err(_) => continue,
+        };
+        let status = resp.status();
+        if !status.is_success() {
+            let code = status.as_u16();
+            if !windsurf_should_try_fallback(Some(code)) {
+                return Err(Some(code));
+            }
+            last_status = Some(code);
+            continue;
+        }
+        let root: serde_json::Value = resp.json().await.map_err(|_| Some(status.as_u16()))?;
+        return Ok(parse_windsurf_user_status(&root));
+    }
+    Err(last_status)
+}
+
 pub(super) fn fetch_higgsfield_account_json() -> Result<serde_json::Value, ()> {
     use std::process::Command;
 
@@ -329,4 +431,24 @@ pub(super) fn fetch_higgsfield_account_json() -> Result<serde_json::Value, ()> {
         return Err(());
     }
     serde_json::from_slice(&output.stdout).map_err(|_| ())
+}
+
+#[cfg(test)]
+mod windsurf_fallback_tests {
+    use super::windsurf_should_try_fallback;
+
+    #[test]
+    fn auth_errors_do_not_fall_through() {
+        assert!(!windsurf_should_try_fallback(Some(401)));
+        assert!(!windsurf_should_try_fallback(Some(403)));
+        assert!(!windsurf_should_try_fallback(Some(429)));
+    }
+
+    #[test]
+    fn not_found_server_errors_and_transport_fall_through() {
+        assert!(windsurf_should_try_fallback(Some(404)));
+        assert!(windsurf_should_try_fallback(Some(500)));
+        assert!(windsurf_should_try_fallback(Some(503)));
+        assert!(windsurf_should_try_fallback(None));
+    }
 }

@@ -22,11 +22,17 @@ fn sample_auth_source(provider: Provider, identity: &str) -> AuthSource {
         Provider::Higgsfield => AuthSource::HiggsfieldCli {
             expected_identity: identity.into(),
         },
-        Provider::Kimi | Provider::OpenCode | Provider::DeepSeek | Provider::OpenRouter => {
-            AuthSource::BrowserOAuth {
-                credential_id: format!("{identity}-credential"),
-            }
-        }
+        Provider::Kimi
+        | Provider::OpenCode
+        | Provider::DeepSeek
+        | Provider::OpenRouter
+        | Provider::Copilot => AuthSource::BrowserOAuth {
+            credential_id: format!("{identity}-credential"),
+        },
+        Provider::Windsurf => AuthSource::WindsurfDatabase {
+            database_path: "/profiles/windsurf/state.vscdb".into(),
+            expected_identity: identity.into(),
+        },
     }
 }
 fn sample(provider: Provider, id: &str, five: Option<f64>, week: Option<f64>) -> AccountUsage {
@@ -415,6 +421,8 @@ fn provider_filter_accepts_pro_providers() {
         sample(Provider::OpenCode, "opencode", None, None),
         sample(Provider::DeepSeek, "deepseek", None, None),
         sample(Provider::OpenRouter, "openrouter", None, None),
+        sample(Provider::Copilot, "copilot", None, None),
+        sample(Provider::Windsurf, "windsurf", None, None),
     ]);
     for provider in [
         "cursor",
@@ -424,6 +432,8 @@ fn provider_filter_accepts_pro_providers() {
         "opencode",
         "deepseek",
         "openrouter",
+        "copilot",
+        "windsurf",
     ] {
         let reply = route(&state, "GET", &format!("/v1/usage/{provider}"));
         assert_eq!(reply.status, 200);

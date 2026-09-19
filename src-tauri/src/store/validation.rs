@@ -13,6 +13,7 @@ impl AccountStore {
                 Provider::Codex | Provider::Claude,
                 AuthSource::CliProfile { .. }
             ) | (Provider::Cursor, AuthSource::CursorDatabase { .. })
+                | (Provider::Windsurf, AuthSource::WindsurfDatabase { .. })
                 | (Provider::Higgsfield, AuthSource::HiggsfieldCli { .. })
         );
         if valid {
@@ -37,6 +38,7 @@ impl AccountStore {
                         | Provider::OpenCode
                         | Provider::DeepSeek
                         | Provider::OpenRouter
+                        | Provider::Copilot
                 )
             }
             SecretSource::XaiManagement { .. } => provider == Provider::Grok,
@@ -75,6 +77,16 @@ impl AccountStore {
                         ..
                     },
                 ) if existing == candidate => Some("Cursor identity already registered"),
+                (
+                    AuthSource::WindsurfDatabase {
+                        expected_identity: existing,
+                        ..
+                    },
+                    AuthSource::WindsurfDatabase {
+                        expected_identity: candidate,
+                        ..
+                    },
+                ) if existing == candidate => Some("Windsurf identity already registered"),
                 (
                     AuthSource::XaiManagement {
                         team_id: existing, ..

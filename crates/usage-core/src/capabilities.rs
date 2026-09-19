@@ -29,7 +29,9 @@ pub fn auth_capability(provider: Provider) -> AuthCapability {
         | Provider::Kimi
         | Provider::OpenCode
         | Provider::DeepSeek
-        | Provider::OpenRouter => &[AuthMethod::Cli],
+        | Provider::OpenRouter
+        | Provider::Copilot => &[AuthMethod::Cli],
+        Provider::Windsurf => &[AuthMethod::LocalDatabase],
     };
     AuthCapability { methods }
 }

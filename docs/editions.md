@@ -3,7 +3,7 @@
 > **Status: Pro activation is NOT available in the current release.** The
 > licensing service is not live, and shipped builds embed the documented
 > placeholder verification key, so every activation attempt fails and no
-> license key unlocks Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek or OpenRouter — for anyone. Codex, Claude
+> license key unlocks Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot or Windsurf — for anyone. Codex, Claude
 > and agy remain free, with one active account per provider in the unlicensed
 > Free state. The runtime gate preserves already-configured paid accounts and
 > surplus free-provider accounts and renders them as `pro_required`. This
@@ -14,7 +14,7 @@
 UsageCheck ships as **one binary** for everyone. Codex, Claude, and agy
 (Gemini/Antigravity) are free, with one active account each in Free and
 unlimited accounts in Pro. A **Pro license key** is designed to unlock
-Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, and OpenRouter at **runtime** — there is no separate Free/Pro
+Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot, and Windsurf at **runtime** — there is no separate Free/Pro
 binary, no compile-time edition Cargo feature, and no `tauri.pro.conf.json`
 override.
 This replaces the two-binary/compile-time-edition split UsageCheck used
@@ -34,7 +34,7 @@ For local development-only Pro verification, see [`docs/dev-pro.md`](dev-pro.md)
 | Product name | `UsageCheck` |
 | Bundle ID | `com.usagecheck.desktop` |
 | Config | `src-tauri/tauri.conf.json` (the only Tauri config — no per-edition override file) |
-| Providers | Codex, Claude, Gemini (agy) free with one active account each while unlicensed; unlimited accounts plus Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter once Pro is active |
+| Providers | Codex, Claude, Gemini (agy) free with one active account each while unlicensed; unlimited accounts plus Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot, Windsurf once Pro is active |
 
 **Gemini** is not a separate `Provider` enum variant. It is implemented as
 `Provider::Agy` (Antigravity), which polls the Antigravity **Gemini Models**
@@ -79,6 +79,8 @@ clock-rollback handling: [`docs/LICENSE_API.md`](LICENSE_API.md).
 | **OpenCode Go** | Yes | **Add OpenCode Go (CLI)** — `auth.json` `opencode-go` key | `GET https://opencode.ai/zen/go/v1/usage` | rolling / weekly used % + monthly row |
 | **DeepSeek** | Yes | **Add DeepSeek (dsh)** — `~/.dsh/.credentials.yaml` or `.env` | Official `GET https://api.deepseek.com/user/balance` | Remaining balance (`¥`/`$ left`), no invented used % |
 | **OpenRouter** | Yes | **Add OpenRouter (CLI)** — `~/.ori/config.json` or OpenCode `auth.json` `openrouter` | Official `GET https://openrouter.ai/api/v1/key` | Period used % when capped; otherwise `$ left` / `$ used` |
+| **GitHub Copilot** | Yes | **Import GitHub Copilot (local, Experimental)** — `~/.config/github-copilot` / `gh` hosts.yml | Undocumented `GET https://api.github.com/copilot_internal/user` | Premium used % (monthly) or `unlimited` |
+| **Windsurf** | Yes | **Import Windsurf (local, Experimental)** — `state.vscdb` | Undocumented Connect RPC `GetUserStatus` | Daily → 5h used %; weekly used % + optional `$ left` |
 
 A Pro-gated provider is hidden from the **Add Account** menu (and its
 account, if one somehow exists, renders `pro_required`) until a Pro license
@@ -209,6 +211,48 @@ subscription quota. There is no SuperGrok integration.
    `limit` is set, used % is `(limit - limit_remaining) / limit`. When
    `limit` is null, remaining/usage is shown as `$ left` / `$ used`.
 
+#### GitHub Copilot (Experimental)
+
+This integration is **Experimental** — it depends on GitHub's undocumented
+`/copilot_internal/user` endpoint, which can change without notice.
+
+1. Sign in to GitHub Copilot in VS Code (or `gh auth login`).
+2. Tray → **Add Account** → **Import GitHub Copilot (local, Experimental)**.
+3. UsageCheck reads (read-only), first usable:
+   - `~/.config/github-copilot/apps.json` (or `hosts.json`) `oauth_token`
+   - `~/.config/gh/hosts.yml` github.com `oauth_token` / `token`
+4. Process env `GITHUB_TOKEN` is **not** used (the tray app does not inherit
+   the user's shell environment).
+5. Polling calls `GET https://api.github.com/copilot_internal/user` with
+   `Authorization: token …` (Bearer retry on 401) and `User-Agent: UsageCheck`.
+6. Premium interactions (fallback premium models, then chat) map to the
+   monthly billing-period bar. Unlimited / entitlement `-1` shows `unlimited`
+   with no percent. Completions are ignored as the primary bar.
+7. HTTP 401/403 → `needs_login`; 404 → `needs_setup`; 429 → `throttled`.
+
+#### Windsurf (Experimental)
+
+This integration is **Experimental** — it depends on Windsurf's local SQLite
+layout and an undocumented Connect RPC, both of which can change without
+notice. It is read-only and never writes to Windsurf's database.
+
+1. Sign in to the Windsurf desktop app.
+2. Tray → **Add Account** → **Import Windsurf (local, Experimental)**.
+3. The app reads (read-only) from Windsurf's SQLite `state.vscdb`:
+
+   - macOS: `~/Library/Application Support/Windsurf/User/globalStorage/state.vscdb`
+   - Windows: `%APPDATA%/Windsurf/User/globalStorage/state.vscdb`
+
+4. Key read: `windsurfAuthStatus` JSON → `apiKey` (also `api_key`, nested).
+5. Polling calls
+   `POST https://server.self-serve.windsurf.com/exa.seat_management_pb.SeatManagementService/GetUserStatus`
+   (fallback `server.codeium.com`) with Connect protocol headers.
+6. Daily remaining % maps to the 5h slot as used %; weekly remaining % maps
+   to week. Optional `$ left` from `overageBalanceMicros`.
+7. Missing DB/key or RPC 401/403 → `needs_login`; other RPC failures →
+   `experimental_error`. Local tokens are re-read from the DB on each poll
+   when the identity matches.
+
 ## Architecture
 
 Provider gating is a **runtime check**, not a compile-time feature — every
@@ -224,20 +268,23 @@ crates/usage-core/
     grok.rs               # parse prepaid balance JSON
     higgsfield.rs         # parse account --json credits
     kimi.rs / opencode.rs / deepseek.rs / openrouter.rs
+    copilot.rs / windsurf.rs
 
 src-tauri/
   src/edition.rs          # product_name(), re-exports all_providers()
   src/license/            # signed-token activation, status, offline grace (docs/LICENSE_API.md)
   src/cursor_local.rs     # read-only state.vscdb import
+  src/windsurf_local.rs   # read-only Windsurf state.vscdb import
   src/import/             # load_grok_env_auth(), import_grok_from_clipboard(),
                           # load_higgsfield_cli_auth(), load_kimi_cli_auth(),
                           # load_opencode_cli_auth(), load_deepseek_cli_auth(),
-                          # load_openrouter_cli_auth()
+                          # load_openrouter_cli_auth(), load_copilot_cli_auth()
   src/poller/             # poll_* for paid providers; requires_pro()-gated dispatch
   src/tray_menu/          # auth_action_specs() (is_pro()-filtered); license tray section
   src/menu_actions.rs     # handle_menu_event(): add-cursor-local / add-grok-clipboard /
                           # add-grok-env / add-higgsfield-cli / add-kimi-cli /
                           # add-opencode-cli / add-deepseek-cli / add-openrouter-cli /
+                          # add-copilot-local / add-windsurf-local /
                           # license-activate-clipboard / license-deactivate / license-get
   tauri.conf.json         # the single UsageCheck config
 ```
@@ -259,6 +306,8 @@ mode), on by default. There is no edition feature and no
 | **OpenCode Go** | Imports only `opencode-go` from `auth.json`. A Zen key returns HTTP 403 (`needs_setup`). |
 | **DeepSeek** | Prepaid wallet: remaining balance only, never a fabricated used %. |
 | **OpenRouter** | Unlimited keys (`limit: null`) show `$ left` / `$ used` instead of used %. |
+| **GitHub Copilot** | **Experimental.** Undocumented `copilot_internal/user`. 404 means no Copilot subscription (`needs_setup`). |
+| **Windsurf** | **Experimental.** Undocumented `GetUserStatus` Connect RPC and local `state.vscdb`. No separate Codeium provider. |
 | **Claude CLI accounts** | Usage depends on a status-line bridge installed into the isolated profile; a newly added Claude CLI account shows `waiting_for_usage` until `claude` is run in that profile and renders its status line at least once. |
 | **Offline grace** | A Pro license verified once keeps working offline for 14 days (`license::OFFLINE_GRACE`); beyond that (or on a detected clock rollback) the tray shows `License: verification needed` until the next successful online refresh. |
 | **Local API** | `GET /v1/usage/{provider}` documents `codex` \| `claude` \| `agy` only; Pro providers appear in the full `/v1/usage` snapshot once a Pro license is active. |
@@ -321,7 +370,7 @@ cargo build -p usage-app --release
 ## 한국어 요약
 
 - UsageCheck는 **단일 바이너리**입니다. Codex, Claude, Gemini(agy)는 무료.
-- Pro 라이선스 키를 활성화하면 런타임에 Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter가 열립니다 (별도 바이너리 없음).
+- Pro 라이선스 키를 활성화하면 런타임에 Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot, Windsurf가 열립니다 (별도 바이너리 없음).
 - 트레이 메뉴 → 라이선스 섹션 → **Activate from clipboard**로 키 등록,
   **Deactivate license**로 해제, **Get a license…**로 구매 페이지 열기.
 - 활성화는 Ed25519 서명 토큰(디바이스 바인딩, 오프라인 유예 14일)으로 검증됩니다 — 자세한 내용은 `docs/LICENSE_API.md`.

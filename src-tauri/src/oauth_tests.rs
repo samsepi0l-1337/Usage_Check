@@ -173,6 +173,8 @@ fn local_import_providers_have_no_browser_oauth_config() {
         Provider::OpenCode,
         Provider::DeepSeek,
         Provider::OpenRouter,
+        Provider::Copilot,
+        Provider::Windsurf,
     ] {
         let err = config(provider).unwrap_err();
         assert!(

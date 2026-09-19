@@ -76,6 +76,14 @@ fn pro_providers_route_per_capability() {
         classify_auth_action(Provider::Higgsfield, AuthMethod::Cli),
         AuthAction::Import
     );
+    assert_eq!(
+        classify_auth_action(Provider::Copilot, AuthMethod::Cli),
+        AuthAction::Import
+    );
+    assert_eq!(
+        classify_auth_action(Provider::Windsurf, AuthMethod::LocalDatabase),
+        AuthAction::Import
+    );
 }
 
 // Registry-consistency: every (provider, method) actually wired into the tray registry
@@ -92,9 +100,7 @@ fn registry_specs_classify_as_expected() {
                 Provider::Codex | Provider::Claude => AuthAction::CliCoordinator,
                 _ => AuthAction::Import,
             },
-            AuthMethod::LocalDatabase | AuthMethod::ManagementKeyEnvironment => {
-                AuthAction::Import
-            }
+            AuthMethod::LocalDatabase | AuthMethod::ManagementKeyEnvironment => AuthAction::Import,
             AuthMethod::ManagementKeyClipboard => AuthAction::GrokClipboard,
         };
         assert_eq!(

@@ -31,6 +31,8 @@
         assert!(!specs.iter().any(|s| s.provider == Provider::OpenCode));
         assert!(!specs.iter().any(|s| s.provider == Provider::DeepSeek));
         assert!(!specs.iter().any(|s| s.provider == Provider::OpenRouter));
+        assert!(!specs.iter().any(|s| s.provider == Provider::Copilot));
+        assert!(!specs.iter().any(|s| s.provider == Provider::Windsurf));
     }
 
     #[test]
@@ -43,6 +45,8 @@
         assert!(specs.iter().any(|s| s.provider == Provider::OpenCode));
         assert!(specs.iter().any(|s| s.provider == Provider::DeepSeek));
         assert!(specs.iter().any(|s| s.provider == Provider::OpenRouter));
+        assert!(specs.iter().any(|s| s.provider == Provider::Copilot));
+        assert!(specs.iter().any(|s| s.provider == Provider::Windsurf));
     }
 
     #[test]
@@ -164,6 +168,16 @@
         let spec = spec_for_event("add-openrouter-cli").expect("OpenRouter CLI is registered");
         assert_eq!(spec.provider, Provider::OpenRouter);
         assert_eq!(spec.label, "Add OpenRouter (CLI)");
+
+        let spec = spec_for_event("add-copilot-local").expect("Copilot local import is registered");
+        assert_eq!(spec.provider, Provider::Copilot);
+        assert_eq!(spec.label, "Import GitHub Copilot (local, Experimental)");
+
+        let spec =
+            spec_for_event("add-windsurf-local").expect("Windsurf local import is registered");
+        assert_eq!(spec.provider, Provider::Windsurf);
+        assert_eq!(spec.method, AuthMethod::LocalDatabase);
+        assert_eq!(spec.label, "Import Windsurf (local, Experimental)");
     }
 
     use crate::poller::AccountUsage;

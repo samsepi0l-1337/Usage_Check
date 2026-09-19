@@ -619,6 +619,7 @@ fn new_pro_providers_store_as_browser_oauth_secrets() {
         Provider::OpenCode,
         Provider::DeepSeek,
         Provider::OpenRouter,
+        Provider::Copilot,
     ] {
         let account = store
             .add_with(
@@ -638,4 +639,64 @@ fn new_pro_providers_store_as_browser_oauth_secrets() {
             "{provider:?} should persist as BrowserOAuth"
         );
     }
+}
+
+#[test]
+fn copilot_import_walks_apps_json_for_oauth_token() {
+    let dir = TempDir::new().unwrap();
+    let apps = dir.path().join("apps.json");
+    std::fs::write(
+        &apps,
+        r#"{"github.com:device":{"user":"octocat","oauth_token":"gho_from_apps"}}"#,
+    )
+    .unwrap();
+    let imported = super::copilot::load_copilot_cli_auth_from_files(&[apps], &[]).unwrap();
+    assert_eq!(imported.credentials.access_token, "gho_from_apps");
+    assert_eq!(imported.label, "octocat");
+}
+
+#[test]
+fn copilot_import_falls_back_to_gh_hosts_yml() {
+    let dir = TempDir::new().unwrap();
+    let yml = dir.path().join("hosts.yml");
+    std::fs::write(
+        &yml,
+        "github.com:\n    user: octocat\n    oauth_token: gho_from_gh\n",
+    )
+    .unwrap();
+    let imported = super::copilot::load_copilot_cli_auth_from_files(&[], &[yml]).unwrap();
+    assert_eq!(imported.credentials.access_token, "gho_from_gh");
+}
+
+#[test]
+fn copilot_import_missing_files_does_not_need_env() {
+    let err = super::copilot::load_copilot_cli_auth_from_files(&[], &[]).unwrap_err();
+    assert!(err.contains("GitHub Copilot"), "{err}");
+}
+
+#[test]
+fn windsurf_import_reads_sqlite_api_key() {
+    use rusqlite::{params, Connection};
+
+    let dir = TempDir::new().unwrap();
+    let db = dir.path().join("state.vscdb");
+    let conn = Connection::open(&db).unwrap();
+    conn.execute(
+        "CREATE TABLE ItemTable (id INTEGER PRIMARY KEY, key TEXT, value TEXT)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO ItemTable (key, value) VALUES (?1, ?2)",
+        params![
+            "windsurfAuthStatus",
+            r#"{"email":"ws@example.com","apiKey":"ws-secret"}"#
+        ],
+    )
+    .unwrap();
+    drop(conn);
+
+    let session = crate::windsurf_local::read_windsurf_session(&db).unwrap();
+    assert_eq!(session.api_key, "ws-secret");
+    assert_eq!(session.identity, "ws@example.com");
 }

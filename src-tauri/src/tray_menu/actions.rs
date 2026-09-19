@@ -90,6 +90,18 @@ const ALL_AUTH_ACTION_SPECS: &[AuthActionSpec] = &[
         event_id: "add-openrouter-cli",
         label: "Add OpenRouter (CLI)",
     },
+    AuthActionSpec {
+        provider: Provider::Copilot,
+        method: AuthMethod::Cli,
+        event_id: "add-copilot-local",
+        label: "Import GitHub Copilot (local, Experimental)",
+    },
+    AuthActionSpec {
+        provider: Provider::Windsurf,
+        method: AuthMethod::LocalDatabase,
+        event_id: "add-windsurf-local",
+        label: "Import Windsurf (local, Experimental)",
+    },
 ];
 
 /// Add Account actions available to the user right now: paid-provider specs

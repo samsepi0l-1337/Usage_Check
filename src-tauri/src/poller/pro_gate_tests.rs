@@ -66,6 +66,7 @@ fn store_with_all_paid_providers() -> (tempfile::TempDir, AccountStore) {
         (Provider::OpenCode, "opencode-test"),
         (Provider::DeepSeek, "deepseek-test"),
         (Provider::OpenRouter, "openrouter-test"),
+        (Provider::Copilot, "copilot-test"),
     ] {
         store
             .add_secret_with(
@@ -78,6 +79,18 @@ fn store_with_all_paid_providers() -> (tempfile::TempDir, AccountStore) {
             .unwrap_or_else(|_| panic!("register {label} account"));
     }
 
+    store
+        .add_reference_with(
+            Provider::Windsurf,
+            "windsurf-test".to_string(),
+            AuthSource::WindsurfDatabase {
+                database_path: tmp.path().join("nonexistent-windsurf.vscdb"),
+                expected_identity: "windsurf-identity".to_string(),
+            },
+            || true,
+        )
+        .expect("register Windsurf account");
+
     (tmp, store)
 }
 
@@ -87,7 +100,7 @@ async fn unlicensed_poll_skips_io_for_every_paid_provider() {
 
     let results = poll_all_with(&store, false).await;
 
-    assert_eq!(results.len(), 7, "expected one result per paid account");
+    assert_eq!(results.len(), 9, "expected one result per paid account");
     for usage in &results {
         assert_eq!(
             usage.status, "pro_required",

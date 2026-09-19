@@ -1063,6 +1063,37 @@ fn v2_duplicate_cursor_identities_are_rejected_without_overwrite() {
 }
 
 #[test]
+fn v2_duplicate_windsurf_identities_are_rejected_without_overwrite() {
+    let sandbox = TestSandbox::new();
+    let store = sandbox.store();
+    store.initialize_v2().unwrap();
+    let first = store
+        .add_reference_with(
+            Provider::Windsurf,
+            "first".into(),
+            AuthSource::WindsurfDatabase {
+                database_path: sandbox.root.join("first.vscdb"),
+                expected_identity: "windsurf-user".into(),
+            },
+            || true,
+        )
+        .unwrap();
+
+    let duplicate = store.add_reference_with(
+        Provider::Windsurf,
+        "replacement".into(),
+        AuthSource::WindsurfDatabase {
+            database_path: sandbox.root.join("replacement.vscdb"),
+            expected_identity: "windsurf-user".into(),
+        },
+        || true,
+    );
+
+    assert!(duplicate.is_err());
+    assert_eq!(store.list(), vec![first]);
+}
+
+#[test]
 fn v2_duplicate_higgsfield_identities_are_rejected_without_overwrite() {
     let sandbox = TestSandbox::new();
     let store = sandbox.store();
@@ -1567,7 +1598,8 @@ fn bare_add_reference_reads_real_license_state() {
     let store = AccountStore::new();
 
     store
-        .add_reference( // BARE-WRAPPER-WIRING
+        .add_reference(
+            // BARE-WRAPPER-WIRING
             Provider::Codex,
             "a@example.com".into(),
             AuthSource::CliProfile {
@@ -1578,7 +1610,8 @@ fn bare_add_reference_reads_real_license_state() {
         )
         .unwrap();
     let error = store
-        .add_reference( // BARE-WRAPPER-WIRING
+        .add_reference(
+            // BARE-WRAPPER-WIRING
             Provider::Codex,
             "b@example.com".into(),
             AuthSource::CliProfile {
@@ -1606,7 +1639,8 @@ fn bare_add_secret_reads_real_license_state() {
     let store = AccountStore::new();
 
     store
-        .add_secret( // BARE-WRAPPER-WIRING
+        .add_secret(
+            // BARE-WRAPPER-WIRING
             Provider::Codex,
             "a@example.com".into(),
             SecretSource::BrowserOAuth,
@@ -1614,7 +1648,8 @@ fn bare_add_secret_reads_real_license_state() {
         )
         .unwrap();
     let error = store
-        .add_secret( // BARE-WRAPPER-WIRING
+        .add_secret(
+            // BARE-WRAPPER-WIRING
             Provider::Codex,
             "b@example.com".into(),
             SecretSource::BrowserOAuth,
@@ -1639,14 +1674,16 @@ fn bare_add_reads_real_license_state() {
     let store = AccountStore::new();
 
     store
-        .add( // BARE-WRAPPER-WIRING
+        .add(
+            // BARE-WRAPPER-WIRING
             Provider::Codex,
             "a@example.com".into(),
             credentials("acct-a"),
         )
         .unwrap();
     let error = store
-        .add( // BARE-WRAPPER-WIRING
+        .add(
+            // BARE-WRAPPER-WIRING
             Provider::Codex,
             "b@example.com".into(),
             credentials("acct-b"),
