@@ -26,7 +26,7 @@ const REFRESH_THRESHOLD: Duration = Duration::from_secs(60);
 /// (no refresh_token, network error, non-200), the original `creds` are
 /// returned unchanged — the existing 401/403 fallback in `poll_all` still
 /// applies to a stale token that couldn't be refreshed.
-async fn maybe_refresh(
+pub(crate) async fn maybe_refresh(
     store: &AccountStore,
     credential_id: &str,
     provider: Provider,
@@ -134,8 +134,11 @@ async fn poll_agy_with_local_quota(
             .iter()
             .filter(|a| a.provider == Provider::Agy)
             .count();
-        if agy_local_quota_matches_account(quota.email.as_deref(), &account.label, agy_account_count)
-        {
+        if agy_local_quota_matches_account(
+            quota.email.as_deref(),
+            &account.label,
+            agy_account_count,
+        ) {
             if let Some(email) = quota.email.as_deref() {
                 store.update_label(&account.id, email);
             }
@@ -371,7 +374,10 @@ fn claude_snapshot_after_fetch_failure(
 /// live-ride token cached earlier while this account was still the sole
 /// account, which is no longer safe to trust — see the call site for the
 /// full rationale.
-fn claude_cli_profile_cache_is_trusted(live_creds_present: bool, sole_claude_cli_profile: bool) -> bool {
+fn claude_cli_profile_cache_is_trusted(
+    live_creds_present: bool,
+    sole_claude_cli_profile: bool,
+) -> bool {
     !live_creds_present && sole_claude_cli_profile
 }
 
@@ -447,14 +453,14 @@ pub(super) async fn poll_claude_cli_profile(
     // read entirely in that case and go straight to the identity-checked
     // per-profile keychain seed below, which verifies identity against the
     // profile's own `.claude.json`.
-    let cached = if claude_cli_profile_cache_is_trusted(live_creds.is_some(), sole_claude_cli_profile)
-    {
-        store
-            .cli_profile_credentials(account_id)
-            .filter(|c| !c.access_token.is_empty())
-    } else {
-        None
-    };
+    let cached =
+        if claude_cli_profile_cache_is_trusted(live_creds.is_some(), sole_claude_cli_profile) {
+            store
+                .cli_profile_credentials(account_id)
+                .filter(|c| !c.access_token.is_empty())
+        } else {
+            None
+        };
     let creds = match cached {
         Some(cached) => Some(cached),
         None => {
@@ -528,7 +534,9 @@ pub(super) async fn poll_claude_cli_profile(
             status,
             sole_claude_cli_profile,
         ),
-        None => read_claude_snapshot_outcome(snapshot_path, expected_identity, sole_claude_cli_profile),
+        None => {
+            read_claude_snapshot_outcome(snapshot_path, expected_identity, sole_claude_cli_profile)
+        }
     }
 }
 

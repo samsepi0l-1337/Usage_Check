@@ -76,6 +76,95 @@ pub fn codex_auth_file() -> Option<PathBuf> {
     codex_home().map(|home| codex_auth_file_for(&home))
 }
 
+fn env_path(var: &str) -> Option<PathBuf> {
+    std::env::var_os(var)
+        .map(PathBuf::from)
+        .filter(|p| !p.as_os_str().is_empty())
+}
+
+fn json_files_in(dir: &Path) -> Vec<PathBuf> {
+    let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
+        .ok()
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.extension().and_then(|ext| ext.to_str()) == Some("json") && path.is_file()
+        })
+        .collect();
+    files.sort();
+    files
+}
+
+fn json_files_preferring(dir: &Path, preferred: &str) -> Vec<PathBuf> {
+    let mut files = json_files_in(dir);
+    files.sort_by(|a, b| {
+        let a_pref = a.file_name().and_then(|n| n.to_str()) == Some(preferred);
+        let b_pref = b.file_name().and_then(|n| n.to_str()) == Some(preferred);
+        b_pref.cmp(&a_pref).then_with(|| a.cmp(b))
+    });
+    files
+}
+
+/// Kimi Code credential JSON files, first usable wins:
+/// `$KIMI_CODE_HOME/credentials/*.json`, then `~/.kimi-code/credentials/*.json`
+/// (kimi-code.json first), then `~/.kimi/credentials/kimi-code.json`.
+pub fn kimi_credential_files() -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    if let Some(home) = env_path("KIMI_CODE_HOME") {
+        files.extend(json_files_in(&home.join("credentials")));
+    }
+    if let Some(home) = home_dir() {
+        files.extend(json_files_preferring(
+            &home.join(".kimi-code").join("credentials"),
+            "kimi-code.json",
+        ));
+        files.push(
+            home.join(".kimi")
+                .join("credentials")
+                .join("kimi-code.json"),
+        );
+    }
+    let mut seen = HashSet::new();
+    files
+        .into_iter()
+        .filter(|path| seen.insert(path.clone()))
+        .collect()
+}
+
+/// OpenCode `auth.json`: `$OPENCODE_DATA_DIR`, else `$XDG_DATA_HOME/opencode`,
+/// else `~/.local/share/opencode` (including Windows `%USERPROFILE%`).
+pub fn opencode_auth_file() -> Option<PathBuf> {
+    if let Some(dir) = env_path("OPENCODE_DATA_DIR") {
+        return Some(dir.join("auth.json"));
+    }
+    if let Some(xdg) = env_path("XDG_DATA_HOME") {
+        return Some(xdg.join("opencode").join("auth.json"));
+    }
+    home_dir().map(|h| {
+        h.join(".local")
+            .join("share")
+            .join("opencode")
+            .join("auth.json")
+    })
+}
+
+/// DeepSeek Harness home: `$DSH_HOME` or `~/.dsh`.
+pub fn dsh_home() -> Option<PathBuf> {
+    env_path("DSH_HOME").or_else(|| home_dir().map(|h| h.join(".dsh")))
+}
+
+/// Ori home: `$ORI_HOME` or `~/.ori`.
+pub fn ori_home() -> Option<PathBuf> {
+    env_path("ORI_HOME").or_else(|| home_dir().map(|h| h.join(".ori")))
+}
+
+/// Ori `config.json` path.
+pub fn ori_config_file() -> Option<PathBuf> {
+    ori_home().map(|home| home.join("config.json"))
+}
+
 /// Claude config roots: `CLAUDE_CONFIG_DIR` (comma-separated) or the default
 /// `~/.claude` and `~/.config/claude`.
 pub fn claude_config_roots() -> Vec<PathBuf> {
@@ -199,7 +288,9 @@ mod tests {
         // this test's mutation from racing theirs under `cargo test`'s
         // default parallel execution, so this must take the ONE crate-wide
         // lock instead (see `crate::license::LICENSE_ENV_LOCK`'s doc comment).
-        let _lock = crate::license::LICENSE_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _lock = crate::license::LICENSE_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
         let previous = std::env::var_os("USAGECHECK_APP_DATA_DIR");
 
         std::env::set_var("USAGECHECK_APP_DATA_DIR", "/tmp/usagecheck-test-override");

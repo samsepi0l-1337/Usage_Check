@@ -64,7 +64,10 @@ fn agy_config_resolves_from_env() {
         "ANTIGRAVITY_OAUTH_CLIENT_ID",
         "1071006060591-test.apps.googleusercontent.com",
     );
-    std::env::set_var("ANTIGRAVITY_OAUTH_CLIENT_SECRET", "GOCSPX-test-secret-value");
+    std::env::set_var(
+        "ANTIGRAVITY_OAUTH_CLIENT_SECRET",
+        "GOCSPX-test-secret-value",
+    );
     let cfg = config(Provider::Agy).unwrap();
     assert!(cfg.client_id.contains("apps.googleusercontent.com"));
     assert!(cfg.client_secret.is_some());
@@ -114,7 +117,10 @@ fn agy_config_uses_registered_localhost_callback() {
         "ANTIGRAVITY_OAUTH_CLIENT_ID",
         "1071006060591-test.apps.googleusercontent.com",
     );
-    std::env::set_var("ANTIGRAVITY_OAUTH_CLIENT_SECRET", "GOCSPX-test-secret-value000");
+    std::env::set_var(
+        "ANTIGRAVITY_OAUTH_CLIENT_SECRET",
+        "GOCSPX-test-secret-value000",
+    );
     let cfg = config(Provider::Agy).unwrap();
     assert_eq!(cfg.fixed_redirect, Some((8080, "/callback")));
     assert!(!cfg.use_pkce);
@@ -132,14 +138,14 @@ fn resolve_agy_oauth_client_from_local_install_when_present() {
         Ok((id, secret)) => {
             assert!(id.contains("apps.googleusercontent.com"), "{id}");
             assert!(secret.starts_with("GOCSPX-"), "secret shape");
-            assert!(!secret[7..].contains("GOCSPX-"), "must not concatenate secrets");
+            assert!(
+                !secret[7..].contains("GOCSPX-"),
+                "must not concatenate secrets"
+            );
         }
         Err(e) => {
             // CI / machines without Antigravity installed.
-            assert!(
-                e.contains("Antigravity OAuth credentials not found"),
-                "{e}"
-            );
+            assert!(e.contains("Antigravity OAuth credentials not found"), "{e}");
         }
     }
 }
@@ -148,6 +154,32 @@ fn resolve_agy_oauth_client_from_local_install_when_present() {
 fn codex_and_claude_config_present() {
     assert!(config(Provider::Codex).is_ok());
     assert!(config(Provider::Claude).is_ok());
+}
+
+#[test]
+fn kimi_refresh_config_matches_cli_contract() {
+    let cfg = config(Provider::Kimi).unwrap();
+    assert_eq!(cfg.client_id, "17e5f671-d194-4dfb-9706-5516cb48c098");
+    assert_eq!(cfg.token_url, "https://auth.kimi.com/api/oauth/token");
+    assert!(cfg.client_secret.is_none());
+}
+
+#[test]
+fn local_import_providers_have_no_browser_oauth_config() {
+    for provider in [
+        Provider::Cursor,
+        Provider::Grok,
+        Provider::Higgsfield,
+        Provider::OpenCode,
+        Provider::DeepSeek,
+        Provider::OpenRouter,
+    ] {
+        let err = config(provider).unwrap_err();
+        assert!(
+            err.contains("local import"),
+            "{provider:?} should refuse in-app OAuth: {err}"
+        );
+    }
 }
 
 #[test]
@@ -174,9 +206,8 @@ fn parse_callback_query_none_without_query() {
 #[test]
 fn chatgpt_account_id_from_synthetic_jwt() {
     // header.payload.sig — only payload matters; unsigned test fixture.
-    let payload = URL_SAFE_NO_PAD.encode(
-        br#"{"https://api.openai.com/auth":{"chatgpt_account_id":"acct-test-9"}}"#,
-    );
+    let payload = URL_SAFE_NO_PAD
+        .encode(br#"{"https://api.openai.com/auth":{"chatgpt_account_id":"acct-test-9"}}"#);
     let jwt = format!("e30.{payload}.sig");
     assert_eq!(
         chatgpt_account_id_from_id_token(&jwt).as_deref(),
@@ -186,9 +217,7 @@ fn chatgpt_account_id_from_synthetic_jwt() {
 
 #[test]
 fn google_sub_and_chatgpt_account_id_from_id_token() {
-    let payload = URL_SAFE_NO_PAD.encode(
-        br#"{"sub":"116950757786684882215"}"#,
-    );
+    let payload = URL_SAFE_NO_PAD.encode(br#"{"sub":"116950757786684882215"}"#);
     let jwt = format!("e30.{payload}.sig");
     assert_eq!(
         google_sub_from_id_token(&jwt).as_deref(),

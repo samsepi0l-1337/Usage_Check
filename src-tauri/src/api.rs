@@ -58,18 +58,30 @@ impl WindowLabelHint {
 
     fn for_account_week(provider: Provider) -> WindowLabelHint {
         match provider {
-            Provider::Codex | Provider::Claude | Provider::Agy => WindowLabelHint::SevenDay,
-            Provider::Cursor | Provider::Grok => WindowLabelHint::BillingPeriod,
-            Provider::Higgsfield => WindowLabelHint::NoLabel,
+            Provider::Codex
+            | Provider::Claude
+            | Provider::Agy
+            | Provider::Kimi
+            | Provider::OpenCode => WindowLabelHint::SevenDay,
+            Provider::Cursor | Provider::Grok | Provider::OpenRouter => {
+                WindowLabelHint::BillingPeriod
+            }
+            Provider::Higgsfield | Provider::DeepSeek => WindowLabelHint::NoLabel,
         }
     }
 
     fn for_breakdown(provider: Provider) -> WindowLabelHint {
         match provider {
-            Provider::Cursor | Provider::Grok => WindowLabelHint::BillingPeriod,
-            Provider::Codex | Provider::Claude | Provider::Agy | Provider::Higgsfield => {
-                WindowLabelHint::NoLabel
+            Provider::Cursor | Provider::Grok | Provider::OpenRouter => {
+                WindowLabelHint::BillingPeriod
             }
+            Provider::Codex
+            | Provider::Claude
+            | Provider::Agy
+            | Provider::Higgsfield
+            | Provider::Kimi
+            | Provider::OpenCode
+            | Provider::DeepSeek => WindowLabelHint::NoLabel,
         }
     }
 }
@@ -425,7 +437,7 @@ pub(crate) fn route(state: &ApiState, method: &str, path: &str) -> Reply {
                         serde_json::json!({
                             "error": "unknown_provider",
                             "message": format!(
-                                "unknown provider '{}' (expected codex, claude, agy, cursor, grok, or higgsfield)",
+                                "unknown provider '{}' (expected codex, claude, agy, cursor, grok, higgsfield, kimi, opencode, deepseek, or openrouter)",
                                 name
                             ),
                         })

@@ -11,6 +11,10 @@ pub enum Provider {
     Cursor,
     Grok,
     Higgsfield,
+    Kimi,
+    OpenCode,
+    DeepSeek,
+    OpenRouter,
 }
 
 impl Provider {
@@ -22,6 +26,10 @@ impl Provider {
             Provider::Cursor => "cursor",
             Provider::Grok => "grok",
             Provider::Higgsfield => "higgsfield",
+            Provider::Kimi => "kimi",
+            Provider::OpenCode => "opencode",
+            Provider::DeepSeek => "deepseek",
+            Provider::OpenRouter => "openrouter",
         }
     }
     #[allow(clippy::should_implement_trait)]
@@ -33,6 +41,10 @@ impl Provider {
             "cursor" => Some(Provider::Cursor),
             "grok" => Some(Provider::Grok),
             "higgsfield" => Some(Provider::Higgsfield),
+            "kimi" => Some(Provider::Kimi),
+            "opencode" => Some(Provider::OpenCode),
+            "deepseek" => Some(Provider::DeepSeek),
+            "openrouter" => Some(Provider::OpenRouter),
             _ => None,
         }
     }
@@ -45,6 +57,10 @@ impl Provider {
             Provider::Cursor => "Cursor",
             Provider::Grok => "xAI API credits",
             Provider::Higgsfield => "Higgsfield",
+            Provider::Kimi => "Kimi Code",
+            Provider::OpenCode => "OpenCode Go",
+            Provider::DeepSeek => "DeepSeek",
+            Provider::OpenRouter => "OpenRouter",
         }
     }
 }
@@ -149,6 +165,19 @@ mod tests {
             auth_capability(Provider::Higgsfield).methods,
             &[AuthMethod::Cli]
         );
+        assert_eq!(auth_capability(Provider::Kimi).methods, &[AuthMethod::Cli]);
+        assert_eq!(
+            auth_capability(Provider::OpenCode).methods,
+            &[AuthMethod::Cli]
+        );
+        assert_eq!(
+            auth_capability(Provider::DeepSeek).methods,
+            &[AuthMethod::Cli]
+        );
+        assert_eq!(
+            auth_capability(Provider::OpenRouter).methods,
+            &[AuthMethod::Cli]
+        );
     }
 
     #[test]
@@ -208,5 +237,18 @@ mod tests {
     #[test]
     fn grok_display_name_identifies_xai_api_credits() {
         assert_eq!(Provider::Grok.display_name(), "xAI API credits");
+    }
+
+    #[test]
+    fn new_pro_providers_roundtrip_slugs_and_names() {
+        assert_eq!(Provider::from_str("kimi"), Some(Provider::Kimi));
+        assert_eq!(Provider::Kimi.as_str(), "kimi");
+        assert_eq!(Provider::Kimi.display_name(), "Kimi Code");
+        assert_eq!(Provider::OpenCode.as_str(), "opencode");
+        assert_eq!(Provider::OpenCode.display_name(), "OpenCode Go");
+        assert_eq!(Provider::DeepSeek.as_str(), "deepseek");
+        assert_eq!(Provider::DeepSeek.display_name(), "DeepSeek");
+        assert_eq!(Provider::OpenRouter.as_str(), "openrouter");
+        assert_eq!(Provider::OpenRouter.display_name(), "OpenRouter");
     }
 }

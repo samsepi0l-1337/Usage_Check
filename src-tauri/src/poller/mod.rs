@@ -28,7 +28,10 @@ use providers::{
     poll_codex_cli_profile, poll_codex_oauth,
 };
 mod providers_pro;
-use providers_pro::{poll_cursor, poll_grok, poll_higgsfield};
+use providers_pro::{
+    poll_cursor, poll_deepseek, poll_grok, poll_higgsfield, poll_kimi, poll_opencode,
+    poll_openrouter,
+};
 pub use usage_model::{account_usage_pro_required, assemble_account_usage, AccountUsage};
 
 mod last_success;
@@ -100,7 +103,9 @@ async fn poll_all_with(store: &AccountStore, is_pro: bool) -> Vec<AccountUsage> 
     let mut claude_local = local_usage_for_provider(store, &accounts, Provider::Claude, now).await;
 
     for account in accounts {
-        let usage = if free_surplus.contains(&account.id) {
+        let usage = if free_surplus.contains(&account.id)
+            || (usage_core::edition::requires_pro(account.provider) && !is_pro)
+        {
             account_usage_pro_required(&account)
         } else {
             match account.provider {
@@ -152,12 +157,13 @@ async fn poll_all_with(store: &AccountStore, is_pro: bool) -> Vec<AccountUsage> 
                         }
                     }
                 }
-                Provider::Cursor | Provider::Grok | Provider::Higgsfield if !is_pro => {
-                    account_usage_pro_required(&account)
-                }
                 Provider::Cursor => poll_cursor(store, &client, &account).await,
                 Provider::Grok => poll_grok(store, &client, &account).await,
                 Provider::Higgsfield => poll_higgsfield(store, &account).await,
+                Provider::Kimi => poll_kimi(store, &client, &account).await,
+                Provider::OpenCode => poll_opencode(store, &client, &account).await,
+                Provider::DeepSeek => poll_deepseek(store, &client, &account).await,
+                Provider::OpenRouter => poll_openrouter(store, &client, &account).await,
             }
         };
         let usage = {

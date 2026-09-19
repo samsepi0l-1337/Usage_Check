@@ -3,7 +3,7 @@
 > **Status: Pro activation is NOT available in the current release.** The
 > licensing service is not live, and shipped builds embed the documented
 > placeholder verification key, so every activation attempt fails and no
-> license key unlocks Cursor, Grok or Higgsfield — for anyone. Codex, Claude
+> license key unlocks Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek or OpenRouter — for anyone. Codex, Claude
 > and agy remain free, with one active account per provider in the unlicensed
 > Free state. The runtime gate preserves already-configured paid accounts and
 > surplus free-provider accounts and renders them as `pro_required`. This
@@ -14,7 +14,7 @@
 UsageCheck ships as **one binary** for everyone. Codex, Claude, and agy
 (Gemini/Antigravity) are free, with one active account each in Free and
 unlimited accounts in Pro. A **Pro license key** is designed to unlock
-Cursor, Grok, and Higgsfield at **runtime** — there is no separate Free/Pro
+Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, and OpenRouter at **runtime** — there is no separate Free/Pro
 binary, no compile-time edition Cargo feature, and no `tauri.pro.conf.json`
 override.
 This replaces the two-binary/compile-time-edition split UsageCheck used
@@ -34,7 +34,7 @@ For local development-only Pro verification, see [`docs/dev-pro.md`](dev-pro.md)
 | Product name | `UsageCheck` |
 | Bundle ID | `com.usagecheck.desktop` |
 | Config | `src-tauri/tauri.conf.json` (the only Tauri config — no per-edition override file) |
-| Providers | Codex, Claude, Gemini (agy) free with one active account each while unlicensed; unlimited accounts plus Cursor, Grok, Higgsfield once Pro is active |
+| Providers | Codex, Claude, Gemini (agy) free with one active account each while unlicensed; unlimited accounts plus Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter once Pro is active |
 
 **Gemini** is not a separate `Provider` enum variant. It is implemented as
 `Provider::Agy` (Antigravity), which polls the Antigravity **Gemini Models**
@@ -75,6 +75,10 @@ clock-rollback handling: [`docs/LICENSE_API.md`](LICENSE_API.md).
 | **Cursor** | Yes | **Import Cursor (local, Experimental)** — reads `state.vscdb` | Undocumented Connect RPC `GetCurrentPeriodUsage` on `api2.cursor.sh` | Billing-period used % + optional `$ left` |
 | **Grok (xAI)** | Yes | **Import xAI API credits (clipboard)** — paste Management Key; optional **Import xAI API credits (env vars)** | xAI Management API prepaid balance (not consumer SuperGrok) | Spend-since-top-up used % + `$ left` |
 | **Higgsfield** | Yes | **Add Higgsfield (CLI)** | `higgsfield account status --json` subprocess | Credits used % + `N credits left` |
+| **Kimi Code** | Yes | **Add Kimi (CLI)** — `~/.kimi-code/credentials` (or `$KIMI_CODE_HOME`) | `GET https://api.kimi.com/coding/v1/usages` (fallback `api.kimi.ai`) | 5h / 7d used % |
+| **OpenCode Go** | Yes | **Add OpenCode Go (CLI)** — `auth.json` `opencode-go` key | `GET https://opencode.ai/zen/go/v1/usage` | rolling / weekly used % + monthly row |
+| **DeepSeek** | Yes | **Add DeepSeek (dsh)** — `~/.dsh/.credentials.yaml` or `.env` | Official `GET https://api.deepseek.com/user/balance` | Remaining balance (`¥`/`$ left`), no invented used % |
+| **OpenRouter** | Yes | **Add OpenRouter (CLI)** — `~/.ori/config.json` or OpenCode `auth.json` `openrouter` | Official `GET https://openrouter.ai/api/v1/key` | Period used % when capped; otherwise `$ left` / `$ used` |
 
 A Pro-gated provider is hidden from the **Add Account** menu (and its
 account, if one somehow exists, renders `pro_required`) until a Pro license
@@ -161,6 +165,50 @@ subscription quota. There is no SuperGrok integration.
    is **`needs_setup`** when the CLI is unavailable or JSON has no
    recognizable credit fields.
 
+#### Kimi Code
+
+1. Sign in with the Kimi Code CLI so it writes
+   `~/.kimi-code/credentials/*.json` (or `$KIMI_CODE_HOME/credentials`).
+   `~/.kimi/credentials/kimi-code.json` is also tried.
+2. Tray → **Add Account** → **Add Kimi (CLI)**. There is no in-app browser
+   login; tokens are imported from those files and stored by UsageCheck.
+3. Polling uses `GET https://api.kimi.com/coding/v1/usages` with the access
+   token (`User-Agent: UsageCheck`). A 404 retries `api.kimi.ai`.
+4. Refresh uses `POST https://auth.kimi.com/api/oauth/token` with the
+   imported refresh token.
+
+#### OpenCode Go
+
+1. Run `opencode auth login` and choose **OpenCode Go** (not Zen).
+2. Tray → **Add Account** → **Add OpenCode Go (CLI)** reads
+   `$OPENCODE_DATA_DIR/auth.json`, else `$XDG_DATA_HOME/opencode/auth.json`,
+   else `~/.local/share/opencode/auth.json`.
+3. Only the `opencode-go` entry is imported. Other keys in that file
+   (including OpenRouter) are ignored by this provider.
+4. Polling uses `GET https://opencode.ai/zen/go/v1/usage`. HTTP 403 means
+   a Zen key or no Go subscription (`needs_setup`).
+
+#### DeepSeek
+
+1. Install DeepSeek Harness (`npx @deepseek-ai/dsh`) or put
+   `DEEPSEEK_API_KEY` in `~/.dsh/.env` (or `$DSH_HOME`).
+2. Tray → **Add Account** → **Add DeepSeek (dsh)** reads
+   `$DSH_HOME/.credentials.yaml` then `.env`. Project `.env` files are not
+   walked.
+3. Polling uses official `GET https://api.deepseek.com/user/balance`.
+   Remaining balance is shown as `¥110.00 left` / `$12.34 left`; used % is
+   not invented from a prepaid wallet. `is_available: false` or a zero
+   total is still `ok` (depleted).
+
+#### OpenRouter
+
+1. Tray → **Add Account** → **Add OpenRouter (CLI)** tries
+   `~/.ori/config.json` (or `$ORI_HOME/config.json`) for an API key field,
+   then the `openrouter` entry in OpenCode `auth.json`.
+2. Polling uses official `GET https://openrouter.ai/api/v1/key`. When
+   `limit` is set, used % is `(limit - limit_remaining) / limit`. When
+   `limit` is null, remaining/usage is shown as `$ left` / `$ used`.
+
 ## Architecture
 
 Provider gating is a **runtime check**, not a compile-time feature — every
@@ -175,18 +223,22 @@ crates/usage-core/
     cursor.rs             # parse GetCurrentPeriodUsage JSON
     grok.rs               # parse prepaid balance JSON
     higgsfield.rs         # parse account --json credits
+    kimi.rs / opencode.rs / deepseek.rs / openrouter.rs
 
 src-tauri/
   src/edition.rs          # product_name(), re-exports all_providers()
   src/license/            # signed-token activation, status, offline grace (docs/LICENSE_API.md)
   src/cursor_local.rs     # read-only state.vscdb import
   src/import/             # load_grok_env_auth(), import_grok_from_clipboard(),
-                          # load_higgsfield_cli_auth()
-  src/poller/             # poll_cursor, poll_grok, poll_higgsfield; is_pro()-gated dispatch
+                          # load_higgsfield_cli_auth(), load_kimi_cli_auth(),
+                          # load_opencode_cli_auth(), load_deepseek_cli_auth(),
+                          # load_openrouter_cli_auth()
+  src/poller/             # poll_* for paid providers; requires_pro()-gated dispatch
   src/tray_menu/          # auth_action_specs() (is_pro()-filtered); license tray section
   src/menu_actions.rs     # handle_menu_event(): add-cursor-local / add-grok-clipboard /
-                          # add-grok-env / add-higgsfield-cli / license-activate-clipboard /
-                          # license-deactivate / license-get
+                          # add-grok-env / add-higgsfield-cli / add-kimi-cli /
+                          # add-opencode-cli / add-deepseek-cli / add-openrouter-cli /
+                          # license-activate-clipboard / license-deactivate / license-get
   tauri.conf.json         # the single UsageCheck config
 ```
 
@@ -203,6 +255,10 @@ mode), on by default. There is no edition feature and no
 | **Cursor** | **Experimental.** Uses an **undocumented** private RPC (`GetCurrentPeriodUsage`). Cursor may change or break it without notice. No official public quota API. |
 | **Grok** | Shows **xAI API management-key prepaid credit** balance and spend-since-top-up %. This is **not** consumer SuperGrok — there is no SuperGrok weekly quota % and that subscription tier is not modeled. |
 | **Higgsfield** | **Pure CLI reference** via `higgsfield account status --json` (no credential file read). Login happens via the CLI, not in-app. Unrecognized JSON → `needs_setup`. |
+| **Kimi Code** | CLI file import only (no in-app browser login). Empty/404 usage payload → `needs_setup`. |
+| **OpenCode Go** | Imports only `opencode-go` from `auth.json`. A Zen key returns HTTP 403 (`needs_setup`). |
+| **DeepSeek** | Prepaid wallet: remaining balance only, never a fabricated used %. |
+| **OpenRouter** | Unlimited keys (`limit: null`) show `$ left` / `$ used` instead of used %. |
 | **Claude CLI accounts** | Usage depends on a status-line bridge installed into the isolated profile; a newly added Claude CLI account shows `waiting_for_usage` until `claude` is run in that profile and renders its status line at least once. |
 | **Offline grace** | A Pro license verified once keeps working offline for 14 days (`license::OFFLINE_GRACE`); beyond that (or on a detected clock rollback) the tray shows `License: verification needed` until the next successful online refresh. |
 | **Local API** | `GET /v1/usage/{provider}` documents `codex` \| `claude` \| `agy` only; Pro providers appear in the full `/v1/usage` snapshot once a Pro license is active. |
@@ -265,7 +321,7 @@ cargo build -p usage-app --release
 ## 한국어 요약
 
 - UsageCheck는 **단일 바이너리**입니다. Codex, Claude, Gemini(agy)는 무료.
-- Pro 라이선스 키를 활성화하면 런타임에 Cursor, Grok, Higgsfield가 열립니다 (별도 바이너리 없음).
+- Pro 라이선스 키를 활성화하면 런타임에 Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter가 열립니다 (별도 바이너리 없음).
 - 트레이 메뉴 → 라이선스 섹션 → **Activate from clipboard**로 키 등록,
   **Deactivate license**로 해제, **Get a license…**로 구매 페이지 열기.
 - 활성화는 Ed25519 서명 토큰(디바이스 바인딩, 오프라인 유예 14일)으로 검증됩니다 — 자세한 내용은 `docs/LICENSE_API.md`.

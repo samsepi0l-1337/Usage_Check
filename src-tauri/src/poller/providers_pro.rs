@@ -1,21 +1,22 @@
 use super::http::{
-    fetch_cursor_quota,
-    fetch_grok_prepaid,
-    fetch_higgsfield_account_json,
-    refresh_cursor_access_token,
+    fetch_cursor_quota, fetch_deepseek_balance, fetch_grok_prepaid, fetch_higgsfield_account_json,
+    fetch_kimi_usages, fetch_opencode_usage, fetch_openrouter_key, refresh_cursor_access_token,
 };
+use super::providers::maybe_refresh;
 use super::usage_model::{
-    account_usage_from_cursor,
-    account_usage_from_grok,
-    account_usage_from_higgsfield,
-    status_for_failure,
-    AccountUsage,
+    account_usage_from_cursor, account_usage_from_deepseek, account_usage_from_grok,
+    account_usage_from_higgsfield, account_usage_from_kimi, account_usage_from_opencode,
+    account_usage_from_openrouter, status_for_failure, AccountUsage,
 };
 use crate::store::AccountStore;
-use usage_core::account::Account;
+use usage_core::account::{Account, Provider};
 use usage_core::fetch::cursor::{cursor_quota_with_auth, CursorQuota};
+use usage_core::fetch::deepseek::DeepSeekBalance;
 use usage_core::fetch::grok::GrokPrepaid;
 use usage_core::fetch::higgsfield::{parse_higgsfield_account, HiggsfieldCredits};
+use usage_core::fetch::kimi::KimiUsage;
+use usage_core::fetch::opencode::OpenCodeUsage;
+use usage_core::fetch::openrouter::OpenRouterUsage;
 
 fn cursor_outcome_status(
     session_id: &str,
@@ -200,6 +201,93 @@ pub(super) async fn poll_higgsfield(store: &AccountStore, account: &Account) -> 
                 renews_at: None,
             },
             "needs_setup",
+        ),
+    }
+}
+
+fn kimi_status(status: Option<u16>) -> &'static str {
+    match status {
+        Some(401) => "needs_login",
+        Some(404) => "needs_setup",
+        Some(429) => "throttled",
+        _ => "error",
+    }
+}
+
+fn opencode_status(status: Option<u16>) -> &'static str {
+    match status {
+        Some(401) => "needs_login",
+        Some(403) => "needs_setup",
+        Some(429) => "throttled",
+        _ => "error",
+    }
+}
+
+pub(super) async fn poll_kimi(
+    store: &AccountStore,
+    client: &reqwest::Client,
+    account: &Account,
+) -> AccountUsage {
+    let credential_id = AccountStore::credential_key(account);
+    let Some(creds) = store.credentials(credential_id) else {
+        return account_usage_from_kimi(account, &KimiUsage::default(), "needs_login");
+    };
+    let creds = maybe_refresh(store, credential_id, Provider::Kimi, creds).await;
+    match fetch_kimi_usages(client, &creds).await {
+        Ok(quota) if quota.is_empty() => account_usage_from_kimi(account, &quota, "needs_setup"),
+        Ok(quota) => account_usage_from_kimi(account, &quota, "ok"),
+        Err(status) => account_usage_from_kimi(account, &KimiUsage::default(), kimi_status(status)),
+    }
+}
+
+pub(super) async fn poll_opencode(
+    store: &AccountStore,
+    client: &reqwest::Client,
+    account: &Account,
+) -> AccountUsage {
+    let Some(creds) = store.credentials(AccountStore::credential_key(account)) else {
+        return account_usage_from_opencode(account, &OpenCodeUsage::default(), "needs_login");
+    };
+    match fetch_opencode_usage(client, &creds).await {
+        Ok(quota) => account_usage_from_opencode(account, &quota, "ok"),
+        Err(status) => {
+            account_usage_from_opencode(account, &OpenCodeUsage::default(), opencode_status(status))
+        }
+    }
+}
+
+pub(super) async fn poll_deepseek(
+    store: &AccountStore,
+    client: &reqwest::Client,
+    account: &Account,
+) -> AccountUsage {
+    let Some(creds) = store.credentials(AccountStore::credential_key(account)) else {
+        return account_usage_from_deepseek(account, &DeepSeekBalance::default(), "needs_login");
+    };
+    match fetch_deepseek_balance(client, &creds).await {
+        Ok(balance) => account_usage_from_deepseek(account, &balance, "ok"),
+        Err(status) => account_usage_from_deepseek(
+            account,
+            &DeepSeekBalance::default(),
+            status_for_failure(status),
+        ),
+    }
+}
+
+pub(super) async fn poll_openrouter(
+    store: &AccountStore,
+    client: &reqwest::Client,
+    account: &Account,
+) -> AccountUsage {
+    let Some(creds) = store.credentials(AccountStore::credential_key(account)) else {
+        return account_usage_from_openrouter(account, &OpenRouterUsage::default(), "needs_login");
+    };
+    match fetch_openrouter_key(client, &creds).await {
+        Ok(usage) => account_usage_from_openrouter(account, &usage, "ok"),
+        Err(status) => account_usage_from_openrouter(
+            account,
+            &OpenRouterUsage::default(),
+            status_for_failure(status),
         ),
     }
 }
