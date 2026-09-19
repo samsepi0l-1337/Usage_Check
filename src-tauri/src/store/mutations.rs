@@ -246,6 +246,22 @@ impl AccountStore {
                 },
                 is_pro,
             ),
+            Provider::MiniMax => self.add_reference_with(
+                provider,
+                label.clone(),
+                AuthSource::MiniMaxCli {
+                    expected_identity: label,
+                },
+                is_pro,
+            ),
+            Provider::Augment => self.add_reference_with(
+                provider,
+                label.clone(),
+                AuthSource::AugmentCli {
+                    expected_identity: label,
+                },
+                is_pro,
+            ),
         }
     }
 

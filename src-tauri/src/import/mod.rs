@@ -13,6 +13,7 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::Utc;
 use usage_core::account::{Credentials, Provider};
 
+mod augment;
 mod claude;
 mod codex;
 mod copilot;
@@ -20,12 +21,14 @@ mod deepseek;
 mod grok;
 mod higgsfield;
 mod kimi;
+mod minimax;
 mod opencode;
 mod openrouter;
 
 #[cfg(test)]
 pub(crate) static CLAUDE_CONFIG_DIR_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+pub(crate) use augment::{fetch_augment_account_json, load_augment_cli_auth};
 #[cfg(test)]
 use claude::claude_profile_is_default;
 #[allow(unused_imports)]
@@ -45,6 +48,8 @@ pub(crate) use grok::{
 pub(crate) use higgsfield::load_higgsfield_cli_auth;
 #[allow(unused_imports)]
 pub(crate) use kimi::{load_kimi_cli_auth, parse_kimi_credentials_json};
+#[allow(unused_imports)]
+pub(crate) use minimax::{fetch_minimax_quota_json, load_minimax_cli_auth};
 #[allow(unused_imports)]
 pub(crate) use opencode::{load_opencode_cli_auth, parse_opencode_go_auth_json};
 #[allow(unused_imports)]
@@ -88,12 +93,43 @@ pub fn import_from_cli(provider: Provider) -> Result<ImportedAccount, String> {
         Provider::Cursor => crate::cursor_local::load_cursor_local_auth(),
         Provider::Grok => load_grok_env_auth(),
         Provider::Higgsfield => load_higgsfield_cli_auth(),
+        Provider::MiniMax => load_minimax_cli_auth(),
+        Provider::Augment => load_augment_cli_auth(),
         Provider::Kimi => load_kimi_cli_auth(),
         Provider::OpenCode => load_opencode_cli_auth(),
         Provider::DeepSeek => load_deepseek_cli_auth(),
         Provider::OpenRouter => load_openrouter_cli_auth(),
         Provider::Copilot => load_copilot_cli_auth(),
         Provider::Windsurf => crate::windsurf_local::load_windsurf_local_auth(),
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn write_fake_cli(
+    dir: &std::path::Path,
+    name: &str,
+    stdout_json: &str,
+) -> std::path::PathBuf {
+    std::fs::write(dir.join("account.json"), stdout_json).expect("write fake CLI JSON");
+    #[cfg(windows)]
+    {
+        let path = dir.join(format!("{name}.cmd"));
+        std::fs::write(&path, "@echo off\r\ntype \"%~dp0account.json\"\r\n")
+            .expect("write fake CLI cmd");
+        path
+    }
+    #[cfg(not(windows))]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join(name);
+        std::fs::write(&path, "#!/bin/sh\ncat \"$(dirname \"$0\")/account.json\"\n")
+            .expect("write fake CLI script");
+        let mut perms = std::fs::metadata(&path)
+            .expect("stat fake CLI")
+            .permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&path, perms).expect("chmod fake CLI");
+        path
     }
 }
 

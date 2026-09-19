@@ -5,19 +5,21 @@ use super::http::{
 };
 use super::providers::maybe_refresh;
 use super::usage_model::{
-    account_usage_from_copilot, account_usage_from_cursor, account_usage_from_deepseek,
-    account_usage_from_grok, account_usage_from_higgsfield, account_usage_from_kimi,
-    account_usage_from_opencode, account_usage_from_openrouter, account_usage_from_windsurf,
-    status_for_failure, AccountUsage,
+    account_usage_from_augment, account_usage_from_copilot, account_usage_from_cursor,
+    account_usage_from_deepseek, account_usage_from_grok, account_usage_from_higgsfield,
+    account_usage_from_kimi, account_usage_from_minimax, account_usage_from_opencode,
+    account_usage_from_openrouter, account_usage_from_windsurf, status_for_failure, AccountUsage,
 };
 use crate::store::AccountStore;
 use usage_core::account::{Account, Provider};
+use usage_core::fetch::augment::{parse_augment_account, AugmentCredits};
 use usage_core::fetch::copilot::CopilotQuota;
 use usage_core::fetch::cursor::{cursor_quota_with_auth, CursorQuota};
 use usage_core::fetch::deepseek::DeepSeekBalance;
 use usage_core::fetch::grok::GrokPrepaid;
 use usage_core::fetch::higgsfield::{parse_higgsfield_account, HiggsfieldCredits};
 use usage_core::fetch::kimi::KimiUsage;
+use usage_core::fetch::minimax::{parse_minimax_quota, MiniMaxQuota};
 use usage_core::fetch::opencode::OpenCodeUsage;
 use usage_core::fetch::openrouter::OpenRouterUsage;
 use usage_core::fetch::windsurf::WindsurfQuota;
@@ -206,6 +208,36 @@ pub(super) async fn poll_higgsfield(store: &AccountStore, account: &Account) -> 
             },
             "needs_setup",
         ),
+    }
+}
+
+pub(super) async fn poll_minimax(_store: &AccountStore, account: &Account) -> AccountUsage {
+    match crate::import::fetch_minimax_quota_json() {
+        Ok(root) => {
+            let quota = parse_minimax_quota(&root);
+            let status = if quota.five_hour.is_some() || quota.week.is_some() {
+                "ok"
+            } else {
+                "needs_setup"
+            };
+            account_usage_from_minimax(account, &quota, status)
+        }
+        Err(_) => account_usage_from_minimax(account, &MiniMaxQuota::default(), "needs_setup"),
+    }
+}
+
+pub(super) async fn poll_augment(_store: &AccountStore, account: &Account) -> AccountUsage {
+    match crate::import::fetch_augment_account_json() {
+        Ok(root) => {
+            let credits = parse_augment_account(&root);
+            let status = if credits.credits_remaining.is_some() {
+                "ok"
+            } else {
+                "needs_setup"
+            };
+            account_usage_from_augment(account, &credits, status)
+        }
+        Err(_) => account_usage_from_augment(account, &AugmentCredits::default(), "needs_setup"),
     }
 }
 

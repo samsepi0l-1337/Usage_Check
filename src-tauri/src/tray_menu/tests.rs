@@ -33,6 +33,8 @@
         assert!(!specs.iter().any(|s| s.provider == Provider::OpenRouter));
         assert!(!specs.iter().any(|s| s.provider == Provider::Copilot));
         assert!(!specs.iter().any(|s| s.provider == Provider::Windsurf));
+        assert!(!specs.iter().any(|s| s.provider == Provider::MiniMax));
+        assert!(!specs.iter().any(|s| s.provider == Provider::Augment));
     }
 
     #[test]
@@ -47,6 +49,8 @@
         assert!(specs.iter().any(|s| s.provider == Provider::OpenRouter));
         assert!(specs.iter().any(|s| s.provider == Provider::Copilot));
         assert!(specs.iter().any(|s| s.provider == Provider::Windsurf));
+        assert!(specs.iter().any(|s| s.provider == Provider::MiniMax));
+        assert!(specs.iter().any(|s| s.provider == Provider::Augment));
     }
 
     #[test]
@@ -178,6 +182,16 @@
         assert_eq!(spec.provider, Provider::Windsurf);
         assert_eq!(spec.method, AuthMethod::LocalDatabase);
         assert_eq!(spec.label, "Import Windsurf (local, Experimental)");
+
+        let spec = spec_for_event("add-minimax-cli").expect("MiniMax CLI is registered");
+        assert_eq!(spec.provider, Provider::MiniMax);
+        assert_eq!(spec.method, AuthMethod::Cli);
+        assert_eq!(spec.label, "Add MiniMax (CLI)");
+
+        let spec = spec_for_event("add-augment-cli").expect("Augment CLI is registered");
+        assert_eq!(spec.provider, Provider::Augment);
+        assert_eq!(spec.method, AuthMethod::Cli);
+        assert_eq!(spec.label, "Add Augment (CLI)");
     }
 
     use crate::poller::AccountUsage;
@@ -421,6 +435,41 @@
         let line = format_usage_detail(&u);
         assert!(line.starts_with("74.5% · 12.75/50 credits"), "line: {line}");
         assert!(line.contains("· resets "), "line: {line}");
+    }
+
+    #[test]
+    fn format_usage_detail_minimax_renders_five_hour_and_week() {
+        let mut u = usage(Provider::MiniMax, Some(37.0), Some(4.0));
+        u.five_hour = Some(QuotaUsage {
+            percent: 37.0,
+            resets_at: Some(chrono::Utc::now() + chrono::Duration::hours(2)),
+            window_seconds: Some(18_000),
+        });
+        u.week = Some(QuotaUsage {
+            percent: 4.0,
+            resets_at: Some(chrono::Utc::now() + chrono::Duration::days(6)),
+            window_seconds: None,
+        });
+        let lines = account_usage_lines(&u);
+        assert_eq!(lines.len(), 2);
+        assert!(
+            lines[0].starts_with("     5h 37% · resets "),
+            "row 1: {}",
+            lines[0]
+        );
+        assert!(lines[1].contains("4%"), "row 2: {}", lines[1]);
+    }
+
+    #[test]
+    fn format_usage_detail_augment_remaining_only_has_no_invented_percent() {
+        let mut u = usage(Provider::Augment, None, None);
+        u.detail_suffix = Some("12 credits remaining".into());
+        let line = format_usage_detail(&u);
+        assert_eq!(line, "12 credits remaining");
+        assert!(
+            !line.contains('%'),
+            "bare remaining must not invent %: {line}"
+        );
     }
 
     #[test]

@@ -17,6 +17,8 @@ pub enum Provider {
     OpenRouter,
     Copilot,
     Windsurf,
+    MiniMax,
+    Augment,
 }
 
 impl Provider {
@@ -34,6 +36,8 @@ impl Provider {
             Provider::OpenRouter => "openrouter",
             Provider::Copilot => "copilot",
             Provider::Windsurf => "windsurf",
+            Provider::MiniMax => "minimax",
+            Provider::Augment => "augment",
         }
     }
     #[allow(clippy::should_implement_trait)]
@@ -51,6 +55,8 @@ impl Provider {
             "openrouter" => Some(Provider::OpenRouter),
             "copilot" => Some(Provider::Copilot),
             "windsurf" => Some(Provider::Windsurf),
+            "minimax" => Some(Provider::MiniMax),
+            "augment" => Some(Provider::Augment),
             _ => None,
         }
     }
@@ -69,6 +75,8 @@ impl Provider {
             Provider::OpenRouter => "OpenRouter",
             Provider::Copilot => "GitHub Copilot",
             Provider::Windsurf => "Windsurf",
+            Provider::MiniMax => "MiniMax",
+            Provider::Augment => "Augment",
         }
     }
 }
@@ -111,6 +119,13 @@ pub enum AuthSource {
         team_id: String,
     },
     HiggsfieldCli {
+        expected_identity: String,
+    },
+    #[serde(rename = "minimax_cli")]
+    MiniMaxCli {
+        expected_identity: String,
+    },
+    AugmentCli {
         expected_identity: String,
     },
 }
@@ -198,6 +213,14 @@ mod tests {
             auth_capability(Provider::Windsurf).methods,
             &[AuthMethod::LocalDatabase]
         );
+        assert_eq!(
+            auth_capability(Provider::MiniMax).methods,
+            &[AuthMethod::Cli]
+        );
+        assert_eq!(
+            auth_capability(Provider::Augment).methods,
+            &[AuthMethod::Cli]
+        );
     }
 
     #[test]
@@ -278,6 +301,36 @@ mod tests {
     }
 
     #[test]
+    fn minimax_cli_account_round_trips_json() {
+        assert_account_json_round_trip(
+            Provider::MiniMax,
+            AuthSource::MiniMaxCli {
+                expected_identity: "user@example.com".into(),
+            },
+        );
+        let json = serde_json::to_value(AuthSource::MiniMaxCli {
+            expected_identity: "user@example.com".into(),
+        })
+        .unwrap();
+        assert_eq!(json["kind"], "minimax_cli");
+    }
+
+    #[test]
+    fn augment_cli_account_round_trips_json() {
+        assert_account_json_round_trip(
+            Provider::Augment,
+            AuthSource::AugmentCli {
+                expected_identity: "user@example.com".into(),
+            },
+        );
+        let json = serde_json::to_value(AuthSource::AugmentCli {
+            expected_identity: "user@example.com".into(),
+        })
+        .unwrap();
+        assert_eq!(json["kind"], "augment_cli");
+    }
+
+    #[test]
     fn grok_display_name_identifies_xai_api_credits() {
         assert_eq!(Provider::Grok.display_name(), "xAI API credits");
     }
@@ -299,5 +352,11 @@ mod tests {
         assert_eq!(Provider::from_str("windsurf"), Some(Provider::Windsurf));
         assert_eq!(Provider::Windsurf.as_str(), "windsurf");
         assert_eq!(Provider::Windsurf.display_name(), "Windsurf");
+        assert_eq!(Provider::from_str("minimax"), Some(Provider::MiniMax));
+        assert_eq!(Provider::MiniMax.as_str(), "minimax");
+        assert_eq!(Provider::MiniMax.display_name(), "MiniMax");
+        assert_eq!(Provider::from_str("augment"), Some(Provider::Augment));
+        assert_eq!(Provider::Augment.as_str(), "augment");
+        assert_eq!(Provider::Augment.display_name(), "Augment");
     }
 }

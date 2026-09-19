@@ -102,6 +102,18 @@ const ALL_AUTH_ACTION_SPECS: &[AuthActionSpec] = &[
         event_id: "add-windsurf-local",
         label: "Import Windsurf (local, Experimental)",
     },
+    AuthActionSpec {
+        provider: Provider::MiniMax,
+        method: AuthMethod::Cli,
+        event_id: "add-minimax-cli",
+        label: "Add MiniMax (CLI)",
+    },
+    AuthActionSpec {
+        provider: Provider::Augment,
+        method: AuthMethod::Cli,
+        event_id: "add-augment-cli",
+        label: "Add Augment (CLI)",
+    },
 ];
 
 /// Add Account actions available to the user right now: paid-provider specs

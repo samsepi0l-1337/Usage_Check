@@ -22,6 +22,12 @@ fn sample_auth_source(provider: Provider, identity: &str) -> AuthSource {
         Provider::Higgsfield => AuthSource::HiggsfieldCli {
             expected_identity: identity.into(),
         },
+        Provider::MiniMax => AuthSource::MiniMaxCli {
+            expected_identity: identity.into(),
+        },
+        Provider::Augment => AuthSource::AugmentCli {
+            expected_identity: identity.into(),
+        },
         Provider::Kimi
         | Provider::OpenCode
         | Provider::DeepSeek
@@ -423,6 +429,8 @@ fn provider_filter_accepts_pro_providers() {
         sample(Provider::OpenRouter, "openrouter", None, None),
         sample(Provider::Copilot, "copilot", None, None),
         sample(Provider::Windsurf, "windsurf", None, None),
+        sample(Provider::MiniMax, "minimax", None, None),
+        sample(Provider::Augment, "augment", None, None),
     ]);
     for provider in [
         "cursor",
@@ -434,6 +442,8 @@ fn provider_filter_accepts_pro_providers() {
         "openrouter",
         "copilot",
         "windsurf",
+        "minimax",
+        "augment",
     ] {
         let reply = route(&state, "GET", &format!("/v1/usage/{provider}"));
         assert_eq!(reply.status, 200);

@@ -383,6 +383,63 @@ fn assemble_cli_profile_no_local_profile_still_surfaces_caveat() {
 }
 
 #[test]
+fn account_usage_from_minimax_maps_five_hour_and_week() {
+    let acct = Account {
+        id: "mmx-1".into(),
+        provider: Provider::MiniMax,
+        label: "MiniMax".into(),
+        auth_source: AuthSource::MiniMaxCli {
+            expected_identity: "mmx@example.com".into(),
+        },
+    };
+    let quota = usage_core::fetch::minimax::MiniMaxQuota {
+        email: Some("mmx@example.com".into()),
+        plan: Some("Token Plan".into()),
+        five_hour: Some(QuotaUsage {
+            percent: 37.0,
+            resets_at: None,
+            window_seconds: Some(18_000),
+        }),
+        week: Some(QuotaUsage {
+            percent: 4.0,
+            resets_at: None,
+            window_seconds: None,
+        }),
+    };
+    let result = account_usage_from_minimax(&acct, &quota, "ok");
+    assert_eq!(result.display_name, "mmx@example.com");
+    assert_eq!(result.five_hour.unwrap().percent, 37.0);
+    assert_eq!(result.week.unwrap().percent, 4.0);
+    assert!(result.detail_suffix.is_none());
+}
+
+#[test]
+fn account_usage_from_augment_remaining_only_has_suffix_not_percent() {
+    let acct = Account {
+        id: "aug-1".into(),
+        provider: Provider::Augment,
+        label: "Augment".into(),
+        auth_source: AuthSource::AugmentCli {
+            expected_identity: "aug@example.com".into(),
+        },
+    };
+    let credits = usage_core::fetch::augment::AugmentCredits {
+        email: Some("aug@example.com".into()),
+        plan: Some("Developer".into()),
+        credits_remaining: Some(12.0),
+        credits_included: None,
+        renews_at: None,
+    };
+    let result = account_usage_from_augment(&acct, &credits, "ok");
+    assert_eq!(result.display_name, "aug@example.com");
+    assert!(result.week.is_none());
+    assert_eq!(
+        result.detail_suffix.as_deref(),
+        Some("12 credits remaining")
+    );
+}
+
+#[test]
 fn assemble_failed_outcome_yields_empty_breakdown() {
     let acct = Account {
         id: "test".into(),

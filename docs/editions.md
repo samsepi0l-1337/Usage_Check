@@ -3,7 +3,7 @@
 > **Status: Pro activation is NOT available in the current release.** The
 > licensing service is not live, and shipped builds embed the documented
 > placeholder verification key, so every activation attempt fails and no
-> license key unlocks Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot or Windsurf — for anyone. Codex, Claude
+> license key unlocks Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot, Windsurf, MiniMax or Augment — for anyone. Codex, Claude
 > and agy remain free, with one active account per provider in the unlicensed
 > Free state. The runtime gate preserves already-configured paid accounts and
 > surplus free-provider accounts and renders them as `pro_required`. This
@@ -14,7 +14,7 @@
 UsageCheck ships as **one binary** for everyone. Codex, Claude, and agy
 (Gemini/Antigravity) are free, with one active account each in Free and
 unlimited accounts in Pro. A **Pro license key** is designed to unlock
-Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot, and Windsurf at **runtime** — there is no separate Free/Pro
+Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot, Windsurf, MiniMax, and Augment at **runtime** — there is no separate Free/Pro
 binary, no compile-time edition Cargo feature, and no `tauri.pro.conf.json`
 override.
 This replaces the two-binary/compile-time-edition split UsageCheck used
@@ -34,7 +34,7 @@ For local development-only Pro verification, see [`docs/dev-pro.md`](dev-pro.md)
 | Product name | `UsageCheck` |
 | Bundle ID | `com.usagecheck.desktop` |
 | Config | `src-tauri/tauri.conf.json` (the only Tauri config — no per-edition override file) |
-| Providers | Codex, Claude, Gemini (agy) free with one active account each while unlicensed; unlimited accounts plus Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot, Windsurf once Pro is active |
+| Providers | Codex, Claude, Gemini (agy) free with one active account each while unlicensed; unlimited accounts plus Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot, Windsurf, MiniMax, Augment once Pro is active |
 
 **Gemini** is not a separate `Provider` enum variant. It is implemented as
 `Provider::Agy` (Antigravity), which polls the Antigravity **Gemini Models**
@@ -81,6 +81,8 @@ clock-rollback handling: [`docs/LICENSE_API.md`](LICENSE_API.md).
 | **OpenRouter** | Yes | **Add OpenRouter (CLI)** — `~/.ori/config.json` or OpenCode `auth.json` `openrouter` | Official `GET https://openrouter.ai/api/v1/key` | Period used % when capped; otherwise `$ left` / `$ used` |
 | **GitHub Copilot** | Yes | **Import GitHub Copilot (local, Experimental)** — `~/.config/github-copilot` / `gh` hosts.yml | Undocumented `GET https://api.github.com/copilot_internal/user` | Premium used % (monthly) or `unlimited` |
 | **Windsurf** | Yes | **Import Windsurf (local, Experimental)** — `state.vscdb` | Undocumented Connect RPC `GetUserStatus` | Daily → 5h used %; weekly used % + optional `$ left` |
+| **MiniMax** | Yes | **Add MiniMax (CLI)** | `mmx quota show --output json` subprocess (probes `--json` aliases) | 5h + weekly used % from remaining-percent fields |
+| **Augment** | Yes | **Add Augment (CLI)** | `auggie account status --json` subprocess | Credits used % when remaining+included; else `N credits remaining` |
 
 A Pro-gated provider is hidden from the **Add Account** menu (and its
 account, if one somehow exists, renders `pro_required`) until a Pro license
@@ -253,6 +255,39 @@ notice. It is read-only and never writes to Windsurf's database.
    `experimental_error`. Local tokens are re-read from the DB on each poll
    when the identity matches.
 
+#### MiniMax
+
+1. Install the [MiniMax CLI](https://github.com/MiniMax-AI/cli) (`mmx`) and
+   ensure it is on your `PATH` (Homebrew/user-local bins are also searched).
+2. Run `mmx auth login` in a terminal yourself first — there is no in-app
+   browser login for MiniMax.
+3. Tray menu → **Add Account** → **Add MiniMax (CLI)** creates a pure CLI
+   reference via `mmx quota show --output json` (no credential file read;
+   `--json` / `mmx quota --output json` are probed if needed).
+4. Each poll runs the same CLI JSON command and maps
+   `current_interval_remaining_percent` / `current_weekly_remaining_percent`
+   to used % (Codex-like 5h + weekly). Counts-only JSON is not converted
+   into a percentage.
+5. If the CLI is missing, import fails with a clear install/`mmx auth login`
+   message; polling status is **`needs_setup`** when the CLI is unavailable
+   or JSON has no remaining-percent windows.
+
+#### Augment
+
+1. Install the [Auggie CLI](https://www.npmjs.com/package/@augmentcode/auggie)
+   (`npm i -g @augmentcode/auggie`) and ensure `auggie` is on your `PATH`.
+2. Run `auggie login` in a terminal yourself first — there is no in-app
+   browser login for Augment. `--json` on `auggie account status` needs
+   Auggie 0.24.0+.
+3. Tray menu → **Add Account** → **Add Augment (CLI)** creates a pure CLI
+   reference via `auggie account status --json` (no credential file read).
+4. Each poll runs the same command. Remaining+included credits become used %
+   plus `N/M credits`; a bare remaining number is shown as
+   `N credits remaining` and is never converted into a percentage.
+5. If the CLI is missing, import fails with a clear install/`auggie login`
+   message; polling status is **`needs_setup`** when the CLI is unavailable
+   or JSON has no recognizable credit fields.
+
 ## Architecture
 
 Provider gating is a **runtime check**, not a compile-time feature — every
@@ -269,6 +304,7 @@ crates/usage-core/
     higgsfield.rs         # parse account --json credits
     kimi.rs / opencode.rs / deepseek.rs / openrouter.rs
     copilot.rs / windsurf.rs
+    minimax.rs / augment.rs  # CLI quota / account-status JSON
 
 src-tauri/
   src/edition.rs          # product_name(), re-exports all_providers()
@@ -278,13 +314,15 @@ src-tauri/
   src/import/             # load_grok_env_auth(), import_grok_from_clipboard(),
                           # load_higgsfield_cli_auth(), load_kimi_cli_auth(),
                           # load_opencode_cli_auth(), load_deepseek_cli_auth(),
-                          # load_openrouter_cli_auth(), load_copilot_cli_auth()
+                          # load_openrouter_cli_auth(), load_copilot_cli_auth(),
+                          # load_minimax_cli_auth(), load_augment_cli_auth()
   src/poller/             # poll_* for paid providers; requires_pro()-gated dispatch
   src/tray_menu/          # auth_action_specs() (is_pro()-filtered); license tray section
   src/menu_actions.rs     # handle_menu_event(): add-cursor-local / add-grok-clipboard /
                           # add-grok-env / add-higgsfield-cli / add-kimi-cli /
                           # add-opencode-cli / add-deepseek-cli / add-openrouter-cli /
                           # add-copilot-local / add-windsurf-local /
+                          # add-minimax-cli / add-augment-cli /
                           # license-activate-clipboard / license-deactivate / license-get
   tauri.conf.json         # the single UsageCheck config
 ```
@@ -308,6 +346,8 @@ mode), on by default. There is no edition feature and no
 | **OpenRouter** | Unlimited keys (`limit: null`) show `$ left` / `$ used` instead of used %. |
 | **GitHub Copilot** | **Experimental.** Undocumented `copilot_internal/user`. 404 means no Copilot subscription (`needs_setup`). |
 | **Windsurf** | **Experimental.** Undocumented `GetUserStatus` Connect RPC and local `state.vscdb`. No separate Codeium provider. |
+| **MiniMax** | **Pure CLI reference** via `mmx quota show --output json` (no credential file read). Remaining-percent fields only; counts are not converted to %. Unrecognized JSON → `needs_setup`. |
+| **Augment** | **Pure CLI reference** via `auggie account status --json` (Auggie 0.24.0+). Bare remaining credits never become a used %. Unrecognized JSON → `needs_setup`. |
 | **Claude CLI accounts** | Usage depends on a status-line bridge installed into the isolated profile; a newly added Claude CLI account shows `waiting_for_usage` until `claude` is run in that profile and renders its status line at least once. |
 | **Offline grace** | A Pro license verified once keeps working offline for 14 days (`license::OFFLINE_GRACE`); beyond that (or on a detected clock rollback) the tray shows `License: verification needed` until the next successful online refresh. |
 | **Local API** | `GET /v1/usage/{provider}` documents `codex` \| `claude` \| `agy` only; Pro providers appear in the full `/v1/usage` snapshot once a Pro license is active. |
@@ -370,7 +410,7 @@ cargo build -p usage-app --release
 ## 한국어 요약
 
 - UsageCheck는 **단일 바이너리**입니다. Codex, Claude, Gemini(agy)는 무료.
-- Pro 라이선스 키를 활성화하면 런타임에 Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot, Windsurf가 열립니다 (별도 바이너리 없음).
+- Pro 라이선스 키를 활성화하면 런타임에 Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot, Windsurf, MiniMax, Augment가 열립니다 (별도 바이너리 없음).
 - 트레이 메뉴 → 라이선스 섹션 → **Activate from clipboard**로 키 등록,
   **Deactivate license**로 해제, **Get a license…**로 구매 페이지 열기.
 - 활성화는 Ed25519 서명 토큰(디바이스 바인딩, 오프라인 유예 14일)으로 검증됩니다 — 자세한 내용은 `docs/LICENSE_API.md`.

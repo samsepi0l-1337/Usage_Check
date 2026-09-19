@@ -175,6 +175,8 @@ fn local_import_providers_have_no_browser_oauth_config() {
         Provider::OpenRouter,
         Provider::Copilot,
         Provider::Windsurf,
+        Provider::MiniMax,
+        Provider::Augment,
     ] {
         let err = config(provider).unwrap_err();
         assert!(
