@@ -47,6 +47,13 @@ fn sample_auth_source(provider: Provider, identity: &str) -> AuthSource {
             database_path: "/profiles/windsurf/state.vscdb".into(),
             expected_identity: identity.into(),
         },
+        Provider::Trae => AuthSource::TraeDatabase {
+            database_path: "/profiles/trae/state.vscdb".into(),
+            expected_identity: identity.into(),
+        },
+        Provider::Kiro | Provider::Factory => AuthSource::BrowserOAuth {
+            credential_id: format!("{identity}-credential"),
+        },
     }
 }
 fn sample(provider: Provider, id: &str, five: Option<f64>, week: Option<f64>) -> AccountUsage {
@@ -445,6 +452,9 @@ fn provider_filter_accepts_pro_providers() {
         sample(Provider::Amp, "amp", None, None),
         sample(Provider::Zai, "zai", None, None),
         sample(Provider::Bailian, "bailian", None, None),
+        sample(Provider::Trae, "trae", None, None),
+        sample(Provider::Kiro, "kiro", None, None),
+        sample(Provider::Factory, "factory", None, None),
     ]);
     for provider in [
         "cursor",
@@ -464,6 +474,9 @@ fn provider_filter_accepts_pro_providers() {
         "amp",
         "zai",
         "bailian",
+        "trae",
+        "kiro",
+        "factory",
     ] {
         let reply = route(&state, "GET", &format!("/v1/usage/{provider}"));
         assert_eq!(reply.status, 200);

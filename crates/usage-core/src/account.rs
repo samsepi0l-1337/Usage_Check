@@ -25,6 +25,9 @@ pub enum Provider {
     Amp,
     Zai,
     Bailian,
+    Trae,
+    Kiro,
+    Factory,
 }
 
 impl Provider {
@@ -50,6 +53,9 @@ impl Provider {
             Provider::Amp => "amp",
             Provider::Zai => "zai",
             Provider::Bailian => "bailian",
+            Provider::Trae => "trae",
+            Provider::Kiro => "kiro",
+            Provider::Factory => "factory",
         }
     }
     #[allow(clippy::should_implement_trait)]
@@ -75,6 +81,9 @@ impl Provider {
             "amp" => Some(Provider::Amp),
             "zai" => Some(Provider::Zai),
             "bailian" => Some(Provider::Bailian),
+            "trae" => Some(Provider::Trae),
+            "kiro" => Some(Provider::Kiro),
+            "factory" => Some(Provider::Factory),
             _ => None,
         }
     }
@@ -101,6 +110,9 @@ impl Provider {
             Provider::Amp => "Amp",
             Provider::Zai => "Z.AI",
             Provider::Bailian => "Alibaba Token Plan",
+            Provider::Trae => "Trae",
+            Provider::Kiro => "Kiro",
+            Provider::Factory => "Factory",
         }
     }
 }
@@ -135,6 +147,10 @@ pub enum AuthSource {
         expected_identity: String,
     },
     WindsurfDatabase {
+        database_path: PathBuf,
+        expected_identity: String,
+    },
+    TraeDatabase {
         database_path: PathBuf,
         expected_identity: String,
     },
@@ -264,6 +280,15 @@ mod tests {
             auth_capability(Provider::Bailian).methods,
             &[AuthMethod::Cli]
         );
+        assert_eq!(
+            auth_capability(Provider::Trae).methods,
+            &[AuthMethod::LocalDatabase]
+        );
+        assert_eq!(auth_capability(Provider::Kiro).methods, &[AuthMethod::Cli]);
+        assert_eq!(
+            auth_capability(Provider::Factory).methods,
+            &[AuthMethod::Cli]
+        );
     }
 
     #[test]
@@ -320,6 +345,23 @@ mod tests {
         })
         .unwrap();
         assert_eq!(cursor["kind"], "cursor_database");
+    }
+
+    #[test]
+    fn trae_database_account_round_trips_json() {
+        assert_account_json_round_trip(
+            Provider::Trae,
+            AuthSource::TraeDatabase {
+                database_path: PathBuf::from("/profiles/trae/state.vscdb"),
+                expected_identity: "user@example.com".into(),
+            },
+        );
+        let json = serde_json::to_value(AuthSource::TraeDatabase {
+            database_path: PathBuf::from("/profiles/trae/state.vscdb"),
+            expected_identity: "user@example.com".into(),
+        })
+        .unwrap();
+        assert_eq!(json["kind"], "trae_database");
     }
 
     #[test]
@@ -434,5 +476,14 @@ mod tests {
         assert_eq!(Provider::from_str("bailian"), Some(Provider::Bailian));
         assert_eq!(Provider::Bailian.as_str(), "bailian");
         assert_eq!(Provider::Bailian.display_name(), "Alibaba Token Plan");
+        assert_eq!(Provider::from_str("trae"), Some(Provider::Trae));
+        assert_eq!(Provider::Trae.as_str(), "trae");
+        assert_eq!(Provider::Trae.display_name(), "Trae");
+        assert_eq!(Provider::from_str("kiro"), Some(Provider::Kiro));
+        assert_eq!(Provider::Kiro.as_str(), "kiro");
+        assert_eq!(Provider::Kiro.display_name(), "Kiro");
+        assert_eq!(Provider::from_str("factory"), Some(Provider::Factory));
+        assert_eq!(Provider::Factory.as_str(), "factory");
+        assert_eq!(Provider::Factory.display_name(), "Factory");
     }
 }

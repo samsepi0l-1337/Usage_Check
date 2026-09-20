@@ -625,6 +625,8 @@ fn new_pro_providers_store_as_browser_oauth_secrets() {
         Provider::Novita,
         Provider::Amp,
         Provider::Zai,
+        Provider::Kiro,
+        Provider::Factory,
     ] {
         let account = store
             .add_with(
@@ -998,4 +1000,83 @@ fn bailian_import_missing_binary_tells_user_to_install_bl() {
     let err = super::bailian::load_bailian_cli_auth_with(None).unwrap_err();
     assert!(err.contains("install Bailian CLI"), "{err}");
     assert!(err.contains("bl auth login"), "{err}");
+}
+
+#[test]
+fn trae_import_reads_sqlite_jwt() {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+    use rusqlite::{params, Connection};
+
+    let dir = TempDir::new().unwrap();
+    let db = dir.path().join("state.vscdb");
+    let conn = Connection::open(&db).unwrap();
+    conn.execute(
+        "CREATE TABLE ItemTable (id INTEGER PRIMARY KEY, key TEXT, value TEXT)",
+        [],
+    )
+    .unwrap();
+    let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"none"}"#);
+    let payload = URL_SAFE_NO_PAD.encode(br#"{"email":"trae@example.com"}"#);
+    let jwt = format!("{header}.{payload}.sig");
+    conn.execute(
+        "INSERT INTO ItemTable (key, value) VALUES (?1, ?2)",
+        params![
+            "iCubeAuthInfo://icube.cloudide",
+            format!(r#"{{"token":"{jwt}","account":{{"email":"trae@example.com"}}}}"#)
+        ],
+    )
+    .unwrap();
+    drop(conn);
+
+    let session = crate::trae_local::read_trae_session(&db).unwrap();
+    assert_eq!(session.jwt, jwt);
+    assert_eq!(session.identity, "trae@example.com");
+}
+
+#[test]
+fn factory_import_reads_plaintext_auth_json() {
+    let dir = TempDir::new().unwrap();
+    let auth = dir.path().join("auth.json");
+    std::fs::write(
+        &auth,
+        r#"{"access_token":"factory-at","refresh_token":"factory-rt"}"#,
+    )
+    .unwrap();
+    let imported = super::factory::load_factory_cli_auth_from(&auth, None).unwrap();
+    assert_eq!(imported.credentials.access_token, "factory-at");
+    assert_eq!(
+        imported.credentials.refresh_token.as_deref(),
+        Some("factory-rt")
+    );
+}
+
+#[test]
+fn factory_import_encrypted_v2_fails_closed() {
+    let dir = TempDir::new().unwrap();
+    let auth = dir.path().join("missing-auth.json");
+    let v2 = dir.path().join("auth.v2.file");
+    std::fs::write(&v2, "ciphertext").unwrap();
+    let err = super::factory::load_factory_cli_auth_from(&auth, Some(&v2)).unwrap_err();
+    assert!(err.contains("encrypted"), "{err}");
+}
+
+#[test]
+fn kiro_import_reads_token_file() {
+    let dir = TempDir::new().unwrap();
+    let token = dir.path().join("kiro-auth-token.json");
+    std::fs::write(
+        &token,
+        r#"{
+            "accessToken":"kiro-at",
+            "refreshToken":"kiro-rt",
+            "profileArn":"arn:aws:codewhisperer:us-east-1:1:profile/x"
+        }"#,
+    )
+    .unwrap();
+    let imported = super::kiro::load_kiro_cli_auth_from(&token).unwrap();
+    assert_eq!(imported.credentials.access_token, "kiro-at");
+    assert_eq!(
+        imported.credentials.account_id.as_deref(),
+        Some("arn:aws:codewhisperer:us-east-1:1:profile/x")
+    );
 }

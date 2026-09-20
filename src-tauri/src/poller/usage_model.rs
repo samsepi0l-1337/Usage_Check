@@ -10,15 +10,18 @@ use usage_core::fetch::codex::CodexQuota;
 use usage_core::fetch::copilot::CopilotQuota;
 use usage_core::fetch::cursor::CursorQuota;
 use usage_core::fetch::deepseek::DeepSeekBalance;
+use usage_core::fetch::factory::FactoryUsage;
 use usage_core::fetch::fireworks::FireworksBilling;
 use usage_core::fetch::grok::GrokPrepaid;
 use usage_core::fetch::higgsfield::HiggsfieldCredits;
 use usage_core::fetch::kimi::KimiUsage;
+use usage_core::fetch::kiro::KiroQuota;
 use usage_core::fetch::minimax::MiniMaxQuota;
 use usage_core::fetch::novita::NovitaBalance;
 use usage_core::fetch::opencode::OpenCodeUsage;
 use usage_core::fetch::openrouter::OpenRouterUsage;
 use usage_core::fetch::poe::PoeBalance;
+use usage_core::fetch::trae::TraeQuota;
 use usage_core::fetch::windsurf::WindsurfQuota;
 use usage_core::fetch::zai::ZaiQuota;
 use usage_core::models::{
@@ -447,6 +450,66 @@ pub(super) fn account_usage_from_bailian(
         pool_breakdown: Vec::new(),
         breakdown: Vec::new(),
         detail_suffix: None,
+        status: status.to_string(),
+        local_status: None,
+    }
+}
+
+pub(super) fn account_usage_from_trae(
+    account: &Account,
+    quota: &TraeQuota,
+    status: &str,
+) -> AccountUsage {
+    AccountUsage {
+        display_name: display_name_for(account, quota.email.as_deref(), quota.plan.as_deref()),
+        plan: quota.plan.clone(),
+        account: account.clone(),
+        five_hour: None,
+        week: quota.period.clone(),
+        totals: WindowTotals::default(),
+        pool_breakdown: Vec::new(),
+        breakdown: Vec::new(),
+        detail_suffix: quota.detail_suffix.clone(),
+        status: status.to_string(),
+        local_status: None,
+    }
+}
+
+pub(super) fn account_usage_from_kiro(
+    account: &Account,
+    quota: &KiroQuota,
+    status: &str,
+) -> AccountUsage {
+    AccountUsage {
+        display_name: display_name_for(account, None, quota.plan.as_deref()),
+        plan: quota.plan.clone(),
+        account: account.clone(),
+        five_hour: None,
+        week: quota.period.clone(),
+        totals: WindowTotals::default(),
+        pool_breakdown: Vec::new(),
+        breakdown: Vec::new(),
+        detail_suffix: quota.detail_suffix.clone(),
+        status: status.to_string(),
+        local_status: None,
+    }
+}
+
+pub(super) fn account_usage_from_factory(
+    account: &Account,
+    usage: &FactoryUsage,
+    status: &str,
+) -> AccountUsage {
+    AccountUsage {
+        display_name: display_name_for(account, None, usage.plan.as_deref()),
+        plan: usage.plan.clone(),
+        account: account.clone(),
+        five_hour: None,
+        week: usage.period.clone(),
+        totals: WindowTotals::default(),
+        pool_breakdown: Vec::new(),
+        breakdown: Vec::new(),
+        detail_suffix: usage.detail_suffix.clone(),
         status: status.to_string(),
         local_status: None,
     }

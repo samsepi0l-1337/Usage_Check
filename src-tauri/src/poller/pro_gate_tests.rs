@@ -72,6 +72,8 @@ fn store_with_all_paid_providers() -> (tempfile::TempDir, AccountStore) {
         (Provider::Novita, "novita-test"),
         (Provider::Amp, "amp-test"),
         (Provider::Zai, "zai-test"),
+        (Provider::Kiro, "kiro-test"),
+        (Provider::Factory, "factory-test"),
     ] {
         store
             .add_secret_with(
@@ -129,6 +131,18 @@ fn store_with_all_paid_providers() -> (tempfile::TempDir, AccountStore) {
         )
         .expect("register Bailian account");
 
+    store
+        .add_reference_with(
+            Provider::Trae,
+            "trae-test".to_string(),
+            AuthSource::TraeDatabase {
+                database_path: tmp.path().join("nonexistent-trae.vscdb"),
+                expected_identity: "trae-identity".to_string(),
+            },
+            || true,
+        )
+        .expect("register Trae account");
+
     (tmp, store)
 }
 
@@ -138,7 +152,7 @@ async fn unlicensed_poll_skips_io_for_every_paid_provider() {
 
     let results = poll_all_with(&store, false).await;
 
-    assert_eq!(results.len(), 17, "expected one result per paid account");
+    assert_eq!(results.len(), 20, "expected one result per paid account");
     for usage in &results {
         assert_eq!(
             usage.status, "pro_required",

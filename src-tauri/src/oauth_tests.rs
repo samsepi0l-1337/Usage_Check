@@ -183,6 +183,9 @@ fn local_import_providers_have_no_browser_oauth_config() {
         Provider::Amp,
         Provider::Zai,
         Provider::Bailian,
+        Provider::Trae,
+        Provider::Kiro,
+        Provider::Factory,
     ] {
         let err = config(provider).unwrap_err();
         assert!(

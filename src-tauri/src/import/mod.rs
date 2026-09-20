@@ -20,10 +20,12 @@ mod claude;
 mod codex;
 mod copilot;
 mod deepseek;
+mod factory;
 mod fireworks;
 mod grok;
 mod higgsfield;
 mod kimi;
+mod kiro;
 mod minimax;
 mod novita;
 mod opencode;
@@ -51,6 +53,8 @@ pub(crate) use codex::{load_codex_cli_auth, parse_codex_auth_json};
 pub(crate) use copilot::{load_copilot_cli_auth, parse_copilot_oauth_token, parse_gh_hosts_yml};
 pub(crate) use deepseek::{load_deepseek_cli_auth, parse_deepseek_api_key};
 #[allow(unused_imports)]
+pub(crate) use factory::{load_factory_cli_auth, parse_factory_auth_json};
+#[allow(unused_imports)]
 pub(crate) use fireworks::{load_fireworks_cli_auth, parse_fireworks_auth_ini};
 #[allow(unused_imports)]
 pub(crate) use grok::{
@@ -60,6 +64,11 @@ pub(crate) use grok::{
 pub(crate) use higgsfield::load_higgsfield_cli_auth;
 #[allow(unused_imports)]
 pub(crate) use kimi::{load_kimi_cli_auth, parse_kimi_credentials_json};
+#[allow(unused_imports)]
+pub(crate) use kiro::{
+    kiro_endpoints, kiro_region_from_token, kiro_region_ok, load_kiro_cli_auth,
+    parse_kiro_auth_token, read_kiro_usage_state, region_from_profile_arn,
+};
 #[allow(unused_imports)]
 pub(crate) use minimax::{fetch_minimax_quota_json, load_minimax_cli_auth};
 #[allow(unused_imports)]
@@ -127,6 +136,9 @@ pub fn import_from_cli(provider: Provider) -> Result<ImportedAccount, String> {
         Provider::Amp => load_amp_cli_auth(),
         Provider::Zai => load_zai_cli_auth(),
         Provider::Bailian => load_bailian_cli_auth(),
+        Provider::Trae => crate::trae_local::load_trae_local_auth(),
+        Provider::Kiro => load_kiro_cli_auth(),
+        Provider::Factory => load_factory_cli_auth(),
     }
 }
 

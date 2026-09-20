@@ -76,6 +76,28 @@ fn copilot_and_windsurf_status_maps() {
 }
 
 #[test]
+fn trae_and_kiro_and_factory_status_maps() {
+    assert_eq!(
+        trae_status("trae-user", "trae-user", Err(Some(401))),
+        "needs_login"
+    );
+    assert_eq!(
+        trae_status("trae-user", "trae-user", Err(Some(500))),
+        "experimental_error"
+    );
+    assert_eq!(trae_status("a", "b", Ok(())), "identity_changed");
+    assert_eq!(
+        trae_quota_status(&TraeQuota::default()),
+        "experimental_error"
+    );
+    assert_eq!(kiro_http_status(Some(401), false), "needs_login");
+    assert_eq!(kiro_http_status(Some(404), true), "needs_setup");
+    assert_eq!(kiro_http_status(Some(500), false), "experimental_error");
+    assert_eq!(factory_status(Some(401)), "needs_login");
+    assert_eq!(factory_status(Some(500)), "experimental_error");
+}
+
+#[test]
 fn cursor_success_maps_ok() {
     assert_eq!(
         cursor_outcome_status("cursor-user", "cursor-user", Ok(())),

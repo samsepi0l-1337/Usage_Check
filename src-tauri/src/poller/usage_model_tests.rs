@@ -576,6 +576,80 @@ fn account_usage_from_bailian_maps_five_hour_and_week() {
 }
 
 #[test]
+fn account_usage_from_trae_maps_period() {
+    let acct = Account {
+        id: "trae-1".into(),
+        provider: Provider::Trae,
+        label: "Trae".into(),
+        auth_source: AuthSource::TraeDatabase {
+            database_path: "/db".into(),
+            expected_identity: "dev@trae.ai".into(),
+        },
+    };
+    let quota = usage_core::fetch::trae::TraeQuota {
+        email: Some("dev@trae.ai".into()),
+        plan: Some("Pro".into()),
+        period: Some(QuotaUsage {
+            percent: 25.0,
+            resets_at: None,
+            window_seconds: Some(2_592_000),
+        }),
+        detail_suffix: None,
+    };
+    let result = account_usage_from_trae(&acct, &quota, "ok");
+    assert_eq!(result.display_name, "dev@trae.ai");
+    assert_eq!(result.week.unwrap().percent, 25.0);
+}
+
+#[test]
+fn account_usage_from_kiro_maps_credit_percent() {
+    let acct = Account {
+        id: "kiro-1".into(),
+        provider: Provider::Kiro,
+        label: "Kiro".into(),
+        auth_source: AuthSource::BrowserOAuth {
+            credential_id: "kiro-cred".into(),
+        },
+    };
+    let quota = usage_core::fetch::kiro::KiroQuota {
+        plan: Some("Kiro Pro".into()),
+        period: Some(QuotaUsage {
+            percent: 20.0,
+            resets_at: None,
+            window_seconds: Some(2_592_000),
+        }),
+        detail_suffix: None,
+    };
+    let result = account_usage_from_kiro(&acct, &quota, "ok");
+    assert_eq!(result.plan.as_deref(), Some("Kiro Pro"));
+    assert_eq!(result.week.unwrap().percent, 20.0);
+}
+
+#[test]
+fn account_usage_from_factory_maps_used_ratio() {
+    let acct = Account {
+        id: "factory-1".into(),
+        provider: Provider::Factory,
+        label: "Factory".into(),
+        auth_source: AuthSource::BrowserOAuth {
+            credential_id: "factory-cred".into(),
+        },
+    };
+    let usage = usage_core::fetch::factory::FactoryUsage {
+        plan: Some("Pro".into()),
+        period: Some(QuotaUsage {
+            percent: 25.0,
+            resets_at: None,
+            window_seconds: None,
+        }),
+        detail_suffix: None,
+    };
+    let result = account_usage_from_factory(&acct, &usage, "ok");
+    assert_eq!(result.plan.as_deref(), Some("Pro"));
+    assert_eq!(result.week.unwrap().percent, 25.0);
+}
+
+#[test]
 fn assemble_failed_outcome_yields_empty_breakdown() {
     let acct = Account {
         id: "test".into(),

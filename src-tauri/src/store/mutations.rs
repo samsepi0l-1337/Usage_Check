@@ -196,7 +196,9 @@ impl AccountStore {
             | Provider::Fireworks
             | Provider::Novita
             | Provider::Amp
-            | Provider::Zai => self.add_secret_with(
+            | Provider::Zai
+            | Provider::Kiro
+            | Provider::Factory => self.add_secret_with(
                 provider,
                 label,
                 SecretSource::BrowserOAuth,
@@ -228,6 +230,21 @@ impl AccountStore {
                     provider,
                     label.clone(),
                     AuthSource::WindsurfDatabase {
+                        database_path: db_path,
+                        expected_identity: session.identity.clone(),
+                    },
+                    is_pro,
+                )
+            }
+            Provider::Trae => {
+                let db_path = crate::paths::trae_state_vscdb()
+                    .ok_or_else(|| "could not resolve Trae database path".to_string())?;
+                let session = crate::trae_local::read_trae_session(&db_path)
+                    .map_err(|e| format!("Failed to read Trae session: {e}"))?;
+                self.add_reference_with(
+                    provider,
+                    label.clone(),
+                    AuthSource::TraeDatabase {
                         database_path: db_path,
                         expected_identity: session.identity.clone(),
                     },

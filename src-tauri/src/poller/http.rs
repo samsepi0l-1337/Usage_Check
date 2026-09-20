@@ -8,13 +8,16 @@ use usage_core::fetch::codex::{parse_codex_usage, CodexQuota};
 use usage_core::fetch::copilot::{parse_copilot_user, CopilotQuota};
 use usage_core::fetch::cursor::{parse_cursor_period_usage, CursorQuota};
 use usage_core::fetch::deepseek::{parse_deepseek_balance, DeepSeekBalance};
+use usage_core::fetch::factory::{parse_factory_usage, FactoryUsage};
 use usage_core::fetch::fireworks::{parse_fireworks_billing, FireworksBilling};
 use usage_core::fetch::grok::{parse_grok_prepaid_balance, GrokPrepaid};
 use usage_core::fetch::kimi::{parse_kimi_usages, KimiUsage};
+use usage_core::fetch::kiro::{parse_kiro_usage_limits, KiroQuota};
 use usage_core::fetch::novita::{parse_novita_balance, NovitaBalance};
 use usage_core::fetch::opencode::{parse_opencode_usage, OpenCodeUsage};
 use usage_core::fetch::openrouter::{parse_openrouter_key, OpenRouterUsage};
 use usage_core::fetch::poe::{parse_poe_balance, PoeBalance};
+use usage_core::fetch::trae::{parse_trae_entitlements, TraeQuota};
 use usage_core::fetch::windsurf::{parse_windsurf_user_status, WindsurfQuota};
 use usage_core::fetch::zai::{parse_zai_quota, ZaiQuota};
 
@@ -564,6 +567,197 @@ pub(super) async fn fetch_windsurf_status(
     Err(last_status)
 }
 
+const TRAE_ENTITLEMENT_URLS: &[&str] = &[
+    "https://api-sg-central.trae.ai/trae/api/v1/pay/user_current_entitlement_list",
+    "https://api-us-east.trae.ai/trae/api/v1/pay/user_current_entitlement_list",
+];
+
+fn trae_should_try_fallback(status: Option<u16>) -> bool {
+    match status {
+        None => true,
+        Some(404) => true,
+        Some(code) if (500..600).contains(&code) => true,
+        _ => false,
+    }
+}
+
+pub(super) async fn fetch_trae_entitlements(
+    client: &reqwest::Client,
+    jwt: &str,
+) -> Result<TraeQuota, Option<u16>> {
+    let mut last_status: Option<u16> = None;
+    let token = jwt.strip_prefix("Cloud-IDE-JWT ").unwrap_or(jwt).trim();
+    for url in TRAE_ENTITLEMENT_URLS {
+        let resp = match client
+            .post(*url)
+            .header("Accept", "application/json")
+            .header("Content-Type", "application/json")
+            .header("Authorization", format!("Cloud-IDE-JWT {token}"))
+            .header("User-Agent", USAGECHECK_UA)
+            .json(&serde_json::json!({ "require_usage": true }))
+            .send()
+            .await
+        {
+            Ok(resp) => resp,
+            Err(_) => continue,
+        };
+        let status = resp.status();
+        if !status.is_success() {
+            let code = status.as_u16();
+            if !trae_should_try_fallback(Some(code)) {
+                return Err(Some(code));
+            }
+            last_status = Some(code);
+            continue;
+        }
+        let root: serde_json::Value = resp.json().await.map_err(|_| Some(status.as_u16()))?;
+        return Ok(parse_trae_entitlements(&root));
+    }
+    Err(last_status)
+}
+
+pub(super) async fn refresh_kiro_access_token(
+    client: &reqwest::Client,
+    refresh_token: &str,
+    region: &str,
+) -> Result<(String, Option<String>, Option<String>), Option<u16>> {
+    let Some((url, _)) = crate::import::kiro_endpoints(region) else {
+        return Err(Some(404));
+    };
+    let resp = client
+        .post(&url)
+        .header("Accept", "application/json")
+        .header("Content-Type", "application/json")
+        .header("User-Agent", USAGECHECK_UA)
+        .json(&serde_json::json!({ "refreshToken": refresh_token }))
+        .send()
+        .await
+        .map_err(|_| None)?;
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(Some(status.as_u16()));
+    }
+    let root: serde_json::Value = resp.json().await.map_err(|_| Some(status.as_u16()))?;
+    let access = root
+        .get("accessToken")
+        .or_else(|| root.get("access_token"))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or(Some(status.as_u16()))?;
+    let refresh = root
+        .get("refreshToken")
+        .or_else(|| root.get("refresh_token"))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let profile_arn = root
+        .get("profileArn")
+        .or_else(|| root.get("profile_arn"))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .filter(|arn| crate::import::region_from_profile_arn(arn).is_some())
+        .map(str::to_string);
+    Ok((access.to_string(), refresh, profile_arn))
+}
+
+pub(super) async fn fetch_kiro_usage_limits(
+    client: &reqwest::Client,
+    access_token: &str,
+    region: &str,
+    profile_arn: &str,
+) -> Result<KiroQuota, Option<u16>> {
+    let Some((_, url)) = crate::import::kiro_endpoints(region) else {
+        return Err(Some(404));
+    };
+    let resp = client
+        .get(&url)
+        .header("Accept", "application/json")
+        .header("User-Agent", USAGECHECK_UA)
+        .bearer_auth(access_token)
+        .query(&[
+            ("origin", "AI_EDITOR"),
+            ("profileArn", profile_arn),
+            ("resourceType", "AGENTIC_REQUEST"),
+        ])
+        .send()
+        .await
+        .map_err(|_| None)?;
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(Some(status.as_u16()));
+    }
+    let root: serde_json::Value = resp.json().await.map_err(|_| Some(status.as_u16()))?;
+    Ok(parse_kiro_usage_limits(&root))
+}
+
+const FACTORY_USAGE_URL: &str = "https://api.factory.ai/api/organization/subscription/usage";
+const FACTORY_REFRESH_URL: &str = "https://api.workos.com/user_management/authenticate";
+const FACTORY_CLIENT_ID: &str = "client_01HNM792M5G5G1A2THWPXKFMXB";
+
+pub(super) async fn refresh_factory_access_token(
+    client: &reqwest::Client,
+    refresh_token: &str,
+) -> Result<(String, Option<String>), Option<u16>> {
+    let resp = client
+        .post(FACTORY_REFRESH_URL)
+        .header("Accept", "application/json")
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .header("User-Agent", USAGECHECK_UA)
+        .form(&[
+            ("grant_type", "refresh_token"),
+            ("refresh_token", refresh_token),
+            ("client_id", FACTORY_CLIENT_ID),
+        ])
+        .send()
+        .await
+        .map_err(|_| None)?;
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(Some(status.as_u16()));
+    }
+    let root: serde_json::Value = resp.json().await.map_err(|_| Some(status.as_u16()))?;
+    let access = root
+        .get("access_token")
+        .or_else(|| root.get("accessToken"))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or(Some(status.as_u16()))?;
+    let refresh = root
+        .get("refresh_token")
+        .or_else(|| root.get("refreshToken"))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    Ok((access.to_string(), refresh))
+}
+
+pub(super) async fn fetch_factory_usage(
+    client: &reqwest::Client,
+    creds: &Credentials,
+) -> Result<FactoryUsage, Option<u16>> {
+    let resp = client
+        .post(FACTORY_USAGE_URL)
+        .header("Accept", "application/json")
+        .header("Content-Type", "application/json")
+        .header("User-Agent", USAGECHECK_UA)
+        .bearer_auth(&creds.access_token)
+        .json(&serde_json::json!({ "useCache": true }))
+        .send()
+        .await
+        .map_err(|_| None)?;
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(Some(status.as_u16()));
+    }
+    let root: serde_json::Value = resp.json().await.map_err(|_| Some(status.as_u16()))?;
+    Ok(parse_factory_usage(&root))
+}
+
 pub(super) fn fetch_higgsfield_account_json() -> Result<serde_json::Value, ()> {
     use std::process::Command;
 
@@ -594,5 +788,14 @@ mod windsurf_fallback_tests {
         assert!(windsurf_should_try_fallback(Some(500)));
         assert!(windsurf_should_try_fallback(Some(503)));
         assert!(windsurf_should_try_fallback(None));
+    }
+
+    #[test]
+    fn trae_auth_errors_do_not_fall_through() {
+        assert!(!super::trae_should_try_fallback(Some(401)));
+        assert!(!super::trae_should_try_fallback(Some(403)));
+        assert!(super::trae_should_try_fallback(Some(404)));
+        assert!(super::trae_should_try_fallback(Some(500)));
+        assert!(super::trae_should_try_fallback(None));
     }
 }
