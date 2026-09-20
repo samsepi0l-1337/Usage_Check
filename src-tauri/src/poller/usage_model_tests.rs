@@ -440,6 +440,67 @@ fn account_usage_from_augment_remaining_only_has_suffix_not_percent() {
 }
 
 #[test]
+fn account_usage_from_poe_remaining_only_has_suffix_not_percent() {
+    let acct = Account {
+        id: "poe-1".into(),
+        provider: Provider::Poe,
+        label: "Poe".into(),
+        auth_source: AuthSource::BrowserOAuth {
+            credential_id: "poe-cred".into(),
+        },
+    };
+    let balance = usage_core::fetch::poe::PoeBalance {
+        period: None,
+        detail_suffix: Some("1500 points left".into()),
+    };
+    let result = account_usage_from_poe(&acct, &balance, "ok");
+    assert!(result.week.is_none());
+    assert_eq!(result.detail_suffix.as_deref(), Some("1500 points left"));
+}
+
+#[test]
+fn account_usage_from_fireworks_maps_period_and_billed_suffix() {
+    let acct = Account {
+        id: "fw-1".into(),
+        provider: Provider::Fireworks,
+        label: "Fireworks".into(),
+        auth_source: AuthSource::BrowserOAuth {
+            credential_id: "fw-cred".into(),
+        },
+    };
+    let billing = usage_core::fetch::fireworks::FireworksBilling {
+        period: Some(QuotaUsage {
+            percent: 25.0,
+            resets_at: None,
+            window_seconds: None,
+        }),
+        detail_suffix: Some("$25.00 billed".into()),
+    };
+    let result = account_usage_from_fireworks(&acct, &billing, "ok");
+    assert_eq!(result.week.unwrap().percent, 25.0);
+    assert_eq!(result.detail_suffix.as_deref(), Some("$25.00 billed"));
+}
+
+#[test]
+fn account_usage_from_novita_remaining_only_has_suffix_not_percent() {
+    let acct = Account {
+        id: "novita-1".into(),
+        provider: Provider::Novita,
+        label: "Novita".into(),
+        auth_source: AuthSource::BrowserOAuth {
+            credential_id: "novita-cred".into(),
+        },
+    };
+    let balance = usage_core::fetch::novita::NovitaBalance {
+        available_usd: Some(1.0),
+        detail_suffix: Some("$1.00 left".into()),
+    };
+    let result = account_usage_from_novita(&acct, &balance, "ok");
+    assert!(result.week.is_none());
+    assert_eq!(result.detail_suffix.as_deref(), Some("$1.00 left"));
+}
+
+#[test]
 fn assemble_failed_outcome_yields_empty_breakdown() {
     let acct = Account {
         id: "test".into(),

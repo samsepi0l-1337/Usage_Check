@@ -31,6 +31,11 @@ tauri-plugin-autostart = "2"
 # Signed license tokens (Stage B): verify Ed25519 signatures on every status
 # evaluation so a hand-edited cache file fails closed.
 ed25519-dalek = "3"
+# Poe CLI `credentials.enc` is AES-256-GCM with a machine-derived scrypt key
+# (hostname:username, no user password) — see poe-code auth-store.
+aes-gcm = "0.10"
+scrypt = "0.11"
+hostname = "0.4"
 
 [features]
 # Keep custom-protocol on by default for plain `cargo build --release`.

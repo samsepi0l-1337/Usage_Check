@@ -19,7 +19,8 @@ rows, Add/Remove account actions, Refresh, and Quit.
   not consumer SuperGrok), **Higgsfield** (credits via CLI), **Kimi Code**,
   **OpenCode Go**, **DeepSeek**, **OpenRouter**, **GitHub Copilot** (local,
   Experimental), **Windsurf** (local, Experimental), **MiniMax** (CLI Token
-  Plan), and **Augment** (Auggie CLI credits) are Pro providers,
+  Plan), **Augment** (Auggie CLI credits), **Poe** (CLI points), **Fireworks**
+  (CLI billing), and **Novita** (CLI balance) are Pro providers,
   designed to unlock at runtime from a license key rather than a
   separate binary. **Pro activation is not available in this release** — see
   the status note below.
@@ -31,7 +32,7 @@ rows, Add/Remove account actions, Refresh, and Quit.
 > **Status in this release: Pro activation is NOT available.** The licensing
 > service is not live yet, and this build embeds the documented placeholder
 > verification key, so `resolve_public_key()` returns `None` in a release
-> build and **no license key can unlock Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot, Windsurf, MiniMax or Augment — for
+> build and **no license key can unlock Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot, Windsurf, MiniMax, Augment, Poe, Fireworks or Novita — for
 > anyone.** Codex, Claude and agy remain free, with one active account per
 > provider in the unlicensed Free state. The runtime gate does not delete
 > paid accounts you already configured; it shows them as `pro_required`.
@@ -40,7 +41,7 @@ rows, Add/Remove account actions, Refresh, and Quit.
 
 UsageCheck ships as **one binary** for everyone. Codex, Claude, and agy
 (Gemini/Antigravity) are free. A Pro license key is designed to unlock Cursor,
-Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot, Windsurf, MiniMax, and Augment at **runtime** — no separate Free/Pro build, no
+Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot, Windsurf, MiniMax, Augment, Poe, Fireworks, and Novita at **runtime** — no separate Free/Pro build, no
 compile-time edition flag. Without a valid Pro license, one account per provider
 stays active for each free provider. If several are already stored,
 this limit deletes nothing: the first by index/insertion order stays live,

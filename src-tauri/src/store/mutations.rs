@@ -191,7 +191,10 @@ impl AccountStore {
             | Provider::OpenCode
             | Provider::DeepSeek
             | Provider::OpenRouter
-            | Provider::Copilot => self.add_secret_with(
+            | Provider::Copilot
+            | Provider::Poe
+            | Provider::Fireworks
+            | Provider::Novita => self.add_secret_with(
                 provider,
                 label,
                 SecretSource::BrowserOAuth,

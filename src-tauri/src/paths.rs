@@ -165,6 +165,46 @@ pub fn ori_config_file() -> Option<PathBuf> {
     ori_home().map(|home| home.join("config.json"))
 }
 
+/// Poe Code home: `$POE_CODE_HOME` or `~/.poe-code`.
+pub fn poe_code_home() -> Option<PathBuf> {
+    env_path("POE_CODE_HOME").or_else(|| home_dir().map(|h| h.join(".poe-code")))
+}
+
+/// Encrypted Poe CLI credentials (`credentials.enc`).
+pub fn poe_credentials_enc() -> Option<PathBuf> {
+    poe_code_home().map(|home| home.join("credentials.enc"))
+}
+
+/// Legacy plaintext Poe CLI `credentials.json`.
+pub fn poe_credentials_json() -> Option<PathBuf> {
+    poe_code_home().map(|home| home.join("credentials.json"))
+}
+
+/// Poe Code `config.json` (may hold a migrated `apiKey`).
+pub fn poe_config_json() -> Option<PathBuf> {
+    poe_code_home().map(|home| home.join("config.json"))
+}
+
+/// Fireworks CLI home: `$FIREWORKS_HOME` or `~/.fireworks`.
+pub fn fireworks_home() -> Option<PathBuf> {
+    env_path("FIREWORKS_HOME").or_else(|| home_dir().map(|h| h.join(".fireworks")))
+}
+
+/// firectl `auth.ini` (`account_id` + API key).
+pub fn fireworks_auth_ini() -> Option<PathBuf> {
+    fireworks_home().map(|home| home.join("auth.ini"))
+}
+
+/// Novita Sandbox CLI home: `$NOVITA_HOME` or `~/.novita`.
+pub fn novita_home() -> Option<PathBuf> {
+    env_path("NOVITA_HOME").or_else(|| home_dir().map(|h| h.join(".novita")))
+}
+
+/// Novita `config.json` (token / team API key after `novita auth login`).
+pub fn novita_config_json() -> Option<PathBuf> {
+    novita_home().map(|home| home.join("config.json"))
+}
+
 /// Claude config roots: `CLAUDE_CONFIG_DIR` (comma-separated) or the default
 /// `~/.claude` and `~/.config/claude`.
 pub fn claude_config_roots() -> Vec<PathBuf> {
@@ -252,19 +292,16 @@ fn github_copilot_token_files_from(
 /// GitHub Copilot token JSON files (`apps.json` then `hosts.json`).
 /// Windows also tries `%LOCALAPPDATA%/github-copilot/` after XDG/`~/.config`.
 pub fn github_copilot_token_files() -> Vec<PathBuf> {
-    github_copilot_token_files_from(
-        xdg_config_dir(),
+    github_copilot_token_files_from(xdg_config_dir(), {
+        #[cfg(target_os = "windows")]
         {
-            #[cfg(target_os = "windows")]
-            {
-                env_path("LOCALAPPDATA")
-            }
-            #[cfg(not(target_os = "windows"))]
-            {
-                None
-            }
-        },
-    )
+            env_path("LOCALAPPDATA")
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            None
+        }
+    })
 }
 
 /// `gh` `hosts.yml` candidates (`oauth_token` / `token` under github.com).

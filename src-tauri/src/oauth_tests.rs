@@ -177,6 +177,9 @@ fn local_import_providers_have_no_browser_oauth_config() {
         Provider::Windsurf,
         Provider::MiniMax,
         Provider::Augment,
+        Provider::Poe,
+        Provider::Fireworks,
+        Provider::Novita,
     ] {
         let err = config(provider).unwrap_err();
         assert!(

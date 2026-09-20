@@ -19,6 +19,9 @@ pub enum Provider {
     Windsurf,
     MiniMax,
     Augment,
+    Poe,
+    Fireworks,
+    Novita,
 }
 
 impl Provider {
@@ -38,6 +41,9 @@ impl Provider {
             Provider::Windsurf => "windsurf",
             Provider::MiniMax => "minimax",
             Provider::Augment => "augment",
+            Provider::Poe => "poe",
+            Provider::Fireworks => "fireworks",
+            Provider::Novita => "novita",
         }
     }
     #[allow(clippy::should_implement_trait)]
@@ -57,6 +63,9 @@ impl Provider {
             "windsurf" => Some(Provider::Windsurf),
             "minimax" => Some(Provider::MiniMax),
             "augment" => Some(Provider::Augment),
+            "poe" => Some(Provider::Poe),
+            "fireworks" => Some(Provider::Fireworks),
+            "novita" => Some(Provider::Novita),
             _ => None,
         }
     }
@@ -77,6 +86,9 @@ impl Provider {
             Provider::Windsurf => "Windsurf",
             Provider::MiniMax => "MiniMax",
             Provider::Augment => "Augment",
+            Provider::Poe => "Poe",
+            Provider::Fireworks => "Fireworks",
+            Provider::Novita => "Novita",
         }
     }
 }
@@ -221,6 +233,15 @@ mod tests {
             auth_capability(Provider::Augment).methods,
             &[AuthMethod::Cli]
         );
+        assert_eq!(auth_capability(Provider::Poe).methods, &[AuthMethod::Cli]);
+        assert_eq!(
+            auth_capability(Provider::Fireworks).methods,
+            &[AuthMethod::Cli]
+        );
+        assert_eq!(
+            auth_capability(Provider::Novita).methods,
+            &[AuthMethod::Cli]
+        );
     }
 
     #[test]
@@ -358,5 +379,14 @@ mod tests {
         assert_eq!(Provider::from_str("augment"), Some(Provider::Augment));
         assert_eq!(Provider::Augment.as_str(), "augment");
         assert_eq!(Provider::Augment.display_name(), "Augment");
+        assert_eq!(Provider::from_str("poe"), Some(Provider::Poe));
+        assert_eq!(Provider::Poe.as_str(), "poe");
+        assert_eq!(Provider::Poe.display_name(), "Poe");
+        assert_eq!(Provider::from_str("fireworks"), Some(Provider::Fireworks));
+        assert_eq!(Provider::Fireworks.as_str(), "fireworks");
+        assert_eq!(Provider::Fireworks.display_name(), "Fireworks");
+        assert_eq!(Provider::from_str("novita"), Some(Provider::Novita));
+        assert_eq!(Provider::Novita.as_str(), "novita");
+        assert_eq!(Provider::Novita.display_name(), "Novita");
     }
 }

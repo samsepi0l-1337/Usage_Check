@@ -32,7 +32,10 @@ pub fn auth_capability(provider: Provider) -> AuthCapability {
         | Provider::OpenRouter
         | Provider::Copilot
         | Provider::MiniMax
-        | Provider::Augment => &[AuthMethod::Cli],
+        | Provider::Augment
+        | Provider::Poe
+        | Provider::Fireworks
+        | Provider::Novita => &[AuthMethod::Cli],
         Provider::Windsurf => &[AuthMethod::LocalDatabase],
     };
     AuthCapability { methods }

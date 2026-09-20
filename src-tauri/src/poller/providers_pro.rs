@@ -1,14 +1,16 @@
 use super::http::{
-    fetch_copilot_user, fetch_cursor_quota, fetch_deepseek_balance, fetch_grok_prepaid,
-    fetch_higgsfield_account_json, fetch_kimi_usages, fetch_opencode_usage, fetch_openrouter_key,
-    fetch_windsurf_status, refresh_cursor_access_token,
+    fetch_copilot_user, fetch_cursor_quota, fetch_deepseek_balance, fetch_fireworks_billing,
+    fetch_grok_prepaid, fetch_higgsfield_account_json, fetch_kimi_usages, fetch_novita_balance,
+    fetch_opencode_usage, fetch_openrouter_key, fetch_poe_balance, fetch_windsurf_status,
+    refresh_cursor_access_token,
 };
 use super::providers::maybe_refresh;
 use super::usage_model::{
     account_usage_from_augment, account_usage_from_copilot, account_usage_from_cursor,
-    account_usage_from_deepseek, account_usage_from_grok, account_usage_from_higgsfield,
-    account_usage_from_kimi, account_usage_from_minimax, account_usage_from_opencode,
-    account_usage_from_openrouter, account_usage_from_windsurf, status_for_failure, AccountUsage,
+    account_usage_from_deepseek, account_usage_from_fireworks, account_usage_from_grok,
+    account_usage_from_higgsfield, account_usage_from_kimi, account_usage_from_minimax,
+    account_usage_from_novita, account_usage_from_opencode, account_usage_from_openrouter,
+    account_usage_from_poe, account_usage_from_windsurf, status_for_failure, AccountUsage,
 };
 use crate::store::AccountStore;
 use usage_core::account::{Account, Provider};
@@ -16,12 +18,15 @@ use usage_core::fetch::augment::{parse_augment_account, AugmentCredits};
 use usage_core::fetch::copilot::CopilotQuota;
 use usage_core::fetch::cursor::{cursor_quota_with_auth, CursorQuota};
 use usage_core::fetch::deepseek::DeepSeekBalance;
+use usage_core::fetch::fireworks::FireworksBilling;
 use usage_core::fetch::grok::GrokPrepaid;
 use usage_core::fetch::higgsfield::{parse_higgsfield_account, HiggsfieldCredits};
 use usage_core::fetch::kimi::KimiUsage;
 use usage_core::fetch::minimax::{parse_minimax_quota, MiniMaxQuota};
+use usage_core::fetch::novita::NovitaBalance;
 use usage_core::fetch::opencode::OpenCodeUsage;
 use usage_core::fetch::openrouter::OpenRouterUsage;
+use usage_core::fetch::poe::PoeBalance;
 use usage_core::fetch::windsurf::WindsurfQuota;
 
 fn cursor_outcome_status(
@@ -323,6 +328,82 @@ pub(super) async fn poll_openrouter(
         Err(status) => account_usage_from_openrouter(
             account,
             &OpenRouterUsage::default(),
+            status_for_failure(status),
+        ),
+    }
+}
+
+pub(super) async fn poll_poe(
+    store: &AccountStore,
+    client: &reqwest::Client,
+    account: &Account,
+) -> AccountUsage {
+    let Some(creds) = store.credentials(AccountStore::credential_key(account)) else {
+        return account_usage_from_poe(account, &PoeBalance::default(), "needs_login");
+    };
+    match fetch_poe_balance(client, &creds).await {
+        Ok(balance) => {
+            let status = if balance.detail_suffix.is_none() && balance.period.is_none() {
+                "needs_setup"
+            } else {
+                "ok"
+            };
+            account_usage_from_poe(account, &balance, status)
+        }
+        Err(status) => {
+            account_usage_from_poe(account, &PoeBalance::default(), status_for_failure(status))
+        }
+    }
+}
+
+pub(super) async fn poll_fireworks(
+    store: &AccountStore,
+    client: &reqwest::Client,
+    account: &Account,
+) -> AccountUsage {
+    let Some(creds) = store.credentials(AccountStore::credential_key(account)) else {
+        return account_usage_from_fireworks(account, &FireworksBilling::default(), "needs_login");
+    };
+    match fetch_fireworks_billing(client, &creds).await {
+        Ok(billing) => {
+            let status = if billing.detail_suffix.is_none() && billing.period.is_none() {
+                "needs_setup"
+            } else {
+                "ok"
+            };
+            account_usage_from_fireworks(account, &billing, status)
+        }
+        Err(Some(404)) => {
+            account_usage_from_fireworks(account, &FireworksBilling::default(), "needs_setup")
+        }
+        Err(status) => account_usage_from_fireworks(
+            account,
+            &FireworksBilling::default(),
+            status_for_failure(status),
+        ),
+    }
+}
+
+pub(super) async fn poll_novita(
+    store: &AccountStore,
+    client: &reqwest::Client,
+    account: &Account,
+) -> AccountUsage {
+    let Some(creds) = store.credentials(AccountStore::credential_key(account)) else {
+        return account_usage_from_novita(account, &NovitaBalance::default(), "needs_login");
+    };
+    match fetch_novita_balance(client, &creds).await {
+        Ok(balance) => {
+            let status = if balance.detail_suffix.is_none() {
+                "needs_setup"
+            } else {
+                "ok"
+            };
+            account_usage_from_novita(account, &balance, status)
+        }
+        Err(status) => account_usage_from_novita(
+            account,
+            &NovitaBalance::default(),
             status_for_failure(status),
         ),
     }
