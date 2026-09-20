@@ -35,6 +35,9 @@
         assert!(!specs.iter().any(|s| s.provider == Provider::Windsurf));
         assert!(!specs.iter().any(|s| s.provider == Provider::MiniMax));
         assert!(!specs.iter().any(|s| s.provider == Provider::Augment));
+        assert!(!specs.iter().any(|s| s.provider == Provider::Poe));
+        assert!(!specs.iter().any(|s| s.provider == Provider::Fireworks));
+        assert!(!specs.iter().any(|s| s.provider == Provider::Novita));
     }
 
     #[test]
@@ -51,6 +54,9 @@
         assert!(specs.iter().any(|s| s.provider == Provider::Windsurf));
         assert!(specs.iter().any(|s| s.provider == Provider::MiniMax));
         assert!(specs.iter().any(|s| s.provider == Provider::Augment));
+        assert!(specs.iter().any(|s| s.provider == Provider::Poe));
+        assert!(specs.iter().any(|s| s.provider == Provider::Fireworks));
+        assert!(specs.iter().any(|s| s.provider == Provider::Novita));
     }
 
     #[test]
@@ -192,6 +198,21 @@
         assert_eq!(spec.provider, Provider::Augment);
         assert_eq!(spec.method, AuthMethod::Cli);
         assert_eq!(spec.label, "Add Augment (CLI)");
+
+        let spec = spec_for_event("add-poe-cli").expect("Poe CLI is registered");
+        assert_eq!(spec.provider, Provider::Poe);
+        assert_eq!(spec.method, AuthMethod::Cli);
+        assert_eq!(spec.label, "Add Poe (CLI)");
+
+        let spec = spec_for_event("add-fireworks-cli").expect("Fireworks CLI is registered");
+        assert_eq!(spec.provider, Provider::Fireworks);
+        assert_eq!(spec.method, AuthMethod::Cli);
+        assert_eq!(spec.label, "Add Fireworks (CLI)");
+
+        let spec = spec_for_event("add-novita-cli").expect("Novita CLI is registered");
+        assert_eq!(spec.provider, Provider::Novita);
+        assert_eq!(spec.method, AuthMethod::Cli);
+        assert_eq!(spec.label, "Add Novita (CLI)");
     }
 
     use crate::poller::AccountUsage;
@@ -466,6 +487,30 @@
         u.detail_suffix = Some("12 credits remaining".into());
         let line = format_usage_detail(&u);
         assert_eq!(line, "12 credits remaining");
+        assert!(
+            !line.contains('%'),
+            "bare remaining must not invent %: {line}"
+        );
+    }
+
+    #[test]
+    fn format_usage_detail_poe_remaining_only_has_no_invented_percent() {
+        let mut u = usage(Provider::Poe, None, None);
+        u.detail_suffix = Some("1500 points left".into());
+        let line = format_usage_detail(&u);
+        assert_eq!(line, "1500 points left");
+        assert!(
+            !line.contains('%'),
+            "bare remaining must not invent %: {line}"
+        );
+    }
+
+    #[test]
+    fn format_usage_detail_novita_remaining_only_has_no_invented_percent() {
+        let mut u = usage(Provider::Novita, None, None);
+        u.detail_suffix = Some("$1.00 left".into());
+        let line = format_usage_detail(&u);
+        assert_eq!(line, "$1.00 left");
         assert!(
             !line.contains('%'),
             "bare remaining must not invent %: {line}"

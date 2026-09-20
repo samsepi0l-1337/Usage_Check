@@ -23,6 +23,9 @@ pub fn paid_providers() -> &'static [Provider] {
         Provider::Windsurf,
         Provider::MiniMax,
         Provider::Augment,
+        Provider::Poe,
+        Provider::Fireworks,
+        Provider::Novita,
     ]
 }
 
@@ -128,8 +131,8 @@ mod tests {
 
     #[test]
     fn all_providers_includes_free_and_paid() {
-        assert_eq!(paid_providers().len(), 11);
-        assert_eq!(all_providers().len(), 14);
+        assert_eq!(paid_providers().len(), 14);
+        assert_eq!(all_providers().len(), 17);
     }
 
     #[test]
@@ -145,6 +148,9 @@ mod tests {
         assert!(requires_pro(Provider::Windsurf));
         assert!(requires_pro(Provider::MiniMax));
         assert!(requires_pro(Provider::Augment));
+        assert!(requires_pro(Provider::Poe));
+        assert!(requires_pro(Provider::Fireworks));
+        assert!(requires_pro(Provider::Novita));
         assert!(!requires_pro(Provider::Codex));
         assert!(!requires_pro(Provider::Claude));
         assert!(!requires_pro(Provider::Agy));
@@ -180,6 +186,9 @@ mod tests {
             Provider::Windsurf,
             Provider::MiniMax,
             Provider::Augment,
+            Provider::Poe,
+            Provider::Fireworks,
+            Provider::Novita,
         ] {
             let accounts = [
                 account("paid-1", provider),

@@ -7,10 +7,13 @@ use usage_core::fetch::codex::{parse_codex_usage, CodexQuota};
 use usage_core::fetch::copilot::{parse_copilot_user, CopilotQuota};
 use usage_core::fetch::cursor::{parse_cursor_period_usage, CursorQuota};
 use usage_core::fetch::deepseek::{parse_deepseek_balance, DeepSeekBalance};
+use usage_core::fetch::fireworks::{parse_fireworks_billing, FireworksBilling};
 use usage_core::fetch::grok::{parse_grok_prepaid_balance, GrokPrepaid};
 use usage_core::fetch::kimi::{parse_kimi_usages, KimiUsage};
+use usage_core::fetch::novita::{parse_novita_balance, NovitaBalance};
 use usage_core::fetch::opencode::{parse_opencode_usage, OpenCodeUsage};
 use usage_core::fetch::openrouter::{parse_openrouter_key, OpenRouterUsage};
+use usage_core::fetch::poe::{parse_poe_balance, PoeBalance};
 use usage_core::fetch::windsurf::{parse_windsurf_user_status, WindsurfQuota};
 
 const AGY_USER_AGENT: &str = "antigravity/usagecheck macos/arm64";
@@ -318,6 +321,77 @@ pub(super) async fn fetch_openrouter_key(
     )
     .await?;
     Ok(parse_openrouter_key(&body))
+}
+
+pub(super) async fn fetch_poe_balance(
+    client: &reqwest::Client,
+    creds: &Credentials,
+) -> Result<PoeBalance, Option<u16>> {
+    let body = bearer_json(
+        client,
+        "https://api.poe.com/usage/current_balance",
+        &creds.access_token,
+    )
+    .await?;
+    Ok(parse_poe_balance(&body))
+}
+
+fn fireworks_month_bounds(now: chrono::DateTime<chrono::Utc>) -> (String, String) {
+    use chrono::{Datelike, NaiveDate, SecondsFormat};
+
+    let start_date =
+        NaiveDate::from_ymd_opt(now.year(), now.month(), 1).unwrap_or_else(|| now.date_naive());
+    let end_date = if now.month() == 12 {
+        NaiveDate::from_ymd_opt(now.year() + 1, 1, 1)
+    } else {
+        NaiveDate::from_ymd_opt(now.year(), now.month() + 1, 1)
+    }
+    .unwrap_or(start_date);
+    let start = start_date
+        .and_hms_opt(0, 0, 0)
+        .unwrap_or_default()
+        .and_utc()
+        .to_rfc3339_opts(SecondsFormat::Secs, true);
+    let end = end_date
+        .and_hms_opt(0, 0, 0)
+        .unwrap_or_default()
+        .and_utc()
+        .to_rfc3339_opts(SecondsFormat::Secs, true);
+    (start, end)
+}
+
+pub(super) async fn fetch_fireworks_billing(
+    client: &reqwest::Client,
+    creds: &Credentials,
+) -> Result<FireworksBilling, Option<u16>> {
+    let account_id = creds
+        .account_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or(Some(404_u16))?;
+    let (start, end) = fireworks_month_bounds(chrono::Utc::now());
+    let url = format!(
+        "https://api.fireworks.ai/v1/accounts/{}/billing/summary?startTime={}&endTime={}",
+        urlencoding::encode(account_id),
+        urlencoding::encode(&start),
+        urlencoding::encode(&end),
+    );
+    let body = bearer_json(client, &url, &creds.access_token).await?;
+    Ok(parse_fireworks_billing(&body))
+}
+
+pub(super) async fn fetch_novita_balance(
+    client: &reqwest::Client,
+    creds: &Credentials,
+) -> Result<NovitaBalance, Option<u16>> {
+    let body = bearer_json(
+        client,
+        "https://api.novita.ai/openapi/v1/billing/balance/detail",
+        &creds.access_token,
+    )
+    .await?;
+    Ok(parse_novita_balance(&body))
 }
 
 const COPILOT_USER_URL: &str = "https://api.github.com/copilot_internal/user";

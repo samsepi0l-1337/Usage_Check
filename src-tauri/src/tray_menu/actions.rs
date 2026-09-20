@@ -114,6 +114,24 @@ const ALL_AUTH_ACTION_SPECS: &[AuthActionSpec] = &[
         event_id: "add-augment-cli",
         label: "Add Augment (CLI)",
     },
+    AuthActionSpec {
+        provider: Provider::Poe,
+        method: AuthMethod::Cli,
+        event_id: "add-poe-cli",
+        label: "Add Poe (CLI)",
+    },
+    AuthActionSpec {
+        provider: Provider::Fireworks,
+        method: AuthMethod::Cli,
+        event_id: "add-fireworks-cli",
+        label: "Add Fireworks (CLI)",
+    },
+    AuthActionSpec {
+        provider: Provider::Novita,
+        method: AuthMethod::Cli,
+        event_id: "add-novita-cli",
+        label: "Add Novita (CLI)",
+    },
 ];
 
 /// Add Account actions available to the user right now: paid-provider specs

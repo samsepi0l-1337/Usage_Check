@@ -3,7 +3,7 @@
 > **Status: Pro activation is NOT available in the current release.** The
 > licensing service is not live, and shipped builds embed the documented
 > placeholder verification key, so every activation attempt fails and no
-> license key unlocks Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot, Windsurf, MiniMax or Augment — for anyone. Codex, Claude
+> license key unlocks Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot, Windsurf, MiniMax, Augment, Poe, Fireworks or Novita — for anyone. Codex, Claude
 > and agy remain free, with one active account per provider in the unlicensed
 > Free state. The runtime gate preserves already-configured paid accounts and
 > surplus free-provider accounts and renders them as `pro_required`. This
@@ -14,7 +14,7 @@
 UsageCheck ships as **one binary** for everyone. Codex, Claude, and agy
 (Gemini/Antigravity) are free, with one active account each in Free and
 unlimited accounts in Pro. A **Pro license key** is designed to unlock
-Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot, Windsurf, MiniMax, and Augment at **runtime** — there is no separate Free/Pro
+Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot, Windsurf, MiniMax, Augment, Poe, Fireworks, and Novita at **runtime** — there is no separate Free/Pro
 binary, no compile-time edition Cargo feature, and no `tauri.pro.conf.json`
 override.
 This replaces the two-binary/compile-time-edition split UsageCheck used
@@ -34,7 +34,7 @@ For local development-only Pro verification, see [`docs/dev-pro.md`](dev-pro.md)
 | Product name | `UsageCheck` |
 | Bundle ID | `com.usagecheck.desktop` |
 | Config | `src-tauri/tauri.conf.json` (the only Tauri config — no per-edition override file) |
-| Providers | Codex, Claude, Gemini (agy) free with one active account each while unlicensed; unlimited accounts plus Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot, Windsurf, MiniMax, Augment once Pro is active |
+| Providers | Codex, Claude, Gemini (agy) free with one active account each while unlicensed; unlimited accounts plus Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot, Windsurf, MiniMax, Augment, Poe, Fireworks, Novita once Pro is active |
 
 **Gemini** is not a separate `Provider` enum variant. It is implemented as
 `Provider::Agy` (Antigravity), which polls the Antigravity **Gemini Models**
@@ -83,6 +83,9 @@ clock-rollback handling: [`docs/LICENSE_API.md`](LICENSE_API.md).
 | **Windsurf** | Yes | **Import Windsurf (local, Experimental)** — `state.vscdb` | Undocumented Connect RPC `GetUserStatus` | Daily → 5h used %; weekly used % + optional `$ left` |
 | **MiniMax** | Yes | **Add MiniMax (CLI)** | `mmx quota show --output json` subprocess (probes `--json` aliases) | 5h + weekly used % from remaining-percent fields |
 | **Augment** | Yes | **Add Augment (CLI)** | `auggie account status --json` subprocess | Credits used % when remaining+included; else `N credits remaining` |
+| **Poe** | Yes | **Add Poe (CLI)** — `~/.poe-code/credentials.enc` (machine-derived decrypt) or plaintext `credentials.json` / `config.json` | Official `GET https://api.poe.com/usage/current_balance` | Remaining `N points left`; used % only when a limit is present |
+| **Fireworks** | Yes | **Add Fireworks (CLI)** — `~/.fireworks/auth.ini` | Official `GET https://api.fireworks.ai/v1/accounts/{id}/billing/summary` | `$ billed` for the calendar month; used % only with spend+limit |
+| **Novita** | Yes | **Add Novita (CLI)** — `~/.novita/config.json` | Official `GET https://api.novita.ai/openapi/v1/billing/balance/detail` | `$X.XX left` from `availableBalance` (1/10000 USD); no invented used % |
 
 A Pro-gated provider is hidden from the **Add Account** menu (and its
 account, if one somehow exists, renders `pro_required`) until a Pro license
@@ -288,6 +291,41 @@ notice. It is read-only and never writes to Windsurf's database.
    message; polling status is **`needs_setup`** when the CLI is unavailable
    or JSON has no recognizable credit fields.
 
+#### Poe
+
+1. Run `npx poe-code login` (or `npx poe-code@latest login`). Credentials
+   live in `~/.poe-code/` (`$POE_CODE_HOME` overrides).
+2. Tray → **Add Account** → **Add Poe (CLI)** reads, first usable:
+   - `credentials.enc` decrypted with the official machine-derived key
+     (`hostname:username` via scrypt, AES-256-GCM; no user password)
+   - plaintext `credentials.json` `apiKey`
+   - `config.json` `apiKey` / `core.apiKey`
+3. Polling uses official `GET https://api.poe.com/usage/current_balance`
+   (`User-Agent: UsageCheck`). Remaining points are `N points left`. Used %
+   is never invented from a remaining-only balance.
+
+#### Fireworks
+
+1. Run `firectl signin` and/or `firectl set-api-key` so
+   `~/.fireworks/auth.ini` (`$FIREWORKS_HOME`) has `account_id` and an API
+   key.
+2. Tray → **Add Account** → **Add Fireworks (CLI)** imports both fields.
+3. Polling uses official
+   `GET https://api.fireworks.ai/v1/accounts/{account_id}/billing/summary`
+   for the current UTC calendar month. Line-item spend is `$12.34 billed`.
+   Used % only when the JSON also has a positive spend limit.
+
+#### Novita
+
+1. Run `novita auth login` so `~/.novita/config.json` (`$NOVITA_HOME`) holds
+   a token / team API key.
+2. Tray → **Add Account** → **Add Novita (CLI)** prefers the selected team's
+   API key, then a top-level token.
+3. Polling uses official
+   `GET https://api.novita.ai/openapi/v1/billing/balance/detail`.
+   `availableBalance` is 1/10000 USD and is shown as `$X.XX left`.
+   `creditLimit` is not treated as a usage cap.
+
 ## Architecture
 
 Provider gating is a **runtime check**, not a compile-time feature — every
@@ -315,7 +353,9 @@ src-tauri/
                           # load_higgsfield_cli_auth(), load_kimi_cli_auth(),
                           # load_opencode_cli_auth(), load_deepseek_cli_auth(),
                           # load_openrouter_cli_auth(), load_copilot_cli_auth(),
-                          # load_minimax_cli_auth(), load_augment_cli_auth()
+                          # load_minimax_cli_auth(), load_augment_cli_auth(),
+                          # load_poe_cli_auth(), load_fireworks_cli_auth(),
+                          # load_novita_cli_auth()
   src/poller/             # poll_* for paid providers; requires_pro()-gated dispatch
   src/tray_menu/          # auth_action_specs() (is_pro()-filtered); license tray section
   src/menu_actions.rs     # handle_menu_event(): add-cursor-local / add-grok-clipboard /
@@ -323,6 +363,7 @@ src-tauri/
                           # add-opencode-cli / add-deepseek-cli / add-openrouter-cli /
                           # add-copilot-local / add-windsurf-local /
                           # add-minimax-cli / add-augment-cli /
+                          # add-poe-cli / add-fireworks-cli / add-novita-cli /
                           # license-activate-clipboard / license-deactivate / license-get
   tauri.conf.json         # the single UsageCheck config
 ```
@@ -348,6 +389,9 @@ mode), on by default. There is no edition feature and no
 | **Windsurf** | **Experimental.** Undocumented `GetUserStatus` Connect RPC and local `state.vscdb`. No separate Codeium provider. |
 | **MiniMax** | **Pure CLI reference** via `mmx quota show --output json` (no credential file read). Remaining-percent fields only; counts are not converted to %. Unrecognized JSON → `needs_setup`. |
 | **Augment** | **Pure CLI reference** via `auggie account status --json` (Auggie 0.24.0+). Bare remaining credits never become a used %. Unrecognized JSON → `needs_setup`. |
+| **Poe** | Remaining points only unless the balance payload includes a limit. Encrypted `credentials.enc` uses a machine-derived key (not a user password). |
+| **Fireworks** | Calendar-month billed spend as `$ billed`. Used % only with spend vs limit in the same JSON. |
+| **Novita** | `availableBalance` converted from 1/10000 USD. No invented used %. |
 | **Claude CLI accounts** | Usage depends on a status-line bridge installed into the isolated profile; a newly added Claude CLI account shows `waiting_for_usage` until `claude` is run in that profile and renders its status line at least once. |
 | **Offline grace** | A Pro license verified once keeps working offline for 14 days (`license::OFFLINE_GRACE`); beyond that (or on a detected clock rollback) the tray shows `License: verification needed` until the next successful online refresh. |
 | **Local API** | `GET /v1/usage/{provider}` documents `codex` \| `claude` \| `agy` only; Pro providers appear in the full `/v1/usage` snapshot once a Pro license is active. |
@@ -410,7 +454,7 @@ cargo build -p usage-app --release
 ## 한국어 요약
 
 - UsageCheck는 **단일 바이너리**입니다. Codex, Claude, Gemini(agy)는 무료.
-- Pro 라이선스 키를 활성화하면 런타임에 Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot, Windsurf, MiniMax, Augment가 열립니다 (별도 바이너리 없음).
+- Pro 라이선스 키를 활성화하면 런타임에 Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot, Windsurf, MiniMax, Augment, Poe, Fireworks, Novita가 열립니다 (별도 바이너리 없음).
 - 트레이 메뉴 → 라이선스 섹션 → **Activate from clipboard**로 키 등록,
   **Deactivate license**로 해제, **Get a license…**로 구매 페이지 열기.
 - 활성화는 Ed25519 서명 토큰(디바이스 바인딩, 오프라인 유예 14일)으로 검증됩니다 — 자세한 내용은 `docs/LICENSE_API.md`.

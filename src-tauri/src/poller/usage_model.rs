@@ -8,12 +8,15 @@ use usage_core::fetch::codex::CodexQuota;
 use usage_core::fetch::copilot::CopilotQuota;
 use usage_core::fetch::cursor::CursorQuota;
 use usage_core::fetch::deepseek::DeepSeekBalance;
+use usage_core::fetch::fireworks::FireworksBilling;
 use usage_core::fetch::grok::GrokPrepaid;
 use usage_core::fetch::higgsfield::HiggsfieldCredits;
 use usage_core::fetch::kimi::KimiUsage;
 use usage_core::fetch::minimax::MiniMaxQuota;
+use usage_core::fetch::novita::NovitaBalance;
 use usage_core::fetch::opencode::OpenCodeUsage;
 use usage_core::fetch::openrouter::OpenRouterUsage;
+use usage_core::fetch::poe::PoeBalance;
 use usage_core::fetch::windsurf::WindsurfQuota;
 use usage_core::models::{
     LocalProvenance, LocalUsage, QuotaUsage, UsageBreakdownRow, WindowTotals,
@@ -321,6 +324,66 @@ pub(super) fn account_usage_from_openrouter(
         pool_breakdown: Vec::new(),
         breakdown: Vec::new(),
         detail_suffix: usage.detail_suffix.clone(),
+        status: status.to_string(),
+        local_status: None,
+    }
+}
+
+pub(super) fn account_usage_from_poe(
+    account: &Account,
+    balance: &PoeBalance,
+    status: &str,
+) -> AccountUsage {
+    AccountUsage {
+        display_name: display_name_for(account, None, None),
+        plan: None,
+        account: account.clone(),
+        five_hour: None,
+        week: balance.period.clone(),
+        totals: WindowTotals::default(),
+        pool_breakdown: Vec::new(),
+        breakdown: Vec::new(),
+        detail_suffix: balance.detail_suffix.clone(),
+        status: status.to_string(),
+        local_status: None,
+    }
+}
+
+pub(super) fn account_usage_from_fireworks(
+    account: &Account,
+    billing: &FireworksBilling,
+    status: &str,
+) -> AccountUsage {
+    AccountUsage {
+        display_name: display_name_for(account, None, None),
+        plan: None,
+        account: account.clone(),
+        five_hour: None,
+        week: billing.period.clone(),
+        totals: WindowTotals::default(),
+        pool_breakdown: Vec::new(),
+        breakdown: Vec::new(),
+        detail_suffix: billing.detail_suffix.clone(),
+        status: status.to_string(),
+        local_status: None,
+    }
+}
+
+pub(super) fn account_usage_from_novita(
+    account: &Account,
+    balance: &NovitaBalance,
+    status: &str,
+) -> AccountUsage {
+    AccountUsage {
+        display_name: display_name_for(account, None, None),
+        plan: None,
+        account: account.clone(),
+        five_hour: None,
+        week: None,
+        totals: WindowTotals::default(),
+        pool_breakdown: Vec::new(),
+        breakdown: Vec::new(),
+        detail_suffix: balance.detail_suffix.clone(),
         status: status.to_string(),
         local_status: None,
     }

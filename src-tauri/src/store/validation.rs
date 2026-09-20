@@ -41,6 +41,9 @@ impl AccountStore {
                         | Provider::DeepSeek
                         | Provider::OpenRouter
                         | Provider::Copilot
+                        | Provider::Poe
+                        | Provider::Fireworks
+                        | Provider::Novita
                 )
             }
             SecretSource::XaiManagement { .. } => provider == Provider::Grok,

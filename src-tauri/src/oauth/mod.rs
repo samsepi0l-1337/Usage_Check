@@ -147,7 +147,10 @@ pub fn config(provider: Provider) -> Result<ProviderOAuth, String> {
         | Provider::Copilot
         | Provider::Windsurf
         | Provider::MiniMax
-        | Provider::Augment => Err(format!(
+        | Provider::Augment
+        | Provider::Poe
+        | Provider::Fireworks
+        | Provider::Novita => Err(format!(
             "{} uses local import — choose Import from the tray Add Account menu",
             provider.display_name()
         )),

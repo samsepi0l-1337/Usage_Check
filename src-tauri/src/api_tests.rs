@@ -32,7 +32,10 @@ fn sample_auth_source(provider: Provider, identity: &str) -> AuthSource {
         | Provider::OpenCode
         | Provider::DeepSeek
         | Provider::OpenRouter
-        | Provider::Copilot => AuthSource::BrowserOAuth {
+        | Provider::Copilot
+        | Provider::Poe
+        | Provider::Fireworks
+        | Provider::Novita => AuthSource::BrowserOAuth {
             credential_id: format!("{identity}-credential"),
         },
         Provider::Windsurf => AuthSource::WindsurfDatabase {
@@ -431,6 +434,9 @@ fn provider_filter_accepts_pro_providers() {
         sample(Provider::Windsurf, "windsurf", None, None),
         sample(Provider::MiniMax, "minimax", None, None),
         sample(Provider::Augment, "augment", None, None),
+        sample(Provider::Poe, "poe", None, None),
+        sample(Provider::Fireworks, "fireworks", None, None),
+        sample(Provider::Novita, "novita", None, None),
     ]);
     for provider in [
         "cursor",
@@ -444,6 +450,9 @@ fn provider_filter_accepts_pro_providers() {
         "windsurf",
         "minimax",
         "augment",
+        "poe",
+        "fireworks",
+        "novita",
     ] {
         let reply = route(&state, "GET", &format!("/v1/usage/{provider}"));
         assert_eq!(reply.status, 200);

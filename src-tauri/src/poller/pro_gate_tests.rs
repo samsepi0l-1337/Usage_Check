@@ -67,6 +67,9 @@ fn store_with_all_paid_providers() -> (tempfile::TempDir, AccountStore) {
         (Provider::DeepSeek, "deepseek-test"),
         (Provider::OpenRouter, "openrouter-test"),
         (Provider::Copilot, "copilot-test"),
+        (Provider::Poe, "poe-test"),
+        (Provider::Fireworks, "fireworks-test"),
+        (Provider::Novita, "novita-test"),
     ] {
         store
             .add_secret_with(
@@ -122,7 +125,7 @@ async fn unlicensed_poll_skips_io_for_every_paid_provider() {
 
     let results = poll_all_with(&store, false).await;
 
-    assert_eq!(results.len(), 11, "expected one result per paid account");
+    assert_eq!(results.len(), 14, "expected one result per paid account");
     for usage in &results {
         assert_eq!(
             usage.status, "pro_required",

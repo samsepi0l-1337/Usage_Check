@@ -620,6 +620,9 @@ fn new_pro_providers_store_as_browser_oauth_secrets() {
         Provider::DeepSeek,
         Provider::OpenRouter,
         Provider::Copilot,
+        Provider::Poe,
+        Provider::Fireworks,
+        Provider::Novita,
     ] {
         let account = store
             .add_with(
@@ -774,4 +777,137 @@ fn augment_import_missing_binary_tells_user_to_install_auggie() {
     let err = super::augment::load_augment_cli_auth_with(None).unwrap_err();
     assert!(err.contains("install auggie"), "{err}");
     assert!(err.contains("auggie login"), "{err}");
+}
+
+#[test]
+fn poe_decrypts_credentials_enc_with_machine_identity() {
+    let dir = TempDir::new().unwrap();
+    let enc = dir.path().join("credentials.enc");
+    let iv = [7u8; 12];
+    std::fs::write(
+        &enc,
+        super::poe::encrypt_poe_credentials_enc("sk-poe-from-enc", "testhost", "testuser", &iv),
+    )
+    .unwrap();
+    let imported = super::poe::load_poe_cli_auth_from(
+        Some(&enc),
+        None,
+        None,
+        Some("testhost"),
+        Some("testuser"),
+    )
+    .unwrap();
+    assert_eq!(imported.credentials.access_token, "sk-poe-from-enc");
+    assert_eq!(imported.label, "Poe");
+}
+
+#[test]
+fn poe_falls_back_to_plaintext_credentials_json() {
+    let dir = TempDir::new().unwrap();
+    let json_path = dir.path().join("credentials.json");
+    std::fs::write(&json_path, r#"{"apiKey":"sk-poe-plain"}"#).unwrap();
+    let imported =
+        super::poe::load_poe_cli_auth_from(None, Some(&json_path), None, None, None).unwrap();
+    assert_eq!(imported.credentials.access_token, "sk-poe-plain");
+}
+
+#[test]
+fn poe_reads_config_json_core_api_key() {
+    let dir = TempDir::new().unwrap();
+    let config = dir.path().join("config.json");
+    std::fs::write(&config, r#"{"core":{"apiKey":"sk-poe-config"}}"#).unwrap();
+    let imported =
+        super::poe::load_poe_cli_auth_from(None, None, Some(&config), None, None).unwrap();
+    assert_eq!(imported.credentials.access_token, "sk-poe-config");
+}
+
+#[test]
+fn poe_missing_files_tell_user_to_login() {
+    let err = super::poe::load_poe_cli_auth_from(None, None, None, None, None).unwrap_err();
+    assert!(err.contains("npx poe-code login"), "{err}");
+}
+
+#[test]
+fn poe_undecryptable_enc_without_plaintext_explains_login() {
+    let dir = TempDir::new().unwrap();
+    let enc = dir.path().join("credentials.enc");
+    std::fs::write(
+        &enc,
+        r#"{"version":1,"iv":"aaaa","authTag":"bbbb","ciphertext":"cccc"}"#,
+    )
+    .unwrap();
+    let err = super::poe::load_poe_cli_auth_from(
+        Some(&enc),
+        None,
+        None,
+        Some("testhost"),
+        Some("testuser"),
+    )
+    .unwrap_err();
+    assert!(err.contains("npx poe-code login"), "{err}");
+}
+
+#[test]
+fn fireworks_auth_ini_reads_default_section() {
+    let dir = TempDir::new().unwrap();
+    let ini = dir.path().join("auth.ini");
+    std::fs::write(
+        &ini,
+        "[default]\naccount_id = my-acct\napi_key = fw_test_key\n",
+    )
+    .unwrap();
+    let imported = super::fireworks::load_fireworks_cli_auth_from(&ini).unwrap();
+    assert_eq!(imported.credentials.account_id.as_deref(), Some("my-acct"));
+    assert_eq!(imported.credentials.access_token, "fw_test_key");
+}
+
+#[test]
+fn fireworks_auth_ini_accepts_flat_keys() {
+    let parsed =
+        super::fireworks::parse_fireworks_auth_ini("account_id=acct-2\napi-key = 'fw_quoted'\n")
+            .unwrap();
+    assert_eq!(parsed.0, "acct-2");
+    assert_eq!(parsed.1, "fw_quoted");
+}
+
+#[test]
+fn fireworks_missing_file_tells_user_to_signin() {
+    let dir = TempDir::new().unwrap();
+    let err = super::fireworks::load_fireworks_cli_auth_from(&dir.path().join("missing.ini"))
+        .unwrap_err();
+    assert!(err.contains("firectl signin"), "{err}");
+    assert!(err.contains("firectl set-api-key"), "{err}");
+}
+
+#[test]
+fn novita_config_prefers_team_api_key() {
+    let dir = TempDir::new().unwrap();
+    let config = dir.path().join("config.json");
+    std::fs::write(
+        &config,
+        r#"{
+            "email": "you@example.com",
+            "token": "session-token",
+            "team": { "name": "my-team", "apiKey": "nvta_team_key" }
+        }"#,
+    )
+    .unwrap();
+    let imported = super::novita::load_novita_cli_auth_from(&config).unwrap();
+    assert_eq!(imported.credentials.access_token, "nvta_team_key");
+    assert_eq!(imported.label, "you@example.com");
+}
+
+#[test]
+fn novita_config_falls_back_to_token() {
+    let parsed =
+        super::novita::parse_novita_config(&json!({ "access_token": "nvta_session" })).unwrap();
+    assert_eq!(parsed.0, "nvta_session");
+}
+
+#[test]
+fn novita_missing_file_tells_user_to_login() {
+    let dir = TempDir::new().unwrap();
+    let err =
+        super::novita::load_novita_cli_auth_from(&dir.path().join("missing.json")).unwrap_err();
+    assert!(err.contains("novita auth login"), "{err}");
 }
