@@ -1148,6 +1148,35 @@ fn v2_duplicate_bailian_identities_are_rejected_without_overwrite() {
 }
 
 #[test]
+fn v2_duplicate_trae_identities_are_rejected_without_overwrite() {
+    let sandbox = TestSandbox::new();
+    let store = sandbox.store();
+    store.initialize_v2().unwrap();
+    let first = store
+        .add_reference_with(
+            Provider::Trae,
+            "first".into(),
+            AuthSource::TraeDatabase {
+                database_path: sandbox.root.join("trae.vscdb"),
+                expected_identity: "trae-user".into(),
+            },
+            || true,
+        )
+        .unwrap();
+    let duplicate = store.add_reference_with(
+        Provider::Trae,
+        "replacement".into(),
+        AuthSource::TraeDatabase {
+            database_path: sandbox.root.join("replacement.vscdb"),
+            expected_identity: "trae-user".into(),
+        },
+        || true,
+    );
+    assert!(duplicate.is_err());
+    assert_eq!(store.list(), vec![first]);
+}
+
+#[test]
 fn v2_duplicate_augment_identities_are_rejected_without_overwrite() {
     let sandbox = TestSandbox::new();
     let store = sandbox.store();

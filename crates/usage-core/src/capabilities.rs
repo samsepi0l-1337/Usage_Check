@@ -38,8 +38,10 @@ pub fn auth_capability(provider: Provider) -> AuthCapability {
         | Provider::Novita
         | Provider::Amp
         | Provider::Zai
-        | Provider::Bailian => &[AuthMethod::Cli],
-        Provider::Windsurf => &[AuthMethod::LocalDatabase],
+        | Provider::Bailian
+        | Provider::Kiro
+        | Provider::Factory => &[AuthMethod::Cli],
+        Provider::Windsurf | Provider::Trae => &[AuthMethod::LocalDatabase],
     };
     AuthCapability { methods }
 }

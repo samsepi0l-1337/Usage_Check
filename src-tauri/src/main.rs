@@ -43,6 +43,7 @@ mod paths;
 mod poller;
 mod store;
 mod terminal;
+mod trae_local;
 mod tray_menu;
 mod windsurf_local;
 

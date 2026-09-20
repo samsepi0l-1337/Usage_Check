@@ -388,6 +388,41 @@ pub fn windsurf_state_vscdb() -> Option<PathBuf> {
     editor_state_vscdb("Windsurf")
 }
 
+/// Trae (intl) `state.vscdb` (read-only) under globalStorage.
+pub fn trae_state_vscdb() -> Option<PathBuf> {
+    editor_state_vscdb("Trae")
+}
+
+/// Kiro IDE `state.vscdb` (read-only) — usageState cache only.
+pub fn kiro_state_vscdb() -> Option<PathBuf> {
+    editor_state_vscdb("Kiro")
+}
+
+/// Kiro desktop auth token: `~/.aws/sso/cache/kiro-auth-token.json`.
+pub fn kiro_auth_token_file() -> Option<PathBuf> {
+    home_dir().map(|h| {
+        h.join(".aws")
+            .join("sso")
+            .join("cache")
+            .join("kiro-auth-token.json")
+    })
+}
+
+/// Factory droid home: `$FACTORY_HOME` or `~/.factory`.
+pub fn factory_home() -> Option<PathBuf> {
+    env_path("FACTORY_HOME").or_else(|| home_dir().map(|h| h.join(".factory")))
+}
+
+/// Plaintext Factory `auth.json`.
+pub fn factory_auth_json() -> Option<PathBuf> {
+    factory_home().map(|home| home.join("auth.json"))
+}
+
+/// Encrypted Factory `auth.v2.file` (fail closed — do not decrypt).
+pub fn factory_auth_v2_file() -> Option<PathBuf> {
+    factory_home().map(|home| home.join("auth.v2.file"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -500,6 +535,19 @@ mod tests {
         if let Some(p) = windsurf_state_vscdb() {
             assert_eq!(p.file_name().and_then(|n| n.to_str()), Some("state.vscdb"));
             assert!(p.to_string_lossy().contains("Windsurf"));
+        }
+        if let Some(p) = trae_state_vscdb() {
+            assert_eq!(p.file_name().and_then(|n| n.to_str()), Some("state.vscdb"));
+            assert!(p.to_string_lossy().contains("Trae"));
+        }
+        if let Some(p) = kiro_auth_token_file() {
+            assert_eq!(
+                p.file_name().and_then(|n| n.to_str()),
+                Some("kiro-auth-token.json")
+            );
+        }
+        if let Some(p) = factory_auth_json() {
+            assert_eq!(p.file_name().and_then(|n| n.to_str()), Some("auth.json"));
         }
     }
 

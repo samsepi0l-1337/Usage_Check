@@ -3,7 +3,7 @@
 > **Status: Pro activation is NOT available in the current release.** The
 > licensing service is not live, and shipped builds embed the documented
 > placeholder verification key, so every activation attempt fails and no
-> license key unlocks Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot, Windsurf, MiniMax, Augment, Poe, Fireworks, Novita, Amp, Z.AI or Alibaba Token Plan — for anyone. Codex, Claude
+> license key unlocks Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot, Windsurf, MiniMax, Augment, Poe, Fireworks, Novita, Amp, Z.AI, Alibaba Token Plan, Trae, Kiro or Factory — for anyone. Codex, Claude
 > and agy remain free, with one active account per provider in the unlicensed
 > Free state. The runtime gate preserves already-configured paid accounts and
 > surplus free-provider accounts and renders them as `pro_required`. This
@@ -14,7 +14,7 @@
 UsageCheck ships as **one binary** for everyone. Codex, Claude, and agy
 (Gemini/Antigravity) are free, with one active account each in Free and
 unlimited accounts in Pro. A **Pro license key** is designed to unlock
-Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot, Windsurf, MiniMax, Augment, Poe, Fireworks, Novita, Amp, Z.AI, and Alibaba Token Plan at **runtime** — there is no separate Free/Pro
+Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot, Windsurf, MiniMax, Augment, Poe, Fireworks, Novita, Amp, Z.AI, Alibaba Token Plan, Trae, Kiro, and Factory at **runtime** — there is no separate Free/Pro
 binary, no compile-time edition Cargo feature, and no `tauri.pro.conf.json`
 override.
 This replaces the two-binary/compile-time-edition split UsageCheck used
@@ -34,7 +34,7 @@ For local development-only Pro verification, see [`docs/dev-pro.md`](dev-pro.md)
 | Product name | `UsageCheck` |
 | Bundle ID | `com.usagecheck.desktop` |
 | Config | `src-tauri/tauri.conf.json` (the only Tauri config — no per-edition override file) |
-| Providers | Codex, Claude, Gemini (agy) free with one active account each while unlicensed; unlimited accounts plus Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot, Windsurf, MiniMax, Augment, Poe, Fireworks, Novita, Amp, Z.AI, Alibaba Token Plan once Pro is active |
+| Providers | Codex, Claude, Gemini (agy) free with one active account each while unlicensed; unlimited accounts plus Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot, Windsurf, MiniMax, Augment, Poe, Fireworks, Novita, Amp, Z.AI, Alibaba Token Plan, Trae, Kiro, Factory once Pro is active |
 
 **Gemini** is not a separate `Provider` enum variant. It is implemented as
 `Provider::Agy` (Antigravity), which polls the Antigravity **Gemini Models**
@@ -89,6 +89,9 @@ clock-rollback handling: [`docs/LICENSE_API.md`](LICENSE_API.md).
 | **Amp** | Yes | **Add Amp (CLI)** — `~/.local/share/amp/secrets.json` | Undocumented JSON-RPC `userDisplayBalanceInfo` on `ampcode.com/api/internal` | Used % when remaining+total; else `$N remaining` |
 | **Z.AI** | Yes | **Add Z.AI (CLI)** — OpenCode `auth.json` `zai`, then `~/.zcode/v2/config.json` / `~/.hermes/auth.json` | Reverse-engineered `GET https://api.z.ai/api/monitor/usage/quota/limit` (raw Authorization) | 5h + weekly used % |
 | **Alibaba Token Plan** | Yes | **Add Alibaba Token Plan (CLI)** | Official `bl usage token-plan --output json` | 5h + weekly used fractions (`per5HourPercentage` / `per1WeekPercentage`) |
+| **Trae** | Yes | **Import Trae (local, Experimental)** — intl `state.vscdb` | Undocumented `POST …/user_current_entitlement_list` `{require_usage:true}` | Billing-period used % from entitlement packs |
+| **Kiro** | Yes | **Add Kiro (CLI)** — `~/.aws/sso/cache/kiro-auth-token.json` | Community `GET https://q.<region>.amazonaws.com/getUsageLimits` | CREDIT used/limit as used % |
+| **Factory** | Yes | **Add Factory (CLI)** — plaintext `~/.factory/auth.json` | `POST https://api.factory.ai/api/organization/subscription/usage` | `usedRatio` as used % |
 
 A Pro-gated provider is hidden from the **Add Account** menu (and its
 account, if one somehow exists, renders `pro_required`) until a Pro license
@@ -373,6 +376,64 @@ community reverse-engineered and is not an official public contract.
 4. Missing CLI → install/`bl auth login`; polling is **`needs_setup`** when
    the CLI is unavailable or JSON has no windows.
 
+#### Trae (Experimental)
+
+This integration is **Experimental** — it depends on Trae's local SQLite
+layout and an undocumented entitlement RPC, both of which can change without
+notice. It is read-only and never writes to Trae's database. International
+Trae only.
+
+1. Sign in to the Trae desktop app (intl).
+2. Tray → **Add Account** → **Import Trae (local, Experimental)**.
+3. The app reads (read-only) from Trae's SQLite `state.vscdb`:
+
+   - macOS: `~/Library/Application Support/Trae/User/globalStorage/state.vscdb`
+   - Windows: `%APPDATA%/Trae/User/globalStorage/state.vscdb`
+
+4. ItemTable keys searched: `Cloud-IDE-JWT`, `iCubeAuthInfo://icube.cloudide`,
+   and similar JWT-bearing names. Encrypted CN `tc` blobs fail closed
+   (`needs_setup`) — they are not decrypted.
+5. Polling `POST`s `{require_usage:true}` to
+   `https://api-sg-central.trae.ai/trae/api/v1/pay/user_current_entitlement_list`
+   (fallback `api-us-east.trae.ai`) with `Authorization: Cloud-IDE-JWT`.
+6. Fast-request used/limit across entitlement packs map to billing-period
+   used %. Remaining-only packs never invent a percent.
+7. HTTP 401/403 → `needs_login`; other RPC failures → `experimental_error`.
+   Local JWT is re-read from the DB on each poll when the identity matches.
+
+#### Kiro (Experimental)
+
+This integration is **Experimental** — the usage-limits endpoint is
+community-documented from the shipped Kiro extension and may change.
+
+1. Sign in to Kiro (desktop or CLI).
+2. Tray → **Add Account** → **Add Kiro (CLI)** reads
+   `~/.aws/sso/cache/kiro-auth-token.json` and stores tokens.
+3. Polling refreshes when needed (`POST https://prod.<region>.auth.desktop.kiro.dev/refreshToken`)
+   then `GET https://q.<region>.amazonaws.com/getUsageLimits?origin=AI_EDITOR&profileArn=…`.
+   Region comes from the token file or `profileArn`; if missing, `us-east-1`
+   is tried once, then `needs_setup`.
+4. CREDIT `currentUsage`/`usageLimit` become used %. Other resource types
+   are ignored. `kiro-cli /usage` TUI text is not parsed.
+5. If the token file is missing at poll time, the IDE `state.vscdb`
+   `usageState` cache is used only as a last-resort numeric snapshot.
+6. HTTP 401/403 → `needs_login`.
+
+#### Factory (Experimental)
+
+This integration is **Experimental** — the subscription usage API is
+community-documented and may change.
+
+1. Run `droid` login so plaintext `~/.factory/auth.json` exists.
+2. Tray → **Add Account** → **Add Factory (CLI)**. Encrypted
+   `auth.v2.file` + `auth.v2.key` fail closed — they are not decrypted.
+3. Polling `POST`s `{useCache:true}` to
+   `https://api.factory.ai/api/organization/subscription/usage`.
+   `usedRatio` (0–1, or already 0–100) is used %. Tokens-only without a
+   ratio/allowance never invent a percent.
+4. HTTP 401/403 → `needs_login` (WorkOS refresh is attempted when a
+   refresh token is present).
+
 ## Architecture
 
 Provider gating is a **runtime check**, not a compile-time feature — every
@@ -391,12 +452,14 @@ crates/usage-core/
     copilot.rs / windsurf.rs
     minimax.rs / augment.rs  # CLI quota / account-status JSON
     amp.rs / zai.rs / bailian.rs
+    trae.rs / kiro.rs / factory.rs
 
 src-tauri/
   src/edition.rs          # product_name(), re-exports all_providers()
   src/license/            # signed-token activation, status, offline grace (docs/LICENSE_API.md)
   src/cursor_local.rs     # read-only state.vscdb import
   src/windsurf_local.rs   # read-only Windsurf state.vscdb import
+  src/trae_local.rs       # read-only Trae state.vscdb import (fail closed on tc)
   src/import/             # load_grok_env_auth(), import_grok_from_clipboard(),
                           # load_higgsfield_cli_auth(), load_kimi_cli_auth(),
                           # load_opencode_cli_auth(), load_deepseek_cli_auth(),
@@ -404,7 +467,8 @@ src-tauri/
                           # load_minimax_cli_auth(), load_augment_cli_auth(),
                           # load_poe_cli_auth(), load_fireworks_cli_auth(),
                           # load_novita_cli_auth(), load_amp_cli_auth(),
-                          # load_zai_cli_auth(), load_bailian_cli_auth()
+                          # load_zai_cli_auth(), load_bailian_cli_auth(),
+                          # load_kiro_cli_auth(), load_factory_cli_auth()
   src/poller/             # poll_* for paid providers; requires_pro()-gated dispatch
   src/tray_menu/          # auth_action_specs() (is_pro()-filtered); license tray section
   src/menu_actions.rs     # handle_menu_event(): add-cursor-local / add-grok-clipboard /
@@ -414,6 +478,7 @@ src-tauri/
                           # add-minimax-cli / add-augment-cli /
                           # add-poe-cli / add-fireworks-cli / add-novita-cli /
                           # add-amp-cli / add-zai-cli / add-bailian-cli /
+                          # add-trae-local / add-kiro-cli / add-factory-cli /
                           # license-activate-clipboard / license-deactivate / license-get
   tauri.conf.json         # the single UsageCheck config
 ```
@@ -445,6 +510,9 @@ mode), on by default. There is no edition feature and no
 | **Amp** | **Experimental.** Undocumented `userDisplayBalanceInfo` JSON-RPC. Remaining-only never becomes used %. |
 | **Z.AI** | **Experimental.** Reverse-engineered coding-plan monitor API. Raw Authorization first. |
 | **Alibaba Token Plan** | **Pure CLI reference** via `bl usage token-plan --output json`. Fractions `<= 1` are ratios. |
+| **Trae** | **Experimental.** Undocumented entitlement RPC + local `state.vscdb`. Encrypted CN `tc` blobs fail closed. |
+| **Kiro** | **Experimental.** Community `getUsageLimits`. CREDIT used/limit only. Region missing → try `us-east-1` then `needs_setup`. |
+| **Factory** | **Experimental.** `usedRatio` from subscription usage. Encrypted `auth.v2` fails closed. |
 | **Claude CLI accounts** | Usage depends on a status-line bridge installed into the isolated profile; a newly added Claude CLI account shows `waiting_for_usage` until `claude` is run in that profile and renders its status line at least once. |
 | **Offline grace** | A Pro license verified once keeps working offline for 14 days (`license::OFFLINE_GRACE`); beyond that (or on a detected clock rollback) the tray shows `License: verification needed` until the next successful online refresh. |
 | **Local API** | `GET /v1/usage/{provider}` documents `codex` \| `claude` \| `agy` only; Pro providers appear in the full `/v1/usage` snapshot once a Pro license is active. |
@@ -507,7 +575,7 @@ cargo build -p usage-app --release
 ## 한국어 요약
 
 - UsageCheck는 **단일 바이너리**입니다. Codex, Claude, Gemini(agy)는 무료.
-- Pro 라이선스 키를 활성화하면 런타임에 Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot, Windsurf, MiniMax, Augment, Poe, Fireworks, Novita, Amp, Z.AI, Alibaba Token Plan이 열립니다 (별도 바이너리 없음).
+- Pro 라이선스 키를 활성화하면 런타임에 Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot, Windsurf, MiniMax, Augment, Poe, Fireworks, Novita, Amp, Z.AI, Alibaba Token Plan, Trae, Kiro, Factory가 열립니다 (별도 바이너리 없음).
 - 트레이 메뉴 → 라이선스 섹션 → **Activate from clipboard**로 키 등록,
   **Deactivate license**로 해제, **Get a license…**로 구매 페이지 열기.
 - 활성화는 Ed25519 서명 토큰(디바이스 바인딩, 오프라인 유예 14일)으로 검증됩니다 — 자세한 내용은 `docs/LICENSE_API.md`.

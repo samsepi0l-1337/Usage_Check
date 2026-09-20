@@ -14,6 +14,7 @@ impl AccountStore {
                 AuthSource::CliProfile { .. }
             ) | (Provider::Cursor, AuthSource::CursorDatabase { .. })
                 | (Provider::Windsurf, AuthSource::WindsurfDatabase { .. })
+                | (Provider::Trae, AuthSource::TraeDatabase { .. })
                 | (Provider::Higgsfield, AuthSource::HiggsfieldCli { .. })
                 | (Provider::MiniMax, AuthSource::MiniMaxCli { .. })
                 | (Provider::Augment, AuthSource::AugmentCli { .. })
@@ -47,6 +48,8 @@ impl AccountStore {
                         | Provider::Novita
                         | Provider::Amp
                         | Provider::Zai
+                        | Provider::Kiro
+                        | Provider::Factory
                 )
             }
             SecretSource::XaiManagement { .. } => provider == Provider::Grok,
@@ -95,6 +98,16 @@ impl AccountStore {
                         ..
                     },
                 ) if existing == candidate => Some("Windsurf identity already registered"),
+                (
+                    AuthSource::TraeDatabase {
+                        expected_identity: existing,
+                        ..
+                    },
+                    AuthSource::TraeDatabase {
+                        expected_identity: candidate,
+                        ..
+                    },
+                ) if existing == candidate => Some("Trae identity already registered"),
                 (
                     AuthSource::XaiManagement {
                         team_id: existing, ..

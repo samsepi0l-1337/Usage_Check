@@ -150,6 +150,24 @@ const ALL_AUTH_ACTION_SPECS: &[AuthActionSpec] = &[
         event_id: "add-bailian-cli",
         label: "Add Alibaba Token Plan (CLI)",
     },
+    AuthActionSpec {
+        provider: Provider::Trae,
+        method: AuthMethod::LocalDatabase,
+        event_id: "add-trae-local",
+        label: "Import Trae (local, Experimental)",
+    },
+    AuthActionSpec {
+        provider: Provider::Kiro,
+        method: AuthMethod::Cli,
+        event_id: "add-kiro-cli",
+        label: "Add Kiro (CLI)",
+    },
+    AuthActionSpec {
+        provider: Provider::Factory,
+        method: AuthMethod::Cli,
+        event_id: "add-factory-cli",
+        label: "Add Factory (CLI)",
+    },
 ];
 
 /// Add Account actions available to the user right now: paid-provider specs

@@ -21,7 +21,8 @@ rows, Add/Remove account actions, Refresh, and Quit.
   Experimental), **Windsurf** (local, Experimental), **MiniMax** (CLI Token
   Plan), **Augment** (Auggie CLI credits), **Poe** (CLI points), **Fireworks**
   (CLI billing), **Novita** (CLI balance), **Amp** (CLI balance RPC), **Z.AI**
-  (GLM Coding Plan), and **Alibaba Token Plan** (Bailian CLI) are Pro providers,
+  (GLM Coding Plan), **Alibaba Token Plan** (Bailian CLI), **Trae** (local,
+  Experimental), **Kiro** (CLI), and **Factory** (CLI) are Pro providers,
   designed to unlock at runtime from a license key rather than a
   separate binary. **Pro activation is not available in this release** — see
   the status note below.
@@ -33,7 +34,7 @@ rows, Add/Remove account actions, Refresh, and Quit.
 > **Status in this release: Pro activation is NOT available.** The licensing
 > service is not live yet, and this build embeds the documented placeholder
 > verification key, so `resolve_public_key()` returns `None` in a release
-> build and **no license key can unlock Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot, Windsurf, MiniMax, Augment, Poe, Fireworks, Novita, Amp, Z.AI or Alibaba Token Plan — for
+> build and **no license key can unlock Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot, Windsurf, MiniMax, Augment, Poe, Fireworks, Novita, Amp, Z.AI, Alibaba Token Plan, Trae, Kiro or Factory — for
 > anyone.** Codex, Claude and agy remain free, with one active account per
 > provider in the unlicensed Free state. The runtime gate does not delete
 > paid accounts you already configured; it shows them as `pro_required`.
@@ -42,7 +43,7 @@ rows, Add/Remove account actions, Refresh, and Quit.
 
 UsageCheck ships as **one binary** for everyone. Codex, Claude, and agy
 (Gemini/Antigravity) are free. A Pro license key is designed to unlock Cursor,
-Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot, Windsurf, MiniMax, Augment, Poe, Fireworks, Novita, Amp, Z.AI, and Alibaba Token Plan at **runtime** — no separate Free/Pro build, no
+Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot, Windsurf, MiniMax, Augment, Poe, Fireworks, Novita, Amp, Z.AI, Alibaba Token Plan, Trae, Kiro, and Factory at **runtime** — no separate Free/Pro build, no
 compile-time edition flag. Without a valid Pro license, one account per provider
 stays active for each free provider. If several are already stored,
 this limit deletes nothing: the first by index/insertion order stays live,
@@ -55,7 +56,7 @@ contract).
 
 | | Product name | Bundle ID | Providers |
 | --- | --- | --- | --- |
-| UsageCheck | `UsageCheck` | `com.usagecheck.desktop` | Codex, Claude, agy free (one active account each while unlicensed); unlimited accounts and Cursor/Grok/Higgsfield/Kimi/OpenCode/DeepSeek/OpenRouter/Copilot/Windsurf/MiniMax/Augment/Poe/Fireworks/Novita/Amp/Z.AI/Alibaba Token Plan with Pro (not activatable in this release) |
+| UsageCheck | `UsageCheck` | `com.usagecheck.desktop` | Codex, Claude, agy free (one active account each while unlicensed); unlimited accounts and Cursor/Grok/Higgsfield/Kimi/OpenCode/DeepSeek/OpenRouter/Copilot/Windsurf/MiniMax/Augment/Poe/Fireworks/Novita/Amp/Z.AI/Alibaba Token Plan/Trae/Kiro/Factory with Pro (not activatable in this release) |
 
 **Gemini** is `Provider::Agy` (Antigravity Gemini Models quota), not a
 separate enum.
@@ -110,6 +111,12 @@ active — so **not visible in this release**), exact menu labels from
   / `~/.hermes/auth.json`) plus reverse-engineered coding-plan quota (5h + weekly).
 - **Add Alibaba Token Plan (CLI)** — official `bl usage token-plan --output json`
   (5h + weekly used fractions).
+- **Import Trae (local, Experimental)** — read-only intl Trae `state.vscdb`
+  plus undocumented entitlement list. Encrypted CN `tc` blobs fail closed.
+- **Add Kiro (CLI)** — `~/.aws/sso/cache/kiro-auth-token.json` plus community
+  `getUsageLimits` CREDIT used/limit.
+- **Add Factory (CLI)** — plaintext `~/.factory/auth.json` plus
+  `usedRatio`. Encrypted `auth.v2` fails closed.
 
 Plain `cargo build` (or `./scripts/build-edition.sh`) produces the single
 unified binary — see `scripts/build-edition.sh` for a wrapped

@@ -41,6 +41,9 @@
         assert!(!specs.iter().any(|s| s.provider == Provider::Amp));
         assert!(!specs.iter().any(|s| s.provider == Provider::Zai));
         assert!(!specs.iter().any(|s| s.provider == Provider::Bailian));
+        assert!(!specs.iter().any(|s| s.provider == Provider::Trae));
+        assert!(!specs.iter().any(|s| s.provider == Provider::Kiro));
+        assert!(!specs.iter().any(|s| s.provider == Provider::Factory));
     }
 
     #[test]
@@ -63,6 +66,9 @@
         assert!(specs.iter().any(|s| s.provider == Provider::Amp));
         assert!(specs.iter().any(|s| s.provider == Provider::Zai));
         assert!(specs.iter().any(|s| s.provider == Provider::Bailian));
+        assert!(specs.iter().any(|s| s.provider == Provider::Trae));
+        assert!(specs.iter().any(|s| s.provider == Provider::Kiro));
+        assert!(specs.iter().any(|s| s.provider == Provider::Factory));
     }
 
     #[test]
@@ -234,6 +240,21 @@
         assert_eq!(spec.provider, Provider::Bailian);
         assert_eq!(spec.method, AuthMethod::Cli);
         assert_eq!(spec.label, "Add Alibaba Token Plan (CLI)");
+
+        let spec = spec_for_event("add-trae-local").expect("Trae local import is registered");
+        assert_eq!(spec.provider, Provider::Trae);
+        assert_eq!(spec.method, AuthMethod::LocalDatabase);
+        assert_eq!(spec.label, "Import Trae (local, Experimental)");
+
+        let spec = spec_for_event("add-kiro-cli").expect("Kiro CLI is registered");
+        assert_eq!(spec.provider, Provider::Kiro);
+        assert_eq!(spec.method, AuthMethod::Cli);
+        assert_eq!(spec.label, "Add Kiro (CLI)");
+
+        let spec = spec_for_event("add-factory-cli").expect("Factory CLI is registered");
+        assert_eq!(spec.provider, Provider::Factory);
+        assert_eq!(spec.method, AuthMethod::Cli);
+        assert_eq!(spec.label, "Add Factory (CLI)");
     }
 
     use crate::poller::AccountUsage;
