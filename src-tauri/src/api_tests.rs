@@ -28,6 +28,9 @@ fn sample_auth_source(provider: Provider, identity: &str) -> AuthSource {
         Provider::Augment => AuthSource::AugmentCli {
             expected_identity: identity.into(),
         },
+        Provider::Bailian => AuthSource::BailianCli {
+            expected_identity: identity.into(),
+        },
         Provider::Kimi
         | Provider::OpenCode
         | Provider::DeepSeek
@@ -35,7 +38,9 @@ fn sample_auth_source(provider: Provider, identity: &str) -> AuthSource {
         | Provider::Copilot
         | Provider::Poe
         | Provider::Fireworks
-        | Provider::Novita => AuthSource::BrowserOAuth {
+        | Provider::Novita
+        | Provider::Amp
+        | Provider::Zai => AuthSource::BrowserOAuth {
             credential_id: format!("{identity}-credential"),
         },
         Provider::Windsurf => AuthSource::WindsurfDatabase {
@@ -437,6 +442,9 @@ fn provider_filter_accepts_pro_providers() {
         sample(Provider::Poe, "poe", None, None),
         sample(Provider::Fireworks, "fireworks", None, None),
         sample(Provider::Novita, "novita", None, None),
+        sample(Provider::Amp, "amp", None, None),
+        sample(Provider::Zai, "zai", None, None),
+        sample(Provider::Bailian, "bailian", None, None),
     ]);
     for provider in [
         "cursor",
@@ -453,6 +461,9 @@ fn provider_filter_accepts_pro_providers() {
         "poe",
         "fireworks",
         "novita",
+        "amp",
+        "zai",
+        "bailian",
     ] {
         let reply = route(&state, "GET", &format!("/v1/usage/{provider}"));
         assert_eq!(reply.status, 200);

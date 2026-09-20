@@ -205,6 +205,29 @@ pub fn novita_config_json() -> Option<PathBuf> {
     novita_home().map(|home| home.join("config.json"))
 }
 
+/// Amp home: `$AMP_HOME`, else `$XDG_DATA_HOME/amp`, else `~/.local/share/amp`
+/// (Windows `%USERPROFILE%\.local\share\amp`).
+pub fn amp_home() -> Option<PathBuf> {
+    env_path("AMP_HOME")
+        .or_else(|| env_path("XDG_DATA_HOME").map(|xdg| xdg.join("amp")))
+        .or_else(|| home_dir().map(|h| h.join(".local").join("share").join("amp")))
+}
+
+/// Amp CLI `secrets.json` (`apiKey@https://ampcode.com/`).
+pub fn amp_secrets_file() -> Option<PathBuf> {
+    amp_home().map(|home| home.join("secrets.json"))
+}
+
+/// ZCode `~/.zcode/v2/config.json`.
+pub fn zcode_config_json() -> Option<PathBuf> {
+    home_dir().map(|h| h.join(".zcode").join("v2").join("config.json"))
+}
+
+/// Hermes `~/.hermes/auth.json`.
+pub fn hermes_auth_file() -> Option<PathBuf> {
+    home_dir().map(|h| h.join(".hermes").join("auth.json"))
+}
+
 /// Claude config roots: `CLAUDE_CONFIG_DIR` (comma-separated) or the default
 /// `~/.claude` and `~/.config/claude`.
 pub fn claude_config_roots() -> Vec<PathBuf> {

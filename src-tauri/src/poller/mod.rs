@@ -29,9 +29,9 @@ use providers::{
 };
 mod providers_pro;
 use providers_pro::{
-    poll_augment, poll_copilot, poll_cursor, poll_deepseek, poll_fireworks, poll_grok,
-    poll_higgsfield, poll_kimi, poll_minimax, poll_novita, poll_opencode, poll_openrouter,
-    poll_poe, poll_windsurf,
+    poll_amp, poll_augment, poll_bailian, poll_copilot, poll_cursor, poll_deepseek, poll_fireworks,
+    poll_grok, poll_higgsfield, poll_kimi, poll_minimax, poll_novita, poll_opencode,
+    poll_openrouter, poll_poe, poll_windsurf, poll_zai,
 };
 pub use usage_model::{account_usage_pro_required, assemble_account_usage, AccountUsage};
 
@@ -172,6 +172,9 @@ async fn poll_all_with(store: &AccountStore, is_pro: bool) -> Vec<AccountUsage> 
                 Provider::Poe => poll_poe(store, &client, &account).await,
                 Provider::Fireworks => poll_fireworks(store, &client, &account).await,
                 Provider::Novita => poll_novita(store, &client, &account).await,
+                Provider::Amp => poll_amp(store, &client, &account).await,
+                Provider::Zai => poll_zai(store, &client, &account).await,
+                Provider::Bailian => poll_bailian(store, &account).await,
             }
         };
         let usage = {

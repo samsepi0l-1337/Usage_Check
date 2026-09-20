@@ -17,6 +17,7 @@ impl AccountStore {
                 | (Provider::Higgsfield, AuthSource::HiggsfieldCli { .. })
                 | (Provider::MiniMax, AuthSource::MiniMaxCli { .. })
                 | (Provider::Augment, AuthSource::AugmentCli { .. })
+                | (Provider::Bailian, AuthSource::BailianCli { .. })
         );
         if valid {
             Ok(())
@@ -44,6 +45,8 @@ impl AccountStore {
                         | Provider::Poe
                         | Provider::Fireworks
                         | Provider::Novita
+                        | Provider::Amp
+                        | Provider::Zai
                 )
             }
             SecretSource::XaiManagement { .. } => provider == Provider::Grok,
@@ -124,6 +127,16 @@ impl AccountStore {
                         expected_identity: candidate,
                     },
                 ) if existing == candidate => Some("Augment CLI account already registered"),
+                (
+                    AuthSource::BailianCli {
+                        expected_identity: existing,
+                    },
+                    AuthSource::BailianCli {
+                        expected_identity: candidate,
+                    },
+                ) if existing == candidate => {
+                    Some("Alibaba Token Plan CLI account already registered")
+                }
                 _ => None,
             })
     }

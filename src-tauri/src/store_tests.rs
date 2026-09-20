@@ -1121,6 +1121,33 @@ fn v2_duplicate_minimax_identities_are_rejected_without_overwrite() {
 }
 
 #[test]
+fn v2_duplicate_bailian_identities_are_rejected_without_overwrite() {
+    let sandbox = TestSandbox::new();
+    let store = sandbox.store();
+    store.initialize_v2().unwrap();
+    let first = store
+        .add_reference_with(
+            Provider::Bailian,
+            "first".into(),
+            AuthSource::BailianCli {
+                expected_identity: "bl-user-1".into(),
+            },
+            || true,
+        )
+        .unwrap();
+    let duplicate = store.add_reference_with(
+        Provider::Bailian,
+        "replacement".into(),
+        AuthSource::BailianCli {
+            expected_identity: "bl-user-1".into(),
+        },
+        || true,
+    );
+    assert!(duplicate.is_err());
+    assert_eq!(store.list(), vec![first]);
+}
+
+#[test]
 fn v2_duplicate_augment_identities_are_rejected_without_overwrite() {
     let sandbox = TestSandbox::new();
     let store = sandbox.store();

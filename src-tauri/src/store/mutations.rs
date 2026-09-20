@@ -194,7 +194,9 @@ impl AccountStore {
             | Provider::Copilot
             | Provider::Poe
             | Provider::Fireworks
-            | Provider::Novita => self.add_secret_with(
+            | Provider::Novita
+            | Provider::Amp
+            | Provider::Zai => self.add_secret_with(
                 provider,
                 label,
                 SecretSource::BrowserOAuth,
@@ -261,6 +263,14 @@ impl AccountStore {
                 provider,
                 label.clone(),
                 AuthSource::AugmentCli {
+                    expected_identity: label,
+                },
+                is_pro,
+            ),
+            Provider::Bailian => self.add_reference_with(
+                provider,
+                label.clone(),
+                AuthSource::BailianCli {
                     expected_identity: label,
                 },
                 is_pro,

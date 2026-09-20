@@ -132,6 +132,24 @@ const ALL_AUTH_ACTION_SPECS: &[AuthActionSpec] = &[
         event_id: "add-novita-cli",
         label: "Add Novita (CLI)",
     },
+    AuthActionSpec {
+        provider: Provider::Amp,
+        method: AuthMethod::Cli,
+        event_id: "add-amp-cli",
+        label: "Add Amp (CLI)",
+    },
+    AuthActionSpec {
+        provider: Provider::Zai,
+        method: AuthMethod::Cli,
+        event_id: "add-zai-cli",
+        label: "Add Z.AI (CLI)",
+    },
+    AuthActionSpec {
+        provider: Provider::Bailian,
+        method: AuthMethod::Cli,
+        event_id: "add-bailian-cli",
+        label: "Add Alibaba Token Plan (CLI)",
+    },
 ];
 
 /// Add Account actions available to the user right now: paid-provider specs

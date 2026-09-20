@@ -24,6 +24,7 @@ pub(crate) fn auth_kind(source: &AuthSource) -> &'static str {
         AuthSource::HiggsfieldCli { .. } => "higgsfield_cli",
         AuthSource::MiniMaxCli { .. } => "minimax_cli",
         AuthSource::AugmentCli { .. } => "augment_cli",
+        AuthSource::BailianCli { .. } => "bailian_cli",
     }
 }
 

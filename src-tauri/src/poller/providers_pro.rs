@@ -1,20 +1,23 @@
 use super::http::{
-    fetch_copilot_user, fetch_cursor_quota, fetch_deepseek_balance, fetch_fireworks_billing,
-    fetch_grok_prepaid, fetch_higgsfield_account_json, fetch_kimi_usages, fetch_novita_balance,
-    fetch_opencode_usage, fetch_openrouter_key, fetch_poe_balance, fetch_windsurf_status,
-    refresh_cursor_access_token,
+    fetch_amp_balance, fetch_copilot_user, fetch_cursor_quota, fetch_deepseek_balance,
+    fetch_fireworks_billing, fetch_grok_prepaid, fetch_higgsfield_account_json, fetch_kimi_usages,
+    fetch_novita_balance, fetch_opencode_usage, fetch_openrouter_key, fetch_poe_balance,
+    fetch_windsurf_status, fetch_zai_quota, refresh_cursor_access_token,
 };
 use super::providers::maybe_refresh;
 use super::usage_model::{
-    account_usage_from_augment, account_usage_from_copilot, account_usage_from_cursor,
-    account_usage_from_deepseek, account_usage_from_fireworks, account_usage_from_grok,
-    account_usage_from_higgsfield, account_usage_from_kimi, account_usage_from_minimax,
-    account_usage_from_novita, account_usage_from_opencode, account_usage_from_openrouter,
-    account_usage_from_poe, account_usage_from_windsurf, status_for_failure, AccountUsage,
+    account_usage_from_amp, account_usage_from_augment, account_usage_from_bailian,
+    account_usage_from_copilot, account_usage_from_cursor, account_usage_from_deepseek,
+    account_usage_from_fireworks, account_usage_from_grok, account_usage_from_higgsfield,
+    account_usage_from_kimi, account_usage_from_minimax, account_usage_from_novita,
+    account_usage_from_opencode, account_usage_from_openrouter, account_usage_from_poe,
+    account_usage_from_windsurf, account_usage_from_zai, status_for_failure, AccountUsage,
 };
 use crate::store::AccountStore;
 use usage_core::account::{Account, Provider};
+use usage_core::fetch::amp::AmpBalance;
 use usage_core::fetch::augment::{parse_augment_account, AugmentCredits};
+use usage_core::fetch::bailian::{parse_bailian_token_plan, BailianQuota};
 use usage_core::fetch::copilot::CopilotQuota;
 use usage_core::fetch::cursor::{cursor_quota_with_auth, CursorQuota};
 use usage_core::fetch::deepseek::DeepSeekBalance;
@@ -28,6 +31,7 @@ use usage_core::fetch::opencode::OpenCodeUsage;
 use usage_core::fetch::openrouter::OpenRouterUsage;
 use usage_core::fetch::poe::PoeBalance;
 use usage_core::fetch::windsurf::WindsurfQuota;
+use usage_core::fetch::zai::ZaiQuota;
 
 fn cursor_outcome_status(
     session_id: &str,
@@ -406,6 +410,74 @@ pub(super) async fn poll_novita(
             &NovitaBalance::default(),
             status_for_failure(status),
         ),
+    }
+}
+
+fn amp_status(status: Option<u16>) -> &'static str {
+    match status {
+        Some(401) | Some(403) => "needs_login",
+        Some(429) => "throttled",
+        _ => "experimental_error",
+    }
+}
+
+fn zai_status(status: Option<u16>) -> &'static str {
+    match status {
+        Some(401) => "needs_login",
+        Some(403) | Some(404) => "needs_setup",
+        Some(429) => "throttled",
+        _ => "error",
+    }
+}
+
+pub(super) async fn poll_amp(
+    store: &AccountStore,
+    client: &reqwest::Client,
+    account: &Account,
+) -> AccountUsage {
+    let Some(creds) = store.credentials(AccountStore::credential_key(account)) else {
+        return account_usage_from_amp(account, &AmpBalance::default(), "needs_login");
+    };
+    match fetch_amp_balance(client, &creds).await {
+        Ok(balance) => {
+            let status = if balance.period.is_none() && balance.detail_suffix.is_none() {
+                "needs_setup"
+            } else {
+                "ok"
+            };
+            account_usage_from_amp(account, &balance, status)
+        }
+        Err(status) => account_usage_from_amp(account, &AmpBalance::default(), amp_status(status)),
+    }
+}
+
+pub(super) async fn poll_zai(
+    store: &AccountStore,
+    client: &reqwest::Client,
+    account: &Account,
+) -> AccountUsage {
+    let Some(creds) = store.credentials(AccountStore::credential_key(account)) else {
+        return account_usage_from_zai(account, &ZaiQuota::default(), "needs_login");
+    };
+    match fetch_zai_quota(client, &creds).await {
+        Ok(quota) if quota.is_empty() => account_usage_from_zai(account, &quota, "needs_setup"),
+        Ok(quota) => account_usage_from_zai(account, &quota, "ok"),
+        Err(status) => account_usage_from_zai(account, &ZaiQuota::default(), zai_status(status)),
+    }
+}
+
+pub(super) async fn poll_bailian(_store: &AccountStore, account: &Account) -> AccountUsage {
+    match crate::import::fetch_bailian_token_plan_json() {
+        Ok(root) => {
+            let quota = parse_bailian_token_plan(&root);
+            let status = if quota.five_hour.is_some() || quota.week.is_some() {
+                "ok"
+            } else {
+                "needs_setup"
+            };
+            account_usage_from_bailian(account, &quota, status)
+        }
+        Err(_) => account_usage_from_bailian(account, &BailianQuota::default(), "needs_setup"),
     }
 }
 
