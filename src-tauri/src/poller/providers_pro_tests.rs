@@ -32,6 +32,19 @@ fn kimi_and_opencode_status_maps() {
 }
 
 #[test]
+fn amp_and_zai_status_maps() {
+    assert_eq!(amp_status(Some(401)), "needs_login");
+    assert_eq!(amp_status(Some(403)), "needs_login");
+    assert_eq!(amp_status(Some(429)), "throttled");
+    assert_eq!(amp_status(Some(500)), "experimental_error");
+    assert_eq!(zai_status(Some(401)), "needs_login");
+    assert_eq!(zai_status(Some(403)), "needs_setup");
+    assert_eq!(zai_status(Some(404)), "needs_setup");
+    assert_eq!(zai_status(Some(429)), "throttled");
+    assert_eq!(zai_status(Some(500)), "error");
+}
+
+#[test]
 fn copilot_and_windsurf_status_maps() {
     assert_eq!(copilot_status(Some(401)), "needs_login");
     assert_eq!(copilot_status(Some(403)), "needs_login");

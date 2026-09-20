@@ -1,5 +1,7 @@
 pub mod agy;
+pub mod amp;
 pub mod augment;
+pub mod bailian;
 pub mod claude;
 pub mod codex;
 pub mod copilot;
@@ -15,6 +17,7 @@ pub mod opencode;
 pub mod openrouter;
 pub mod poe;
 pub mod windsurf;
+pub mod zai;
 
 #[cfg(test)]
 mod app_server {}

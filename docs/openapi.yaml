@@ -135,7 +135,7 @@ paths:
                 $ref: "#/components/schemas/Error"
               example:
                 error: unknown_provider
-                message: "unknown provider 'foo' (expected codex, claude, agy, cursor, grok, higgsfield, kimi, opencode, deepseek, openrouter, copilot, windsurf, minimax, augment, poe, fireworks, or novita)"
+                message: "unknown provider 'foo' (expected codex, claude, agy, cursor, grok, higgsfield, kimi, opencode, deepseek, openrouter, copilot, windsurf, minimax, augment, poe, fireworks, novita, amp, zai, or bailian)"
   /v1/accounts:
     get:
       tags: [usage]
@@ -224,7 +224,7 @@ components:
   schemas:
     Provider:
       type: string
-      enum: [codex, claude, agy, cursor, grok, higgsfield, kimi, opencode, deepseek, openrouter, copilot, windsurf, minimax, augment, poe, fireworks, novita]
+      enum: [codex, claude, agy, cursor, grok, higgsfield, kimi, opencode, deepseek, openrouter, copilot, windsurf, minimax, augment, poe, fireworks, novita, amp, zai, bailian]
       description: Usage provider category.
     Status:
       type: string
@@ -240,7 +240,7 @@ components:
         - `identity_changed`: the CLI profile now belongs to a different identity than expected.
         - `experimental_error`: an experimental (reference/DB) provider probe failed.
         - `needs_setup`: provider connected but not yet configured (e.g. Higgsfield credits absent).
-        - `pro_required`: the runtime Pro gate is inactive for this account — either a paid-provider account (Cursor/Grok/Higgsfield/Kimi/OpenCode/DeepSeek/OpenRouter/Copilot/Windsurf/MiniMax/Augment/Poe/Fireworks/Novita), or a free-provider account beyond the Free plan's one-account-per-provider limit. The account is retained and reports no quota numbers.
+        - `pro_required`: the runtime Pro gate is inactive for this account — either a paid-provider account (Cursor/Grok/Higgsfield/Kimi/OpenCode/DeepSeek/OpenRouter/Copilot/Windsurf/MiniMax/Augment/Poe/Fireworks/Novita/Amp/Z.AI/Alibaba Token Plan), or a free-provider account beyond the Free plan's one-account-per-provider limit. The account is retained and reports no quota numbers.
     Quota:
       type: object
       description: A single usage window (used percent).
@@ -310,7 +310,7 @@ components:
           example: 0
     AuthKind:
       type: string
-      enum: [cli_profile, browser_oauth, cursor_database, windsurf_database, xai_key, higgsfield_cli, minimax_cli, augment_cli]
+      enum: [cli_profile, browser_oauth, cursor_database, windsurf_database, xai_key, higgsfield_cli, minimax_cli, augment_cli, bailian_cli]
       description: Non-secret label for how an account authenticates.
     Account:
       type: object
@@ -503,4 +503,4 @@ components:
           example: unknown_provider
         message:
           type: string
-          example: "unknown provider 'foo' (expected codex, claude, agy, cursor, grok, higgsfield, kimi, opencode, deepseek, openrouter, copilot, windsurf, minimax, augment, poe, fireworks, or novita)"
+          example: "unknown provider 'foo' (expected codex, claude, agy, cursor, grok, higgsfield, kimi, opencode, deepseek, openrouter, copilot, windsurf, minimax, augment, poe, fireworks, novita, amp, zai, or bailian)"

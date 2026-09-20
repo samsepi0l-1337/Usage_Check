@@ -62,6 +62,10 @@ fn pro_auth_kind_labels_avoid_leak_denylist() {
         expected_identity: "id".into(),
     };
     assert_eq!(auth_kind(&aug), "augment_cli");
+    let bailian = AuthSource::BailianCli {
+        expected_identity: "id".into(),
+    };
+    assert_eq!(auth_kind(&bailian), "bailian_cli");
     let windsurf = AuthSource::WindsurfDatabase {
         database_path: "/db".into(),
         expected_identity: "id".into(),

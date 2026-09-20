@@ -104,6 +104,18 @@ fn pro_providers_route_per_capability() {
         classify_auth_action(Provider::Novita, AuthMethod::Cli),
         AuthAction::Import
     );
+    assert_eq!(
+        classify_auth_action(Provider::Amp, AuthMethod::Cli),
+        AuthAction::Import
+    );
+    assert_eq!(
+        classify_auth_action(Provider::Zai, AuthMethod::Cli),
+        AuthAction::Import
+    );
+    assert_eq!(
+        classify_auth_action(Provider::Bailian, AuthMethod::Cli),
+        AuthAction::Import
+    );
 }
 
 // Registry-consistency: every (provider, method) actually wired into the tray registry

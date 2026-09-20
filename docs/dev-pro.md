@@ -105,7 +105,7 @@ It probes `/v1/license`, `/v1/accounts`, and `/v1/usage` on
 tab-separated `provider`, `account`, `status` table.
 
 The script prints the number of configured paid-provider (Cursor, Grok,
-Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot, Windsurf, MiniMax, Augment, Poe, Fireworks, Novita) accounts it examined. It exits non-zero when the API cannot be reached or
+Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot, Windsurf, MiniMax, Augment, Poe, Fireworks, Novita, Amp, Z.AI, Alibaba Token Plan) accounts it examined. It exits non-zero when the API cannot be reached or
 when the license reports Pro but any such account still has the
 `pro_required` status. With zero paid accounts it exits zero but explicitly
 reports that Pro gating was not verified; otherwise, exit zero means no

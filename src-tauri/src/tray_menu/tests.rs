@@ -38,6 +38,9 @@
         assert!(!specs.iter().any(|s| s.provider == Provider::Poe));
         assert!(!specs.iter().any(|s| s.provider == Provider::Fireworks));
         assert!(!specs.iter().any(|s| s.provider == Provider::Novita));
+        assert!(!specs.iter().any(|s| s.provider == Provider::Amp));
+        assert!(!specs.iter().any(|s| s.provider == Provider::Zai));
+        assert!(!specs.iter().any(|s| s.provider == Provider::Bailian));
     }
 
     #[test]
@@ -57,6 +60,9 @@
         assert!(specs.iter().any(|s| s.provider == Provider::Poe));
         assert!(specs.iter().any(|s| s.provider == Provider::Fireworks));
         assert!(specs.iter().any(|s| s.provider == Provider::Novita));
+        assert!(specs.iter().any(|s| s.provider == Provider::Amp));
+        assert!(specs.iter().any(|s| s.provider == Provider::Zai));
+        assert!(specs.iter().any(|s| s.provider == Provider::Bailian));
     }
 
     #[test]
@@ -213,6 +219,21 @@
         assert_eq!(spec.provider, Provider::Novita);
         assert_eq!(spec.method, AuthMethod::Cli);
         assert_eq!(spec.label, "Add Novita (CLI)");
+
+        let spec = spec_for_event("add-amp-cli").expect("Amp CLI is registered");
+        assert_eq!(spec.provider, Provider::Amp);
+        assert_eq!(spec.method, AuthMethod::Cli);
+        assert_eq!(spec.label, "Add Amp (CLI)");
+
+        let spec = spec_for_event("add-zai-cli").expect("Z.AI CLI is registered");
+        assert_eq!(spec.provider, Provider::Zai);
+        assert_eq!(spec.method, AuthMethod::Cli);
+        assert_eq!(spec.label, "Add Z.AI (CLI)");
+
+        let spec = spec_for_event("add-bailian-cli").expect("Bailian CLI is registered");
+        assert_eq!(spec.provider, Provider::Bailian);
+        assert_eq!(spec.method, AuthMethod::Cli);
+        assert_eq!(spec.label, "Add Alibaba Token Plan (CLI)");
     }
 
     use crate::poller::AccountUsage;
@@ -511,6 +532,18 @@
         u.detail_suffix = Some("$1.00 left".into());
         let line = format_usage_detail(&u);
         assert_eq!(line, "$1.00 left");
+        assert!(
+            !line.contains('%'),
+            "bare remaining must not invent %: {line}"
+        );
+    }
+
+    #[test]
+    fn format_usage_detail_amp_remaining_only_has_no_invented_percent() {
+        let mut u = usage(Provider::Amp, None, None);
+        u.detail_suffix = Some("$5 remaining".into());
+        let line = format_usage_detail(&u);
+        assert_eq!(line, "$5 remaining");
         assert!(
             !line.contains('%'),
             "bare remaining must not invent %: {line}"

@@ -22,6 +22,9 @@ pub enum Provider {
     Poe,
     Fireworks,
     Novita,
+    Amp,
+    Zai,
+    Bailian,
 }
 
 impl Provider {
@@ -44,6 +47,9 @@ impl Provider {
             Provider::Poe => "poe",
             Provider::Fireworks => "fireworks",
             Provider::Novita => "novita",
+            Provider::Amp => "amp",
+            Provider::Zai => "zai",
+            Provider::Bailian => "bailian",
         }
     }
     #[allow(clippy::should_implement_trait)]
@@ -66,6 +72,9 @@ impl Provider {
             "poe" => Some(Provider::Poe),
             "fireworks" => Some(Provider::Fireworks),
             "novita" => Some(Provider::Novita),
+            "amp" => Some(Provider::Amp),
+            "zai" => Some(Provider::Zai),
+            "bailian" => Some(Provider::Bailian),
             _ => None,
         }
     }
@@ -89,6 +98,9 @@ impl Provider {
             Provider::Poe => "Poe",
             Provider::Fireworks => "Fireworks",
             Provider::Novita => "Novita",
+            Provider::Amp => "Amp",
+            Provider::Zai => "Z.AI",
+            Provider::Bailian => "Alibaba Token Plan",
         }
     }
 }
@@ -138,6 +150,10 @@ pub enum AuthSource {
         expected_identity: String,
     },
     AugmentCli {
+        expected_identity: String,
+    },
+    #[serde(rename = "bailian_cli")]
+    BailianCli {
         expected_identity: String,
     },
 }
@@ -240,6 +256,12 @@ mod tests {
         );
         assert_eq!(
             auth_capability(Provider::Novita).methods,
+            &[AuthMethod::Cli]
+        );
+        assert_eq!(auth_capability(Provider::Amp).methods, &[AuthMethod::Cli]);
+        assert_eq!(auth_capability(Provider::Zai).methods, &[AuthMethod::Cli]);
+        assert_eq!(
+            auth_capability(Provider::Bailian).methods,
             &[AuthMethod::Cli]
         );
     }
@@ -352,6 +374,21 @@ mod tests {
     }
 
     #[test]
+    fn bailian_cli_account_round_trips_json() {
+        assert_account_json_round_trip(
+            Provider::Bailian,
+            AuthSource::BailianCli {
+                expected_identity: "user@example.com".into(),
+            },
+        );
+        let json = serde_json::to_value(AuthSource::BailianCli {
+            expected_identity: "user@example.com".into(),
+        })
+        .unwrap();
+        assert_eq!(json["kind"], "bailian_cli");
+    }
+
+    #[test]
     fn grok_display_name_identifies_xai_api_credits() {
         assert_eq!(Provider::Grok.display_name(), "xAI API credits");
     }
@@ -388,5 +425,14 @@ mod tests {
         assert_eq!(Provider::from_str("novita"), Some(Provider::Novita));
         assert_eq!(Provider::Novita.as_str(), "novita");
         assert_eq!(Provider::Novita.display_name(), "Novita");
+        assert_eq!(Provider::from_str("amp"), Some(Provider::Amp));
+        assert_eq!(Provider::Amp.as_str(), "amp");
+        assert_eq!(Provider::Amp.display_name(), "Amp");
+        assert_eq!(Provider::from_str("zai"), Some(Provider::Zai));
+        assert_eq!(Provider::Zai.as_str(), "zai");
+        assert_eq!(Provider::Zai.display_name(), "Z.AI");
+        assert_eq!(Provider::from_str("bailian"), Some(Provider::Bailian));
+        assert_eq!(Provider::Bailian.as_str(), "bailian");
+        assert_eq!(Provider::Bailian.display_name(), "Alibaba Token Plan");
     }
 }

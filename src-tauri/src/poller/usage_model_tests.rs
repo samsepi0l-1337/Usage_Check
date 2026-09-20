@@ -501,6 +501,81 @@ fn account_usage_from_novita_remaining_only_has_suffix_not_percent() {
 }
 
 #[test]
+fn account_usage_from_amp_remaining_only_has_suffix_not_percent() {
+    let acct = Account {
+        id: "amp-1".into(),
+        provider: Provider::Amp,
+        label: "Amp".into(),
+        auth_source: AuthSource::BrowserOAuth {
+            credential_id: "amp-cred".into(),
+        },
+    };
+    let balance = usage_core::fetch::amp::AmpBalance {
+        period: None,
+        detail_suffix: Some("$5 remaining".into()),
+    };
+    let result = account_usage_from_amp(&acct, &balance, "ok");
+    assert!(result.week.is_none());
+    assert_eq!(result.detail_suffix.as_deref(), Some("$5 remaining"));
+}
+
+#[test]
+fn account_usage_from_zai_maps_five_hour_and_week() {
+    let acct = Account {
+        id: "zai-1".into(),
+        provider: Provider::Zai,
+        label: "Z.AI".into(),
+        auth_source: AuthSource::BrowserOAuth {
+            credential_id: "zai-cred".into(),
+        },
+    };
+    let quota = usage_core::fetch::zai::ZaiQuota {
+        plan: Some("PRO".into()),
+        five_hour: Some(QuotaUsage {
+            percent: 18.5,
+            resets_at: None,
+            window_seconds: Some(18_000),
+        }),
+        week: Some(QuotaUsage {
+            percent: 47.2,
+            resets_at: None,
+            window_seconds: Some(604_800),
+        }),
+    };
+    let result = account_usage_from_zai(&acct, &quota, "ok");
+    assert_eq!(result.plan.as_deref(), Some("PRO"));
+    assert_eq!(result.five_hour.unwrap().percent, 18.5);
+    assert_eq!(result.week.unwrap().percent, 47.2);
+}
+
+#[test]
+fn account_usage_from_bailian_maps_five_hour_and_week() {
+    let acct = Account {
+        id: "bl-1".into(),
+        provider: Provider::Bailian,
+        label: "Alibaba Token Plan".into(),
+        auth_source: AuthSource::BailianCli {
+            expected_identity: "Alibaba Token Plan".into(),
+        },
+    };
+    let quota = usage_core::fetch::bailian::BailianQuota {
+        five_hour: Some(QuotaUsage {
+            percent: 70.0,
+            resets_at: None,
+            window_seconds: Some(18_000),
+        }),
+        week: Some(QuotaUsage {
+            percent: 40.0,
+            resets_at: None,
+            window_seconds: Some(604_800),
+        }),
+    };
+    let result = account_usage_from_bailian(&acct, &quota, "ok");
+    assert_eq!(result.five_hour.unwrap().percent, 70.0);
+    assert_eq!(result.week.unwrap().percent, 40.0);
+}
+
+#[test]
 fn assemble_failed_outcome_yields_empty_breakdown() {
     let acct = Account {
         id: "test".into(),

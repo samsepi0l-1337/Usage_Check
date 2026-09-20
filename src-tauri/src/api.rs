@@ -64,12 +64,15 @@ impl WindowLabelHint {
             | Provider::Kimi
             | Provider::OpenCode
             | Provider::Windsurf
-            | Provider::MiniMax => WindowLabelHint::SevenDay,
+            | Provider::MiniMax
+            | Provider::Zai
+            | Provider::Bailian => WindowLabelHint::SevenDay,
             Provider::Cursor
             | Provider::Grok
             | Provider::OpenRouter
             | Provider::Copilot
-            | Provider::Fireworks => WindowLabelHint::BillingPeriod,
+            | Provider::Fireworks
+            | Provider::Amp => WindowLabelHint::BillingPeriod,
             Provider::Higgsfield
             | Provider::DeepSeek
             | Provider::Augment
@@ -84,7 +87,8 @@ impl WindowLabelHint {
             | Provider::Grok
             | Provider::OpenRouter
             | Provider::Copilot
-            | Provider::Fireworks => WindowLabelHint::BillingPeriod,
+            | Provider::Fireworks
+            | Provider::Amp => WindowLabelHint::BillingPeriod,
             Provider::Codex
             | Provider::Claude
             | Provider::Agy
@@ -96,7 +100,9 @@ impl WindowLabelHint {
             | Provider::MiniMax
             | Provider::Augment
             | Provider::Poe
-            | Provider::Novita => WindowLabelHint::NoLabel,
+            | Provider::Novita
+            | Provider::Zai
+            | Provider::Bailian => WindowLabelHint::NoLabel,
         }
     }
 }
@@ -452,7 +458,7 @@ pub(crate) fn route(state: &ApiState, method: &str, path: &str) -> Reply {
                         serde_json::json!({
                             "error": "unknown_provider",
                             "message": format!(
-                                "unknown provider '{}' (expected codex, claude, agy, cursor, grok, higgsfield, kimi, opencode, deepseek, openrouter, copilot, windsurf, minimax, augment, poe, fireworks, or novita)",
+                                "unknown provider '{}' (expected codex, claude, agy, cursor, grok, higgsfield, kimi, opencode, deepseek, openrouter, copilot, windsurf, minimax, augment, poe, fireworks, novita, amp, zai, or bailian)",
                                 name
                             ),
                         })

@@ -13,7 +13,9 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::Utc;
 use usage_core::account::{Credentials, Provider};
 
+mod amp;
 mod augment;
+mod bailian;
 mod claude;
 mod codex;
 mod copilot;
@@ -27,11 +29,16 @@ mod novita;
 mod opencode;
 mod openrouter;
 mod poe;
+mod zai;
 
 #[cfg(test)]
 pub(crate) static CLAUDE_CONFIG_DIR_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+#[allow(unused_imports)]
+pub(crate) use amp::{load_amp_cli_auth, parse_amp_secrets};
 pub(crate) use augment::{fetch_augment_account_json, load_augment_cli_auth};
+#[allow(unused_imports)]
+pub(crate) use bailian::{fetch_bailian_token_plan_json, load_bailian_cli_auth};
 #[cfg(test)]
 use claude::claude_profile_is_default;
 #[allow(unused_imports)]
@@ -65,6 +72,10 @@ pub(crate) use openrouter::{
 };
 #[allow(unused_imports)]
 pub(crate) use poe::{decrypt_poe_credentials_enc, load_poe_cli_auth, parse_poe_plaintext_key};
+#[allow(unused_imports)]
+pub(crate) use zai::{
+    load_zai_cli_auth, parse_hermes_zai_auth, parse_opencode_zai_auth, parse_zcode_config_key,
+};
 
 /// Result of a CLI import: credentials plus a human-readable label
 /// (email when available).
@@ -113,6 +124,9 @@ pub fn import_from_cli(provider: Provider) -> Result<ImportedAccount, String> {
         Provider::Poe => load_poe_cli_auth(),
         Provider::Fireworks => load_fireworks_cli_auth(),
         Provider::Novita => load_novita_cli_auth(),
+        Provider::Amp => load_amp_cli_auth(),
+        Provider::Zai => load_zai_cli_auth(),
+        Provider::Bailian => load_bailian_cli_auth(),
     }
 }
 

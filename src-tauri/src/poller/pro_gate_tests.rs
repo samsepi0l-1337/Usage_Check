@@ -70,6 +70,8 @@ fn store_with_all_paid_providers() -> (tempfile::TempDir, AccountStore) {
         (Provider::Poe, "poe-test"),
         (Provider::Fireworks, "fireworks-test"),
         (Provider::Novita, "novita-test"),
+        (Provider::Amp, "amp-test"),
+        (Provider::Zai, "zai-test"),
     ] {
         store
             .add_secret_with(
@@ -116,6 +118,17 @@ fn store_with_all_paid_providers() -> (tempfile::TempDir, AccountStore) {
         )
         .expect("register Augment account");
 
+    store
+        .add_reference_with(
+            Provider::Bailian,
+            "bailian-test".to_string(),
+            AuthSource::BailianCli {
+                expected_identity: "bailian-test".to_string(),
+            },
+            || true,
+        )
+        .expect("register Bailian account");
+
     (tmp, store)
 }
 
@@ -125,7 +138,7 @@ async fn unlicensed_poll_skips_io_for_every_paid_provider() {
 
     let results = poll_all_with(&store, false).await;
 
-    assert_eq!(results.len(), 14, "expected one result per paid account");
+    assert_eq!(results.len(), 17, "expected one result per paid account");
     for usage in &results {
         assert_eq!(
             usage.status, "pro_required",

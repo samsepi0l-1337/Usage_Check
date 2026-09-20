@@ -623,6 +623,8 @@ fn new_pro_providers_store_as_browser_oauth_secrets() {
         Provider::Poe,
         Provider::Fireworks,
         Provider::Novita,
+        Provider::Amp,
+        Provider::Zai,
     ] {
         let account = store
             .add_with(
@@ -910,4 +912,90 @@ fn novita_missing_file_tells_user_to_login() {
     let err =
         super::novita::load_novita_cli_auth_from(&dir.path().join("missing.json")).unwrap_err();
     assert!(err.contains("novita auth login"), "{err}");
+}
+
+#[test]
+fn amp_secrets_prefers_ampcode_host_key() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("secrets.json");
+    std::fs::write(
+        &path,
+        r#"{
+            "apiKey@https://other.example/": "sgamp_other",
+            "apiKey@https://ampcode.com/": "sgamp_user_amp"
+        }"#,
+    )
+    .unwrap();
+    let imported = super::amp::load_amp_cli_auth_from(&path).unwrap();
+    assert_eq!(imported.credentials.access_token, "sgamp_user_amp");
+    assert_eq!(imported.label, "Amp");
+}
+
+#[test]
+fn amp_secrets_missing_file_tells_user_to_login() {
+    let dir = TempDir::new().unwrap();
+    let err = super::amp::load_amp_cli_auth_from(&dir.path().join("missing.json")).unwrap_err();
+    assert!(err.contains("amp login"), "{err}");
+}
+
+#[test]
+fn zai_import_reads_only_opencode_zai_entry() {
+    let dir = TempDir::new().unwrap();
+    let oc = dir.path().join("auth.json");
+    std::fs::write(
+        &oc,
+        r#"{
+            "zai": {"type":"api","key":"zai-from-opencode"},
+            "openrouter": {"type":"api","key":"sk-or-ignored"},
+            "opencode-go": {"type":"api","key":"oc_ignored"}
+        }"#,
+    )
+    .unwrap();
+    let imported = super::zai::load_zai_cli_auth_from(Some(&oc), None, None).unwrap();
+    assert_eq!(imported.credentials.access_token, "zai-from-opencode");
+}
+
+#[test]
+fn zai_import_falls_back_to_zcode_then_hermes() {
+    let dir = TempDir::new().unwrap();
+    let zcode = dir.path().join("config.json");
+    std::fs::write(&zcode, r#"{"apiKey":"zai-from-zcode"}"#).unwrap();
+    let imported = super::zai::load_zai_cli_auth_from(None, Some(&zcode), None).unwrap();
+    assert_eq!(imported.credentials.access_token, "zai-from-zcode");
+
+    let hermes = dir.path().join("hermes.json");
+    std::fs::write(&hermes, r#"{"zai":{"type":"api","key":"zai-from-hermes"}}"#).unwrap();
+    let imported = super::zai::load_zai_cli_auth_from(None, None, Some(&hermes)).unwrap();
+    assert_eq!(imported.credentials.access_token, "zai-from-hermes");
+}
+
+#[test]
+fn zai_import_ignores_other_opencode_keys() {
+    let dir = TempDir::new().unwrap();
+    let oc = dir.path().join("auth.json");
+    std::fs::write(&oc, r#"{"openrouter":{"type":"api","key":"sk-or-only"}}"#).unwrap();
+    let err = super::zai::load_zai_cli_auth_from(Some(&oc), None, None).unwrap_err();
+    assert!(err.contains("Z.AI"), "{err}");
+}
+
+#[test]
+fn bailian_import_parses_fake_cli_token_plan_json() {
+    let dir = TempDir::new().unwrap();
+    let bin = super::bailian::write_fake_bailian_cli(
+        dir.path(),
+        r#"{
+            "per5HourPercentage": 0.70,
+            "per1WeekPercentage": 0.40
+        }"#,
+    );
+    let imported = super::bailian::load_bailian_cli_auth_from(&bin).unwrap();
+    assert_eq!(imported.label, "Alibaba Token Plan");
+    assert!(imported.credentials.access_token.is_empty());
+}
+
+#[test]
+fn bailian_import_missing_binary_tells_user_to_install_bl() {
+    let err = super::bailian::load_bailian_cli_auth_with(None).unwrap_err();
+    assert!(err.contains("install Bailian CLI"), "{err}");
+    assert!(err.contains("bl auth login"), "{err}");
 }

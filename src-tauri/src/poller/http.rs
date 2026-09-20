@@ -2,6 +2,7 @@
 
 use usage_core::account::Credentials;
 use usage_core::fetch::agy::{parse_agy_quota_summary, AgyQuota};
+use usage_core::fetch::amp::{parse_amp_balance, AmpBalance};
 use usage_core::fetch::claude::{parse_claude_usage, ClaudeQuota};
 use usage_core::fetch::codex::{parse_codex_usage, CodexQuota};
 use usage_core::fetch::copilot::{parse_copilot_user, CopilotQuota};
@@ -15,6 +16,7 @@ use usage_core::fetch::opencode::{parse_opencode_usage, OpenCodeUsage};
 use usage_core::fetch::openrouter::{parse_openrouter_key, OpenRouterUsage};
 use usage_core::fetch::poe::{parse_poe_balance, PoeBalance};
 use usage_core::fetch::windsurf::{parse_windsurf_user_status, WindsurfQuota};
+use usage_core::fetch::zai::{parse_zai_quota, ZaiQuota};
 
 const AGY_USER_AGENT: &str = "antigravity/usagecheck macos/arm64";
 const AGY_QUOTA_SUMMARY_URLS: &[&str] = &[
@@ -392,6 +394,74 @@ pub(super) async fn fetch_novita_balance(
     )
     .await?;
     Ok(parse_novita_balance(&body))
+}
+
+const AMP_RPC_URL: &str = "https://ampcode.com/api/internal";
+
+pub(super) async fn fetch_amp_balance(
+    client: &reqwest::Client,
+    creds: &Credentials,
+) -> Result<AmpBalance, Option<u16>> {
+    let resp = client
+        .post(AMP_RPC_URL)
+        .header("Accept", "application/json")
+        .header("Content-Type", "application/json")
+        .header("User-Agent", USAGECHECK_UA)
+        .bearer_auth(&creds.access_token)
+        .json(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "userDisplayBalanceInfo",
+            "params": {}
+        }))
+        .send()
+        .await
+        .map_err(|_| None)?;
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(Some(status.as_u16()));
+    }
+    let body: serde_json::Value = resp.json().await.map_err(|_| Some(status.as_u16()))?;
+    Ok(parse_amp_balance(&body))
+}
+
+const ZAI_QUOTA_URL: &str = "https://api.z.ai/api/monitor/usage/quota/limit";
+
+async fn zai_quota_request(
+    client: &reqwest::Client,
+    authorization: &str,
+) -> Result<serde_json::Value, Option<u16>> {
+    let resp = client
+        .get(ZAI_QUOTA_URL)
+        .header("Accept", "application/json")
+        .header("Accept-Language", "en-US,en")
+        .header("Content-Type", "application/json")
+        .header("Authorization", authorization)
+        .header("User-Agent", USAGECHECK_UA)
+        .send()
+        .await
+        .map_err(|_| None)?;
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(Some(status.as_u16()));
+    }
+    resp.json().await.map_err(|_| Some(status.as_u16()))
+}
+
+pub(super) async fn fetch_zai_quota(
+    client: &reqwest::Client,
+    creds: &Credentials,
+) -> Result<ZaiQuota, Option<u16>> {
+    // Dashboard XHR uses raw `Authorization: <key>` (no Bearer). Retry Bearer
+    // only after a 401 so a mis-prefixed key is not the first attempt.
+    match zai_quota_request(client, &creds.access_token).await {
+        Ok(body) => Ok(parse_zai_quota(&body)),
+        Err(Some(401)) => {
+            let body = zai_quota_request(client, &format!("Bearer {}", creds.access_token)).await?;
+            Ok(parse_zai_quota(&body))
+        }
+        Err(status) => Err(status),
+    }
 }
 
 const COPILOT_USER_URL: &str = "https://api.github.com/copilot_internal/user";

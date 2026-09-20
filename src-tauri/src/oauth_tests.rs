@@ -180,6 +180,9 @@ fn local_import_providers_have_no_browser_oauth_config() {
         Provider::Poe,
         Provider::Fireworks,
         Provider::Novita,
+        Provider::Amp,
+        Provider::Zai,
+        Provider::Bailian,
     ] {
         let err = config(provider).unwrap_err();
         assert!(
