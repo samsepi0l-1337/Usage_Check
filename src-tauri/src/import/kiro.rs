@@ -22,18 +22,65 @@ fn first_string(root: &serde_json::Value, keys: &[&str]) -> Option<String> {
         .find_map(|key| root.get(*key).and_then(nonempty))
 }
 
+/// AWS region token interpolable into a hostname: `us-east-1`, `eu-central-1`,
+/// `us-gov-west-1`. Rejects `/`, `@`, `.`, `:`, and any other host breakout.
+pub fn kiro_region_ok(region: &str) -> bool {
+    // ^[a-z]{2}(-gov|-iso)?-[a-z]+-\d+$
+    let s = region.trim();
+    if !(7..=32).contains(&s.len()) {
+        return false;
+    }
+    let bytes = s.as_bytes();
+    if !bytes[0].is_ascii_lowercase() || !bytes[1].is_ascii_lowercase() {
+        return false;
+    }
+    let rest = &s[2..];
+    let rest = if let Some(stripped) = rest.strip_prefix("-gov") {
+        stripped
+    } else if let Some(stripped) = rest.strip_prefix("-iso") {
+        stripped
+    } else {
+        rest
+    };
+    let Some(name_and_num) = rest.strip_prefix('-') else {
+        return false;
+    };
+    let Some((name, num)) = name_and_num.rsplit_once('-') else {
+        return false;
+    };
+    !name.is_empty()
+        && name.bytes().all(|b| b.is_ascii_lowercase())
+        && !num.is_empty()
+        && num.bytes().all(|b| b.is_ascii_digit())
+}
+
+pub fn normalize_kiro_region(region: &str) -> Option<String> {
+    let trimmed = region.trim();
+    kiro_region_ok(trimmed).then(|| trimmed.to_string())
+}
+
+/// The only place Kiro interpolates `region` into a URL host.
+pub fn kiro_endpoints(region: &str) -> Option<(String, String)> {
+    let region = normalize_kiro_region(region)?;
+    let refresh = format!("https://prod.{region}.auth.desktop.kiro.dev/refreshToken");
+    let usage = format!("https://q.{region}.amazonaws.com/getUsageLimits");
+    Some((refresh, usage))
+}
+
 /// Region from `region` / `awsRegion` or `profileArn` (`arn:aws:codewhisperer:<region>:…`).
 pub fn kiro_region_from_token(root: &serde_json::Value) -> Option<String> {
     if let Some(region) = first_string(root, &["region", "awsRegion", "aws_region"]) {
-        return Some(region);
+        if let Some(ok) = normalize_kiro_region(&region) {
+            return Some(ok);
+        }
     }
     region_from_profile_arn(&first_string(root, &["profileArn", "profile_arn", "arn"])?)
 }
 
 pub fn region_from_profile_arn(arn: &str) -> Option<String> {
     // arn:aws:codewhisperer:us-east-1:123:profile/…
-    let region = arn.split(':').nth(3)?.trim();
-    (!region.is_empty()).then(|| region.to_string())
+    let region = arn.split(':').nth(3)?;
+    normalize_kiro_region(region)
 }
 
 fn parse_expiry(root: &serde_json::Value) -> Option<DateTime<Utc>> {
@@ -139,6 +186,46 @@ mod tests {
             .as_deref(),
             Some("ap-southeast-1")
         );
+    }
+
+    #[test]
+    fn allowlists_aws_region_tokens_for_host_interpolation() {
+        assert!(kiro_region_ok("us-east-1"));
+        assert!(kiro_region_ok("eu-central-1"));
+        assert!(kiro_region_ok("us-gov-west-1"));
+        let (refresh, usage) = kiro_endpoints("us-east-1").unwrap();
+        assert_eq!(
+            refresh,
+            "https://prod.us-east-1.auth.desktop.kiro.dev/refreshToken"
+        );
+        assert_eq!(usage, "https://q.us-east-1.amazonaws.com/getUsageLimits");
+    }
+
+    #[test]
+    fn rejects_host_breakout_regions() {
+        for hostile in [
+            "evil.com/",
+            "us-east-1.evil.com",
+            "@127.0.0.1",
+            "@127.0.0.1/",
+            "us-east-1@evil.com/",
+            "evil.com?",
+            "us-east-1/",
+            "",
+            "US-EAST-1",
+        ] {
+            assert!(!kiro_region_ok(hostile), "{hostile}");
+            assert!(kiro_endpoints(hostile).is_none(), "{hostile}");
+            assert!(
+                kiro_region_from_token(&json!({ "region": hostile })).is_none(),
+                "{hostile}"
+            );
+            assert!(
+                region_from_profile_arn(&format!("arn:aws:codewhisperer:{hostile}:1:profile/x"))
+                    .is_none(),
+                "{hostile}"
+            );
+        }
     }
 
     #[test]

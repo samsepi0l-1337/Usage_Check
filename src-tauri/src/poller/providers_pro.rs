@@ -728,6 +728,9 @@ pub(super) async fn poll_kiro(
             region_defaulted = true;
             "us-east-1".to_string()
         });
+    if crate::import::kiro_endpoints(&region).is_none() {
+        return account_usage_from_kiro(account, &KiroQuota::default(), "needs_setup");
+    }
 
     if let Some(c) = creds.as_mut() {
         if let Some(refresh) = c.refresh_token.clone() {

@@ -621,7 +621,9 @@ pub(super) async fn refresh_kiro_access_token(
     refresh_token: &str,
     region: &str,
 ) -> Result<(String, Option<String>, Option<String>), Option<u16>> {
-    let url = format!("https://prod.{region}.auth.desktop.kiro.dev/refreshToken");
+    let Some((url, _)) = crate::import::kiro_endpoints(region) else {
+        return Err(Some(404));
+    };
     let resp = client
         .post(&url)
         .header("Accept", "application/json")
@@ -656,6 +658,7 @@ pub(super) async fn refresh_kiro_access_token(
         .and_then(|v| v.as_str())
         .map(str::trim)
         .filter(|s| !s.is_empty())
+        .filter(|arn| crate::import::region_from_profile_arn(arn).is_some())
         .map(str::to_string);
     Ok((access.to_string(), refresh, profile_arn))
 }
@@ -666,7 +669,9 @@ pub(super) async fn fetch_kiro_usage_limits(
     region: &str,
     profile_arn: &str,
 ) -> Result<KiroQuota, Option<u16>> {
-    let url = format!("https://q.{region}.amazonaws.com/getUsageLimits");
+    let Some((_, url)) = crate::import::kiro_endpoints(region) else {
+        return Err(Some(404));
+    };
     let resp = client
         .get(&url)
         .header("Accept", "application/json")
