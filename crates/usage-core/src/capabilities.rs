@@ -40,7 +40,8 @@ pub fn auth_capability(provider: Provider) -> AuthCapability {
         | Provider::Zai
         | Provider::Bailian
         | Provider::Kiro
-        | Provider::Factory => &[AuthMethod::Cli],
+        | Provider::Factory
+        | Provider::Cline => &[AuthMethod::Cli],
         Provider::Windsurf | Provider::Trae => &[AuthMethod::LocalDatabase],
     };
     AuthCapability { methods }

@@ -128,6 +128,10 @@ fn pro_providers_route_per_capability() {
         classify_auth_action(Provider::Factory, AuthMethod::Cli),
         AuthAction::Import
     );
+    assert_eq!(
+        classify_auth_action(Provider::Cline, AuthMethod::Cli),
+        AuthAction::Import
+    );
 }
 
 // Registry-consistency: every (provider, method) actually wired into the tray registry

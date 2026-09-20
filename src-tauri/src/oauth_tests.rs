@@ -186,6 +186,7 @@ fn local_import_providers_have_no_browser_oauth_config() {
         Provider::Trae,
         Provider::Kiro,
         Provider::Factory,
+        Provider::Cline,
     ] {
         let err = config(provider).unwrap_err();
         assert!(

@@ -3,7 +3,7 @@
 > **Status: Pro activation is NOT available in the current release.** The
 > licensing service is not live, and shipped builds embed the documented
 > placeholder verification key, so every activation attempt fails and no
-> license key unlocks Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot, Windsurf, MiniMax, Augment, Poe, Fireworks, Novita, Amp, Z.AI, Alibaba Token Plan, Trae, Kiro or Factory — for anyone. Codex, Claude
+> license key unlocks Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot, Windsurf, MiniMax, Augment, Poe, Fireworks, Novita, Amp, Z.AI, Alibaba Token Plan, Trae, Kiro, Factory or Cline — for anyone. Codex, Claude
 > and agy remain free, with one active account per provider in the unlicensed
 > Free state. The runtime gate preserves already-configured paid accounts and
 > surplus free-provider accounts and renders them as `pro_required`. This
@@ -14,7 +14,7 @@
 UsageCheck ships as **one binary** for everyone. Codex, Claude, and agy
 (Gemini/Antigravity) are free, with one active account each in Free and
 unlimited accounts in Pro. A **Pro license key** is designed to unlock
-Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot, Windsurf, MiniMax, Augment, Poe, Fireworks, Novita, Amp, Z.AI, Alibaba Token Plan, Trae, Kiro, and Factory at **runtime** — there is no separate Free/Pro
+Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot, Windsurf, MiniMax, Augment, Poe, Fireworks, Novita, Amp, Z.AI, Alibaba Token Plan, Trae, Kiro, Factory, and Cline at **runtime** — there is no separate Free/Pro
 binary, no compile-time edition Cargo feature, and no `tauri.pro.conf.json`
 override.
 This replaces the two-binary/compile-time-edition split UsageCheck used
@@ -34,7 +34,7 @@ For local development-only Pro verification, see [`docs/dev-pro.md`](dev-pro.md)
 | Product name | `UsageCheck` |
 | Bundle ID | `com.usagecheck.desktop` |
 | Config | `src-tauri/tauri.conf.json` (the only Tauri config — no per-edition override file) |
-| Providers | Codex, Claude, Gemini (agy) free with one active account each while unlicensed; unlimited accounts plus Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot, Windsurf, MiniMax, Augment, Poe, Fireworks, Novita, Amp, Z.AI, Alibaba Token Plan, Trae, Kiro, Factory once Pro is active |
+| Providers | Codex, Claude, Gemini (agy) free with one active account each while unlicensed; unlimited accounts plus Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot, Windsurf, MiniMax, Augment, Poe, Fireworks, Novita, Amp, Z.AI, Alibaba Token Plan, Trae, Kiro, Factory, Cline once Pro is active |
 
 **Gemini** is not a separate `Provider` enum variant. It is implemented as
 `Provider::Agy` (Antigravity), which polls the Antigravity **Gemini Models**
@@ -92,6 +92,7 @@ clock-rollback handling: [`docs/LICENSE_API.md`](LICENSE_API.md).
 | **Trae** | Yes | **Import Trae (local, Experimental)** — intl `state.vscdb` | Undocumented `POST …/user_current_entitlement_list` `{require_usage:true}` | Billing-period used % from entitlement packs |
 | **Kiro** | Yes | **Add Kiro (CLI)** — `~/.aws/sso/cache/kiro-auth-token.json` | Community `GET https://q.<region>.amazonaws.com/getUsageLimits` | CREDIT used/limit as used % |
 | **Factory** | Yes | **Add Factory (CLI)** — plaintext `~/.factory/auth.json` | `POST https://api.factory.ai/api/organization/subscription/usage` | `usedRatio` as used % |
+| **Cline** | Yes | **Add Cline (CLI)** — `~/.cline/data/secrets.json` or `settings/providers.json` | Documented `GET https://api.cline.bot/api/v1/users/{id}/balance` (+ `/usages` for ClinePass windows) | ClinePass 5h/week used %; pay-as-you-go `$N left` |
 
 A Pro-gated provider is hidden from the **Add Account** menu (and its
 account, if one somehow exists, renders `pro_required`) until a Pro license
@@ -434,6 +435,23 @@ community-documented and may change.
 4. HTTP 401/403 → `needs_login` (WorkOS refresh is attempted when a
    refresh token is present).
 
+#### Cline
+
+1. Sign in with Cline (`cline auth`) so `~/.cline/data/secrets.json` has
+   `clineApiKey` and/or `cline:clineAccountId` (account session JSON).
+   `$CLINE_HOME`, `$CLINE_DATA_DIR`, and XDG variants are also searched.
+   The documented CLI login file `~/.cline/data/settings/providers.json`
+   is used if secrets.json has no Cline token.
+2. Tray → **Add Account** → **Add Cline (CLI)**. BYOK-only keys (no Cline
+   account token) fail as `needs_setup` and hide quota. VS Code
+   SecretStorage is not read.
+3. Polling uses `GET https://api.cline.bot/api/v1/users/{id}/balance`
+   and, for ClinePass windows, `GET …/usages`. WorkOS JWTs are sent with
+   the `workos:` prefix; API keys are not.
+4. ClinePass used+limit windows display as 5h/week used %. Pay-as-you-go
+   remaining-only credits display `$N left` and never invent a used %.
+   Transaction lists without used+limit are ignored.
+
 ## Architecture
 
 Provider gating is a **runtime check**, not a compile-time feature — every
@@ -452,7 +470,7 @@ crates/usage-core/
     copilot.rs / windsurf.rs
     minimax.rs / augment.rs  # CLI quota / account-status JSON
     amp.rs / zai.rs / bailian.rs
-    trae.rs / kiro.rs / factory.rs
+    trae.rs / kiro.rs / factory.rs / cline.rs
 
 src-tauri/
   src/edition.rs          # product_name(), re-exports all_providers()
@@ -468,7 +486,8 @@ src-tauri/
                           # load_poe_cli_auth(), load_fireworks_cli_auth(),
                           # load_novita_cli_auth(), load_amp_cli_auth(),
                           # load_zai_cli_auth(), load_bailian_cli_auth(),
-                          # load_kiro_cli_auth(), load_factory_cli_auth()
+                          # load_kiro_cli_auth(), load_factory_cli_auth(),
+                          # load_cline_cli_auth()
   src/poller/             # poll_* for paid providers; requires_pro()-gated dispatch
   src/tray_menu/          # auth_action_specs() (is_pro()-filtered); license tray section
   src/menu_actions.rs     # handle_menu_event(): add-cursor-local / add-grok-clipboard /
@@ -479,6 +498,7 @@ src-tauri/
                           # add-poe-cli / add-fireworks-cli / add-novita-cli /
                           # add-amp-cli / add-zai-cli / add-bailian-cli /
                           # add-trae-local / add-kiro-cli / add-factory-cli /
+                          # add-cline-cli /
                           # license-activate-clipboard / license-deactivate / license-get
   tauri.conf.json         # the single UsageCheck config
 ```
@@ -513,6 +533,7 @@ mode), on by default. There is no edition feature and no
 | **Trae** | **Experimental.** Undocumented entitlement RPC + local `state.vscdb`. Encrypted CN `tc` blobs fail closed. |
 | **Kiro** | **Experimental.** Community `getUsageLimits`. CREDIT used/limit only. Region missing → try `us-east-1` then `needs_setup`. |
 | **Factory** | **Experimental.** `usedRatio` from subscription usage. Encrypted `auth.v2` fails closed. |
+| **Cline** | Remaining-only credits never become used %. BYOK-only configs cannot show Cline quota. |
 | **Claude CLI accounts** | Usage depends on a status-line bridge installed into the isolated profile; a newly added Claude CLI account shows `waiting_for_usage` until `claude` is run in that profile and renders its status line at least once. |
 | **Offline grace** | A Pro license verified once keeps working offline for 14 days (`license::OFFLINE_GRACE`); beyond that (or on a detected clock rollback) the tray shows `License: verification needed` until the next successful online refresh. |
 | **Local API** | `GET /v1/usage/{provider}` documents `codex` \| `claude` \| `agy` only; Pro providers appear in the full `/v1/usage` snapshot once a Pro license is active. |
@@ -575,7 +596,7 @@ cargo build -p usage-app --release
 ## 한국어 요약
 
 - UsageCheck는 **단일 바이너리**입니다. Codex, Claude, Gemini(agy)는 무료.
-- Pro 라이선스 키를 활성화하면 런타임에 Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot, Windsurf, MiniMax, Augment, Poe, Fireworks, Novita, Amp, Z.AI, Alibaba Token Plan, Trae, Kiro, Factory가 열립니다 (별도 바이너리 없음).
+- Pro 라이선스 키를 활성화하면 런타임에 Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot, Windsurf, MiniMax, Augment, Poe, Fireworks, Novita, Amp, Z.AI, Alibaba Token Plan, Trae, Kiro, Factory, Cline가 열립니다 (별도 바이너리 없음).
 - 트레이 메뉴 → 라이선스 섹션 → **Activate from clipboard**로 키 등록,
   **Deactivate license**로 해제, **Get a license…**로 구매 페이지 열기.
 - 활성화는 Ed25519 서명 토큰(디바이스 바인딩, 오프라인 유예 14일)으로 검증됩니다 — 자세한 내용은 `docs/LICENSE_API.md`.

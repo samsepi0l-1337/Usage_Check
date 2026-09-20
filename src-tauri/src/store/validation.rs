@@ -50,6 +50,7 @@ impl AccountStore {
                         | Provider::Zai
                         | Provider::Kiro
                         | Provider::Factory
+                        | Provider::Cline
                 )
             }
             SecretSource::XaiManagement { .. } => provider == Provider::Grok,

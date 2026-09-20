@@ -74,6 +74,7 @@ fn store_with_all_paid_providers() -> (tempfile::TempDir, AccountStore) {
         (Provider::Zai, "zai-test"),
         (Provider::Kiro, "kiro-test"),
         (Provider::Factory, "factory-test"),
+        (Provider::Cline, "cline-test"),
     ] {
         store
             .add_secret_with(
@@ -152,7 +153,7 @@ async fn unlicensed_poll_skips_io_for_every_paid_provider() {
 
     let results = poll_all_with(&store, false).await;
 
-    assert_eq!(results.len(), 20, "expected one result per paid account");
+    assert_eq!(results.len(), 21, "expected one result per paid account");
     for usage in &results {
         assert_eq!(
             usage.status, "pro_required",

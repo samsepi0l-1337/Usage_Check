@@ -423,6 +423,49 @@ pub fn factory_auth_v2_file() -> Option<PathBuf> {
     factory_home().map(|home| home.join("auth.v2.file"))
 }
 
+/// Cline data roots: `$CLINE_DATA_DIR`, `$CLINE_HOME/data`, `~/.cline/data`,
+/// then XDG `cline/data` variants. First usable secrets.json wins at import.
+pub fn cline_data_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(dir) = env_path("CLINE_DATA_DIR") {
+        dirs.push(dir);
+    }
+    if let Some(home) = env_path("CLINE_HOME") {
+        dirs.push(home.join("data"));
+    }
+    if let Some(home) = home_dir() {
+        dirs.push(home.join(".cline").join("data"));
+        if let Some(xdg) = env_path("XDG_CONFIG_HOME") {
+            dirs.push(xdg.join("cline").join("data"));
+        } else {
+            dirs.push(home.join(".config").join("cline").join("data"));
+        }
+        if let Some(xdg) = env_path("XDG_DATA_HOME") {
+            dirs.push(xdg.join("cline").join("data"));
+        } else {
+            dirs.push(home.join(".local").join("share").join("cline").join("data"));
+        }
+    }
+    let mut seen = HashSet::new();
+    dirs.into_iter()
+        .filter(|p| seen.insert(p.clone()))
+        .collect()
+}
+
+pub fn cline_secrets_files() -> Vec<PathBuf> {
+    cline_data_dirs()
+        .into_iter()
+        .map(|dir| dir.join("secrets.json"))
+        .collect()
+}
+
+pub fn cline_providers_files() -> Vec<PathBuf> {
+    cline_data_dirs()
+        .into_iter()
+        .map(|dir| dir.join("settings").join("providers.json"))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -549,6 +592,20 @@ mod tests {
         if let Some(p) = factory_auth_json() {
             assert_eq!(p.file_name().and_then(|n| n.to_str()), Some("auth.json"));
         }
+        let secrets = cline_secrets_files();
+        assert!(
+            secrets
+                .iter()
+                .any(|p| p.file_name().and_then(|n| n.to_str()) == Some("secrets.json")),
+            "expected secrets.json in {secrets:?}"
+        );
+        let providers = cline_providers_files();
+        assert!(
+            providers
+                .iter()
+                .any(|p| p.file_name().and_then(|n| n.to_str()) == Some("providers.json")),
+            "expected providers.json in {providers:?}"
+        );
     }
 
     #[test]

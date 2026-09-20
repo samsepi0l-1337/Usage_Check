@@ -156,7 +156,8 @@ pub fn config(provider: Provider) -> Result<ProviderOAuth, String> {
         | Provider::Bailian
         | Provider::Trae
         | Provider::Kiro
-        | Provider::Factory => Err(format!(
+        | Provider::Factory
+        | Provider::Cline => Err(format!(
             "{} uses local import — choose Import from the tray Add Account menu",
             provider.display_name()
         )),
