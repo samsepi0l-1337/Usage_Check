@@ -6,6 +6,7 @@ use usage_core::fetch::amp::AmpBalance;
 use usage_core::fetch::augment::AugmentCredits;
 use usage_core::fetch::bailian::BailianQuota;
 use usage_core::fetch::claude::ClaudeQuota;
+use usage_core::fetch::cline::ClineUsage;
 use usage_core::fetch::codex::CodexQuota;
 use usage_core::fetch::copilot::CopilotQuota;
 use usage_core::fetch::cursor::CursorQuota;
@@ -490,6 +491,26 @@ pub(super) fn account_usage_from_kiro(
         pool_breakdown: Vec::new(),
         breakdown: Vec::new(),
         detail_suffix: quota.detail_suffix.clone(),
+        status: status.to_string(),
+        local_status: None,
+    }
+}
+
+pub(super) fn account_usage_from_cline(
+    account: &Account,
+    usage: &ClineUsage,
+    status: &str,
+) -> AccountUsage {
+    AccountUsage {
+        display_name: display_name_for(account, usage.email.as_deref(), usage.plan.as_deref()),
+        plan: usage.plan.clone(),
+        account: account.clone(),
+        five_hour: usage.five_hour.clone(),
+        week: usage.week.clone(),
+        totals: WindowTotals::default(),
+        pool_breakdown: Vec::new(),
+        breakdown: Vec::new(),
+        detail_suffix: usage.detail_suffix.clone(),
         status: status.to_string(),
         local_status: None,
     }

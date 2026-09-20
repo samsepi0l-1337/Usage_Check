@@ -4,6 +4,9 @@ use usage_core::account::Credentials;
 use usage_core::fetch::agy::{parse_agy_quota_summary, AgyQuota};
 use usage_core::fetch::amp::{parse_amp_balance, AmpBalance};
 use usage_core::fetch::claude::{parse_claude_usage, ClaudeQuota};
+use usage_core::fetch::cline::{
+    merge_cline_usage, parse_cline_balance, parse_cline_usages, unwrap_cline_data, ClineUsage,
+};
 use usage_core::fetch::codex::{parse_codex_usage, CodexQuota};
 use usage_core::fetch::copilot::{parse_copilot_user, CopilotQuota};
 use usage_core::fetch::cursor::{parse_cursor_period_usage, CursorQuota};
@@ -758,6 +761,112 @@ pub(super) async fn fetch_factory_usage(
     Ok(parse_factory_usage(&root))
 }
 
+const CLINE_API: &str = "https://api.cline.bot";
+const CLINE_REFRESH_URL: &str = "https://api.cline.bot/api/v1/auth/refresh";
+
+/// WorkOS account tokens need the `workos:` prefix; API keys stay as-is.
+pub(super) fn cline_authorization_token(token: &str) -> String {
+    let trimmed = token.trim();
+    if trimmed.to_ascii_lowercase().starts_with("workos:") {
+        return trimmed.to_string();
+    }
+    if trimmed.matches('.').count() >= 2 {
+        format!("workos:{trimmed}")
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn cline_json_string(root: &serde_json::Value, keys: &[&str]) -> Option<String> {
+    let data = unwrap_cline_data(root);
+    keys.iter()
+        .find_map(|key| {
+            data.get(*key)
+                .or_else(|| root.get(*key))
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+        })
+        .map(str::to_string)
+}
+
+pub(super) async fn refresh_cline_access_token(
+    client: &reqwest::Client,
+    refresh_token: &str,
+) -> Result<(String, Option<String>, Option<String>), Option<u16>> {
+    let resp = client
+        .post(CLINE_REFRESH_URL)
+        .header("Accept", "application/json")
+        .header("Content-Type", "application/json")
+        .header("User-Agent", USAGECHECK_UA)
+        .json(&serde_json::json!({
+            "refreshToken": refresh_token,
+            "grantType": "refresh_token"
+        }))
+        .send()
+        .await
+        .map_err(|_| None)?;
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(Some(status.as_u16()));
+    }
+    let root: serde_json::Value = resp.json().await.map_err(|_| Some(status.as_u16()))?;
+    let data = unwrap_cline_data(&root);
+    let access = cline_json_string(data, &["accessToken", "access_token", "idToken"])
+        .ok_or(Some(status.as_u16()))?;
+    let refresh = cline_json_string(data, &["refreshToken", "refresh_token"]);
+    let account_id = data
+        .get("userInfo")
+        .and_then(|u| cline_json_string(u, &["id", "clineUserId"]))
+        .or_else(|| cline_json_string(data, &["accountId", "account_id"]));
+    Ok((access, refresh, account_id))
+}
+
+async fn cline_bearer_json(
+    client: &reqwest::Client,
+    url: &str,
+    token: &str,
+) -> Result<serde_json::Value, Option<u16>> {
+    bearer_json(client, url, &cline_authorization_token(token)).await
+}
+
+async fn cline_user_id(
+    client: &reqwest::Client,
+    creds: &Credentials,
+) -> Result<String, Option<u16>> {
+    if let Some(id) = creds
+        .account_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        return Ok(id.to_string());
+    }
+    let body = cline_bearer_json(
+        client,
+        &format!("{CLINE_API}/api/v1/users/me"),
+        &creds.access_token,
+    )
+    .await?;
+    cline_json_string(&body, &["id", "userId", "user_id"]).ok_or(Some(404))
+}
+
+pub(super) async fn fetch_cline_usage(
+    client: &reqwest::Client,
+    creds: &Credentials,
+) -> Result<ClineUsage, Option<u16>> {
+    let user_id = cline_user_id(client, creds).await?;
+    let balance_url = format!("{CLINE_API}/api/v1/users/{user_id}/balance");
+    let usages_url = format!("{CLINE_API}/api/v1/users/{user_id}/usages");
+    let balance_body = cline_bearer_json(client, &balance_url, &creds.access_token).await?;
+    let balance = parse_cline_balance(&balance_body);
+    let usages = match cline_bearer_json(client, &usages_url, &creds.access_token).await {
+        Ok(body) => parse_cline_usages(&body),
+        Err(_) => ClineUsage::default(),
+    };
+    Ok(merge_cline_usage(balance, usages))
+}
+
 pub(super) fn fetch_higgsfield_account_json() -> Result<serde_json::Value, ()> {
     use std::process::Command;
 
@@ -769,6 +878,24 @@ pub(super) fn fetch_higgsfield_account_json() -> Result<serde_json::Value, ()> {
         return Err(());
     }
     serde_json::from_slice(&output.stdout).map_err(|_| ())
+}
+
+#[cfg(test)]
+mod cline_auth_tests {
+    use super::cline_authorization_token;
+
+    #[test]
+    fn prefixes_jwt_with_workos() {
+        assert_eq!(
+            cline_authorization_token("aaa.bbb.ccc"),
+            "workos:aaa.bbb.ccc"
+        );
+        assert_eq!(
+            cline_authorization_token("workos:aaa.bbb.ccc"),
+            "workos:aaa.bbb.ccc"
+        );
+        assert_eq!(cline_authorization_token("ck-api-key"), "ck-api-key");
+    }
 }
 
 #[cfg(test)]

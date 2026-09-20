@@ -51,7 +51,7 @@ fn sample_auth_source(provider: Provider, identity: &str) -> AuthSource {
             database_path: "/profiles/trae/state.vscdb".into(),
             expected_identity: identity.into(),
         },
-        Provider::Kiro | Provider::Factory => AuthSource::BrowserOAuth {
+        Provider::Kiro | Provider::Factory | Provider::Cline => AuthSource::BrowserOAuth {
             credential_id: format!("{identity}-credential"),
         },
     }
@@ -455,6 +455,7 @@ fn provider_filter_accepts_pro_providers() {
         sample(Provider::Trae, "trae", None, None),
         sample(Provider::Kiro, "kiro", None, None),
         sample(Provider::Factory, "factory", None, None),
+        sample(Provider::Cline, "cline", None, None),
     ]);
     for provider in [
         "cursor",
@@ -477,6 +478,7 @@ fn provider_filter_accepts_pro_providers() {
         "trae",
         "kiro",
         "factory",
+        "cline",
     ] {
         let reply = route(&state, "GET", &format!("/v1/usage/{provider}"));
         assert_eq!(reply.status, 200);

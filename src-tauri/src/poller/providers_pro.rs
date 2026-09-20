@@ -1,26 +1,28 @@
 use super::http::{
-    fetch_amp_balance, fetch_copilot_user, fetch_cursor_quota, fetch_deepseek_balance,
-    fetch_factory_usage, fetch_fireworks_billing, fetch_grok_prepaid,
+    fetch_amp_balance, fetch_cline_usage, fetch_copilot_user, fetch_cursor_quota,
+    fetch_deepseek_balance, fetch_factory_usage, fetch_fireworks_billing, fetch_grok_prepaid,
     fetch_higgsfield_account_json, fetch_kimi_usages, fetch_kiro_usage_limits,
     fetch_novita_balance, fetch_opencode_usage, fetch_openrouter_key, fetch_poe_balance,
-    fetch_trae_entitlements, fetch_windsurf_status, fetch_zai_quota, refresh_cursor_access_token,
-    refresh_factory_access_token, refresh_kiro_access_token,
+    fetch_trae_entitlements, fetch_windsurf_status, fetch_zai_quota, refresh_cline_access_token,
+    refresh_cursor_access_token, refresh_factory_access_token, refresh_kiro_access_token,
 };
 use super::providers::maybe_refresh;
 use super::usage_model::{
     account_usage_from_amp, account_usage_from_augment, account_usage_from_bailian,
-    account_usage_from_copilot, account_usage_from_cursor, account_usage_from_deepseek,
-    account_usage_from_factory, account_usage_from_fireworks, account_usage_from_grok,
-    account_usage_from_higgsfield, account_usage_from_kimi, account_usage_from_kiro,
-    account_usage_from_minimax, account_usage_from_novita, account_usage_from_opencode,
-    account_usage_from_openrouter, account_usage_from_poe, account_usage_from_trae,
-    account_usage_from_windsurf, account_usage_from_zai, status_for_failure, AccountUsage,
+    account_usage_from_cline, account_usage_from_copilot, account_usage_from_cursor,
+    account_usage_from_deepseek, account_usage_from_factory, account_usage_from_fireworks,
+    account_usage_from_grok, account_usage_from_higgsfield, account_usage_from_kimi,
+    account_usage_from_kiro, account_usage_from_minimax, account_usage_from_novita,
+    account_usage_from_opencode, account_usage_from_openrouter, account_usage_from_poe,
+    account_usage_from_trae, account_usage_from_windsurf, account_usage_from_zai,
+    status_for_failure, AccountUsage,
 };
 use crate::store::AccountStore;
 use usage_core::account::{Account, Provider};
 use usage_core::fetch::amp::AmpBalance;
 use usage_core::fetch::augment::{parse_augment_account, AugmentCredits};
 use usage_core::fetch::bailian::{parse_bailian_token_plan, BailianQuota};
+use usage_core::fetch::cline::ClineUsage;
 use usage_core::fetch::copilot::CopilotQuota;
 use usage_core::fetch::cursor::{cursor_quota_with_auth, CursorQuota};
 use usage_core::fetch::deepseek::DeepSeekBalance;
@@ -889,6 +891,80 @@ pub(super) async fn poll_factory(
         }
         Err(status) => {
             account_usage_from_factory(account, &FactoryUsage::default(), factory_status(status))
+        }
+    }
+}
+
+fn cline_ok_status(usage: &ClineUsage) -> &'static str {
+    if usage.five_hour.is_some() || usage.week.is_some() || usage.detail_suffix.is_some() {
+        "ok"
+    } else {
+        "needs_setup"
+    }
+}
+
+async fn apply_cline_refresh(
+    store: &AccountStore,
+    client: &reqwest::Client,
+    account: &Account,
+    creds: &mut usage_core::account::Credentials,
+) -> bool {
+    let Some(refresh) = creds.refresh_token.clone() else {
+        return false;
+    };
+    let Ok((access, new_refresh, account_id)) = refresh_cline_access_token(client, &refresh).await
+    else {
+        return false;
+    };
+    creds.access_token = access;
+    if let Some(rt) = new_refresh {
+        creds.refresh_token = Some(rt);
+    }
+    if let Some(id) = account_id {
+        creds.account_id = Some(id);
+    }
+    let _ = store.update_credentials(AccountStore::credential_key(account), creds);
+    true
+}
+
+pub(super) async fn poll_cline(
+    store: &AccountStore,
+    client: &reqwest::Client,
+    account: &Account,
+) -> AccountUsage {
+    let Some(mut creds) = store.credentials(AccountStore::credential_key(account)) else {
+        return account_usage_from_cline(account, &ClineUsage::default(), "needs_login");
+    };
+
+    let expired = creds
+        .expires_at
+        .map(|exp| exp <= chrono::Utc::now() + chrono::Duration::seconds(60))
+        .unwrap_or(false);
+    if expired {
+        let _ = apply_cline_refresh(store, client, account, &mut creds).await;
+    }
+
+    match fetch_cline_usage(client, &creds).await {
+        Ok(usage) => account_usage_from_cline(account, &usage, cline_ok_status(&usage)),
+        Err(Some(401) | Some(403)) => {
+            if apply_cline_refresh(store, client, account, &mut creds).await {
+                match fetch_cline_usage(client, &creds).await {
+                    Ok(usage) => {
+                        return account_usage_from_cline(account, &usage, cline_ok_status(&usage));
+                    }
+                    Err(status) => {
+                        return account_usage_from_cline(
+                            account,
+                            &ClineUsage::default(),
+                            status_for_failure(status),
+                        );
+                    }
+                }
+            }
+            account_usage_from_cline(account, &ClineUsage::default(), "needs_login")
+        }
+        Err(status) => {
+            account_usage_from_cline(account, &ClineUsage::default(), status_for_failure(status))
         }
     }
 }

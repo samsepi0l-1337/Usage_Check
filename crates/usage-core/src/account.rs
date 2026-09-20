@@ -28,6 +28,7 @@ pub enum Provider {
     Trae,
     Kiro,
     Factory,
+    Cline,
 }
 
 impl Provider {
@@ -56,6 +57,7 @@ impl Provider {
             Provider::Trae => "trae",
             Provider::Kiro => "kiro",
             Provider::Factory => "factory",
+            Provider::Cline => "cline",
         }
     }
     #[allow(clippy::should_implement_trait)]
@@ -84,6 +86,7 @@ impl Provider {
             "trae" => Some(Provider::Trae),
             "kiro" => Some(Provider::Kiro),
             "factory" => Some(Provider::Factory),
+            "cline" => Some(Provider::Cline),
             _ => None,
         }
     }
@@ -113,6 +116,7 @@ impl Provider {
             Provider::Trae => "Trae",
             Provider::Kiro => "Kiro",
             Provider::Factory => "Factory",
+            Provider::Cline => "Cline",
         }
     }
 }
@@ -289,6 +293,7 @@ mod tests {
             auth_capability(Provider::Factory).methods,
             &[AuthMethod::Cli]
         );
+        assert_eq!(auth_capability(Provider::Cline).methods, &[AuthMethod::Cli]);
     }
 
     #[test]
@@ -485,5 +490,8 @@ mod tests {
         assert_eq!(Provider::from_str("factory"), Some(Provider::Factory));
         assert_eq!(Provider::Factory.as_str(), "factory");
         assert_eq!(Provider::Factory.display_name(), "Factory");
+        assert_eq!(Provider::from_str("cline"), Some(Provider::Cline));
+        assert_eq!(Provider::Cline.as_str(), "cline");
+        assert_eq!(Provider::Cline.display_name(), "Cline");
     }
 }

@@ -650,6 +650,48 @@ fn account_usage_from_factory_maps_used_ratio() {
 }
 
 #[test]
+fn account_usage_from_cline_maps_windows_and_remaining() {
+    let acct = Account {
+        id: "cline-1".into(),
+        provider: Provider::Cline,
+        label: "Cline".into(),
+        auth_source: AuthSource::BrowserOAuth {
+            credential_id: "cline-cred".into(),
+        },
+    };
+    let usage = usage_core::fetch::cline::ClineUsage {
+        email: Some("you@cline.bot".into()),
+        plan: None,
+        five_hour: Some(QuotaUsage {
+            percent: 25.0,
+            resets_at: None,
+            window_seconds: Some(18_000),
+        }),
+        week: Some(QuotaUsage {
+            percent: 10.0,
+            resets_at: None,
+            window_seconds: Some(604_800),
+        }),
+        detail_suffix: None,
+    };
+    let result = account_usage_from_cline(&acct, &usage, "ok");
+    assert_eq!(result.display_name, "you@cline.bot");
+    assert_eq!(result.five_hour.unwrap().percent, 25.0);
+    assert_eq!(result.week.unwrap().percent, 10.0);
+
+    let remaining = usage_core::fetch::cline::ClineUsage {
+        email: None,
+        plan: None,
+        five_hour: None,
+        week: None,
+        detail_suffix: Some("$12.50 left".into()),
+    };
+    let result = account_usage_from_cline(&acct, &remaining, "ok");
+    assert_eq!(result.detail_suffix.as_deref(), Some("$12.50 left"));
+    assert!(result.five_hour.is_none());
+}
+
+#[test]
 fn assemble_failed_outcome_yields_empty_breakdown() {
     let acct = Account {
         id: "test".into(),

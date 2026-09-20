@@ -168,6 +168,12 @@ const ALL_AUTH_ACTION_SPECS: &[AuthActionSpec] = &[
         event_id: "add-factory-cli",
         label: "Add Factory (CLI)",
     },
+    AuthActionSpec {
+        provider: Provider::Cline,
+        method: AuthMethod::Cli,
+        event_id: "add-cline-cli",
+        label: "Add Cline (CLI)",
+    },
 ];
 
 /// Add Account actions available to the user right now: paid-provider specs

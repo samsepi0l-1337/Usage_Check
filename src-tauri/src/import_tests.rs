@@ -627,6 +627,7 @@ fn new_pro_providers_store_as_browser_oauth_secrets() {
         Provider::Zai,
         Provider::Kiro,
         Provider::Factory,
+        Provider::Cline,
     ] {
         let account = store
             .add_with(

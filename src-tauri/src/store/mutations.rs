@@ -198,7 +198,8 @@ impl AccountStore {
             | Provider::Amp
             | Provider::Zai
             | Provider::Kiro
-            | Provider::Factory => self.add_secret_with(
+            | Provider::Factory
+            | Provider::Cline => self.add_secret_with(
                 provider,
                 label,
                 SecretSource::BrowserOAuth,

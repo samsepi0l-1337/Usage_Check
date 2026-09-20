@@ -44,6 +44,7 @@
         assert!(!specs.iter().any(|s| s.provider == Provider::Trae));
         assert!(!specs.iter().any(|s| s.provider == Provider::Kiro));
         assert!(!specs.iter().any(|s| s.provider == Provider::Factory));
+        assert!(!specs.iter().any(|s| s.provider == Provider::Cline));
     }
 
     #[test]
@@ -69,6 +70,7 @@
         assert!(specs.iter().any(|s| s.provider == Provider::Trae));
         assert!(specs.iter().any(|s| s.provider == Provider::Kiro));
         assert!(specs.iter().any(|s| s.provider == Provider::Factory));
+        assert!(specs.iter().any(|s| s.provider == Provider::Cline));
     }
 
     #[test]
@@ -255,6 +257,11 @@
         assert_eq!(spec.provider, Provider::Factory);
         assert_eq!(spec.method, AuthMethod::Cli);
         assert_eq!(spec.label, "Add Factory (CLI)");
+
+        let spec = spec_for_event("add-cline-cli").expect("Cline CLI is registered");
+        assert_eq!(spec.provider, Provider::Cline);
+        assert_eq!(spec.method, AuthMethod::Cli);
+        assert_eq!(spec.label, "Add Cline (CLI)");
     }
 
     use crate::poller::AccountUsage;
