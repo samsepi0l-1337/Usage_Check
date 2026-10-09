@@ -4,7 +4,6 @@ use std::fs;
 use std::path::PathBuf;
 use tempfile::tempdir;
 
-
 /// §6.1 Cap regression: write 300 real .jsonl files, scan them.
 /// This test MUST call scan_local_events (real filesystem layer).
 /// Guards against reintroducing the old MAX_FILES=200 cap.

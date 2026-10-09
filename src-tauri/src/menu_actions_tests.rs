@@ -80,7 +80,11 @@ fn build_mock_app(store_root: std::path::PathBuf) -> tauri::App<tauri::test::Moc
         .expect("build mock tauri app")
 }
 
-const PAID_PROVIDER_EVENTS: &[&str] = &["add-cursor-local", "add-grok-clipboard", "add-higgsfield-cli"];
+const PAID_PROVIDER_EVENTS: &[&str] = &[
+    "add-cursor-local",
+    "add-grok-clipboard",
+    "add-higgsfield-cli",
+];
 
 fn credentials() -> Credentials {
     Credentials {
@@ -117,7 +121,10 @@ fn dispatch_gate_refuses_all_three_paid_providers_when_unlicensed() {
     // No license.json exists at this fresh, isolated app-data dir, so
     // `crate::license::is_pro()` is deterministically false — independent of
     // whatever the machine actually running this test has cached for real.
-    assert!(!crate::license::is_pro(), "sanity: fresh app-data dir must be unlicensed");
+    assert!(
+        !crate::license::is_pro(),
+        "sanity: fresh app-data dir must be unlicensed"
+    );
 
     let app = build_mock_app(tmp.path().join("store"));
     for event_id in PAID_PROVIDER_EVENTS.iter().copied() {
@@ -312,7 +319,10 @@ fn unrecognized_event_id_is_not_an_auth_dispatch() {
         handle_menu_event(app.handle(), "not-a-real-event-id"),
         DispatchOutcome::Other
     );
-    assert_eq!(handle_menu_event(app.handle(), "about"), DispatchOutcome::Other);
+    assert_eq!(
+        handle_menu_event(app.handle(), "about"),
+        DispatchOutcome::Other
+    );
 }
 
 // --- Stage C: license tray section -----------------------------------

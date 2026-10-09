@@ -104,9 +104,7 @@ pub(crate) fn reject_symlink(path: &Path, description: &str) -> Result<(), Strin
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SecretSource {
     BrowserOAuth,
-    XaiManagement {
-        team_id: String,
-    },
+    XaiManagement { team_id: String },
 }
 
 /// File-backed schema-v2 account store rooted in UsageCheck's app-data folder.

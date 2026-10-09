@@ -92,7 +92,10 @@ pub fn verify_token(token: &str, public_key: &VerifyingKey) -> Result<TokenPaylo
 }
 
 #[cfg(test)]
-pub(crate) fn encode_token(payload: &TokenPayload, signing_key: &ed25519_dalek::SigningKey) -> String {
+pub(crate) fn encode_token(
+    payload: &TokenPayload,
+    signing_key: &ed25519_dalek::SigningKey,
+) -> String {
     use ed25519_dalek::Signer;
     let payload_bytes = serde_json::to_vec(payload).expect("serialize test token payload");
     let signature = signing_key.sign(&payload_bytes);

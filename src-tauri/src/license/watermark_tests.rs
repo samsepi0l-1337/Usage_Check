@@ -18,7 +18,10 @@ fn is_rolled_back_false_within_skew_tolerance() {
 fn is_rolled_back_false_exactly_at_skew_boundary() {
     let watermark = Utc::now();
     let now = watermark - ROLLBACK_SKEW;
-    assert!(!is_rolled_back(Some(watermark), now), "boundary is inclusive of the tolerance");
+    assert!(
+        !is_rolled_back(Some(watermark), now),
+        "boundary is inclusive of the tolerance"
+    );
 }
 
 #[test]
@@ -75,8 +78,12 @@ fn repair_unconditionally_replaces_a_far_future_watermark() {
     // already looks "ahead".
     let tmp = tempfile::tempdir().unwrap();
     let now = Utc::now();
-    repair_watermark_in(Some(tmp.path()), now + Duration::days(400), now + Duration::days(400))
-        .expect("repair watermark");
+    repair_watermark_in(
+        Some(tmp.path()),
+        now + Duration::days(400),
+        now + Duration::days(400),
+    )
+    .expect("repair watermark");
 
     let repair_now = Utc::now();
     let issued_at = repair_now - Duration::hours(1);

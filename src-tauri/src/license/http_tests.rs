@@ -64,25 +64,29 @@ fn spawn_one_shot_server(status: u16, body: String) -> (String, std::thread::Joi
         .expect("mock server should bind an IPv4/IPv6 address")
         .port();
     let url = format!("http://127.0.0.1:{port}/");
-    let handle = std::thread::spawn(move || match server.recv_timeout(MOCK_SERVER_RECV_TIMEOUT) {
-        Ok(Some(mut request)) => {
-            // Drain the request body so the client's write doesn't block on
-            // a full socket buffer for a body we don't otherwise inspect.
-            let mut discard = String::new();
-            let _ = request.as_reader().read_to_string(&mut discard);
-            let header = Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..])
-                .expect("static content-type header is valid");
-            let response = Response::from_string(body).with_status_code(status).with_header(header);
-            let _ = request.respond(response);
-        }
-        Ok(None) => {
-            eprintln!(
-                "mock server received no request within {MOCK_SERVER_RECV_TIMEOUT:?} — did \
+    let handle = std::thread::spawn(
+        move || match server.recv_timeout(MOCK_SERVER_RECV_TIMEOUT) {
+            Ok(Some(mut request)) => {
+                // Drain the request body so the client's write doesn't block on
+                // a full socket buffer for a body we don't otherwise inspect.
+                let mut discard = String::new();
+                let _ = request.as_reader().read_to_string(&mut discard);
+                let header = Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..])
+                    .expect("static content-type header is valid");
+                let response = Response::from_string(body)
+                    .with_status_code(status)
+                    .with_header(header);
+                let _ = request.respond(response);
+            }
+            Ok(None) => {
+                eprintln!(
+                    "mock server received no request within {MOCK_SERVER_RECV_TIMEOUT:?} — did \
                  another test overwrite USAGECHECK_LICENSE_API?"
-            );
-        }
-        Err(err) => eprintln!("mock server recv_timeout failed: {err}"),
-    });
+                );
+            }
+            Err(err) => eprintln!("mock server recv_timeout failed: {err}"),
+        },
+    );
     (url, handle)
 }
 
@@ -149,7 +153,9 @@ fn spawn_two_shot_server(
         let respond = |mut request: tiny_http::Request, body: String| {
             let mut discard = String::new();
             let _ = request.as_reader().read_to_string(&mut discard);
-            let response = Response::from_string(body).with_status_code(200).with_header(content_type_header());
+            let response = Response::from_string(body)
+                .with_status_code(200)
+                .with_header(content_type_header());
             let _ = request.respond(response);
         };
 
@@ -215,7 +221,11 @@ fn spawn_delayed_one_shot_server(
     status: u16,
     body: String,
     delay: std::time::Duration,
-) -> (String, Arc<tokio::sync::Notify>, std::thread::JoinHandle<()>) {
+) -> (
+    String,
+    Arc<tokio::sync::Notify>,
+    std::thread::JoinHandle<()>,
+) {
     let server = Server::http("127.0.0.1:0").expect("bind mock license server");
     let port = server
         .server_addr()
@@ -225,28 +235,32 @@ fn spawn_delayed_one_shot_server(
     let url = format!("http://127.0.0.1:{port}/");
     let request_received = Arc::new(tokio::sync::Notify::new());
     let notify = request_received.clone();
-    let handle = std::thread::spawn(move || match server.recv_timeout(MOCK_SERVER_RECV_TIMEOUT) {
-        Ok(Some(mut request)) => {
-            // The request has genuinely reached tiny_http at this point —
-            // signal BEFORE the artificial delay, so the waiting side
-            // observes "in flight", never "about to respond".
-            notify.notify_one();
-            std::thread::sleep(delay);
-            let mut discard = String::new();
-            let _ = request.as_reader().read_to_string(&mut discard);
-            let header = Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..])
-                .expect("static content-type header is valid");
-            let response = Response::from_string(body).with_status_code(status).with_header(header);
-            let _ = request.respond(response);
-        }
-        Ok(None) => {
-            eprintln!(
-                "mock server received no request within {MOCK_SERVER_RECV_TIMEOUT:?} — did \
+    let handle = std::thread::spawn(
+        move || match server.recv_timeout(MOCK_SERVER_RECV_TIMEOUT) {
+            Ok(Some(mut request)) => {
+                // The request has genuinely reached tiny_http at this point —
+                // signal BEFORE the artificial delay, so the waiting side
+                // observes "in flight", never "about to respond".
+                notify.notify_one();
+                std::thread::sleep(delay);
+                let mut discard = String::new();
+                let _ = request.as_reader().read_to_string(&mut discard);
+                let header = Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..])
+                    .expect("static content-type header is valid");
+                let response = Response::from_string(body)
+                    .with_status_code(status)
+                    .with_header(header);
+                let _ = request.respond(response);
+            }
+            Ok(None) => {
+                eprintln!(
+                    "mock server received no request within {MOCK_SERVER_RECV_TIMEOUT:?} — did \
                  another test overwrite USAGECHECK_LICENSE_API?"
-            );
-        }
-        Err(err) => eprintln!("mock server recv_timeout failed: {err}"),
-    });
+                );
+            }
+            Err(err) => eprintln!("mock server recv_timeout failed: {err}"),
+        },
+    );
     (url, request_received, handle)
 }
 
@@ -274,7 +288,9 @@ fn signed_success_body(signing_key: &SigningKey, payload: &token::TokenPayload) 
 #[tokio::test]
 #[allow(clippy::await_holding_lock)] // Process-wide env mutation must remain serialized.
 async fn activate_persists_pro_and_tampering_the_persisted_token_forces_free() {
-    let _lock = license::LICENSE_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _lock = license::LICENSE_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
     let signing_key = test_signing_key();
     let _pubkey_env = EnvVarGuard::set(
         "USAGECHECK_LICENSE_PUBKEY",
@@ -292,7 +308,8 @@ async fn activate_persists_pro_and_tampering_the_persisted_token_forces_free() {
         issued_at: Utc::now() - Duration::hours(1),
         expires_at: None,
     };
-    let (url, server_handle) = spawn_one_shot_server(200, signed_success_body(&signing_key, &payload));
+    let (url, server_handle) =
+        spawn_one_shot_server(200, signed_success_body(&signing_key, &payload));
     let _api_env = EnvVarGuard::set("USAGECHECK_LICENSE_API", &url);
 
     let status = license::activate_in(Some(tmp.path()), "TEST-KEY")
@@ -306,7 +323,10 @@ async fn activate_persists_pro_and_tampering_the_persisted_token_forces_free() {
     let on_disk: LicenseRecord =
         serde_json::from_str(&std::fs::read_to_string(&license_path).unwrap()).unwrap();
     assert_eq!(on_disk.key, "TEST-KEY");
-    assert!(on_disk.token.contains('.'), "persisted token should be the dot-separated wire format");
+    assert!(
+        on_disk.token.contains('.'),
+        "persisted token should be the dot-separated wire format"
+    );
 
     // A LATER status() call (no network — verifies signature from disk)
     // still returns Pro.
@@ -370,7 +390,9 @@ async fn server_error_code_is_surfaced_verbatim() {
 #[tokio::test]
 #[allow(clippy::await_holding_lock)] // Process-wide env mutation must remain serialized.
 async fn transport_failure_is_a_network_error_and_nothing_is_persisted() {
-    let _lock = license::LICENSE_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _lock = license::LICENSE_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
     // Port 1 is privileged and unbound in a sandboxed test environment — the
     // connection is refused, exercising a genuine transport failure with no
     // server involved at all.
@@ -427,7 +449,9 @@ impl Drop for AppDataDirGuard {
 #[tokio::test]
 #[allow(clippy::await_holding_lock)] // Process-wide env mutation must remain serialized.
 async fn public_activate_refresh_deactivate_wrappers_work_end_to_end() {
-    let _lock = license::LICENSE_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _lock = license::LICENSE_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
 
     let tmp = tempfile::tempdir().unwrap();
     let _app_data_env = AppDataDirGuard::set(tmp.path());
@@ -457,7 +481,9 @@ async fn public_activate_refresh_deactivate_wrappers_work_end_to_end() {
     let (url, handle) = spawn_one_shot_server(200, signed_success_body(&signing_key, &payload));
     let _api_env = EnvVarGuard::set("USAGECHECK_LICENSE_API", &url);
 
-    let status = license::activate("TEST-KEY").await.expect("public activate() should succeed");
+    let status = license::activate("TEST-KEY")
+        .await
+        .expect("public activate() should succeed");
     join_mock_server(handle);
     assert_eq!(status, LicenseStatus::Pro { expires_at: None });
     assert!(license::is_pro());
@@ -475,11 +501,15 @@ async fn public_activate_refresh_deactivate_wrappers_work_end_to_end() {
     };
     let (url2, handle2) = spawn_one_shot_server(200, signed_success_body(&signing_key, &payload2));
     let _api_env2 = EnvVarGuard::set("USAGECHECK_LICENSE_API", &url2);
-    let refreshed = license::refresh().await.expect("public refresh() should succeed");
+    let refreshed = license::refresh()
+        .await
+        .expect("public refresh() should succeed");
     join_mock_server(handle2);
     assert_eq!(refreshed, LicenseStatus::Pro { expires_at: None });
 
-    license::deactivate().await.expect("deactivate should succeed");
+    license::deactivate()
+        .await
+        .expect("deactivate should succeed");
     assert!(!license::is_pro(), "deactivate must remove the license");
     assert_eq!(license::status(), LicenseStatus::Free);
 
@@ -506,11 +536,16 @@ async fn deactivate_removes_a_malformed_license_file() {
 #[tokio::test]
 #[allow(clippy::await_holding_lock)] // Process-wide env mutation must remain serialized.
 async fn public_refresh_with_no_stored_license_is_no_stored_license_error() {
-    let _lock = license::LICENSE_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _lock = license::LICENSE_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
     let tmp = tempfile::tempdir().unwrap();
     let _app_data_env = AppDataDirGuard::set(tmp.path());
 
-    assert_eq!(license::refresh().await, Err(ActivationError::NoStoredLicense));
+    assert_eq!(
+        license::refresh().await,
+        Err(ActivationError::NoStoredLicense)
+    );
 }
 
 // ---------------------------------------------------------------------
@@ -522,7 +557,9 @@ async fn public_refresh_with_no_stored_license_is_no_stored_license_error() {
 #[tokio::test]
 #[allow(clippy::await_holding_lock)] // Process-wide env mutation must remain serialized.
 async fn refresh_rejects_a_non_advancing_issued_at_as_replayed_and_leaves_the_record_untouched() {
-    let _lock = license::LICENSE_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _lock = license::LICENSE_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
     let signing_key = test_signing_key();
     let _pubkey_env = EnvVarGuard::set(
         "USAGECHECK_LICENSE_PUBKEY",
@@ -550,7 +587,8 @@ async fn refresh_rejects_a_non_advancing_issued_at_as_replayed_and_leaves_the_re
     assert_eq!(status, LicenseStatus::Pro { expires_at: None });
 
     let before: LicenseRecord =
-        serde_json::from_str(&std::fs::read_to_string(tmp.path().join("license.json")).unwrap()).unwrap();
+        serde_json::from_str(&std::fs::read_to_string(tmp.path().join("license.json")).unwrap())
+            .unwrap();
     let before_files = snapshot_license_files(tmp.path());
 
     // A "refresh" server response reusing the SAME issued_at (a replay, or a
@@ -562,7 +600,8 @@ async fn refresh_rejects_a_non_advancing_issued_at_as_replayed_and_leaves_the_re
     assert_eq!(result, Err(ActivationError::ReplayedToken));
 
     let after: LicenseRecord =
-        serde_json::from_str(&std::fs::read_to_string(tmp.path().join("license.json")).unwrap()).unwrap();
+        serde_json::from_str(&std::fs::read_to_string(tmp.path().join("license.json")).unwrap())
+            .unwrap();
     assert_eq!(
         before.token, after.token,
         "a replayed refresh response must leave the stored record completely untouched"
@@ -579,7 +618,9 @@ async fn refresh_rejects_a_non_advancing_issued_at_as_replayed_and_leaves_the_re
 #[tokio::test]
 #[allow(clippy::await_holding_lock)] // Process-wide env mutation must remain serialized.
 async fn refresh_with_an_expired_candidate_is_not_entitled_and_leaves_the_record_intact() {
-    let _lock = license::LICENSE_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _lock = license::LICENSE_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
     let signing_key = test_signing_key();
     let _pubkey_env = EnvVarGuard::set(
         "USAGECHECK_LICENSE_PUBKEY",
@@ -597,7 +638,8 @@ async fn refresh_with_an_expired_candidate_is_not_entitled_and_leaves_the_record
         issued_at: Utc::now() - Duration::hours(1),
         expires_at: None,
     };
-    let (url, handle) = spawn_one_shot_server(200, signed_success_body(&signing_key, &good_payload));
+    let (url, handle) =
+        spawn_one_shot_server(200, signed_success_body(&signing_key, &good_payload));
     let _api_env = EnvVarGuard::set("USAGECHECK_LICENSE_API", &url);
     let status = license::activate_in(Some(tmp.path()), "TEST-KEY")
         .await
@@ -606,7 +648,8 @@ async fn refresh_with_an_expired_candidate_is_not_entitled_and_leaves_the_record
     assert_eq!(status, LicenseStatus::Pro { expires_at: None });
 
     let before: LicenseRecord =
-        serde_json::from_str(&std::fs::read_to_string(tmp.path().join("license.json")).unwrap()).unwrap();
+        serde_json::from_str(&std::fs::read_to_string(tmp.path().join("license.json")).unwrap())
+            .unwrap();
     let before_files = snapshot_license_files(tmp.path());
 
     // A newer, VALIDLY-SIGNED, but ALREADY-EXPIRED candidate (H3: full
@@ -617,14 +660,19 @@ async fn refresh_with_an_expired_candidate_is_not_entitled_and_leaves_the_record
         expires_at: Some(Utc::now() - Duration::minutes(1)),
         ..good_payload.clone()
     };
-    let (url2, handle2) = spawn_one_shot_server(200, signed_success_body(&signing_key, &expired_payload));
+    let (url2, handle2) =
+        spawn_one_shot_server(200, signed_success_body(&signing_key, &expired_payload));
     let _api_env2 = EnvVarGuard::set("USAGECHECK_LICENSE_API", &url2);
     let result = license::refresh_in(Some(tmp.path())).await;
     join_mock_server(handle2);
-    assert_eq!(result, Err(ActivationError::NotEntitled(LicenseStatus::Expired)));
+    assert_eq!(
+        result,
+        Err(ActivationError::NotEntitled(LicenseStatus::Expired))
+    );
 
     let after: LicenseRecord =
-        serde_json::from_str(&std::fs::read_to_string(tmp.path().join("license.json")).unwrap()).unwrap();
+        serde_json::from_str(&std::fs::read_to_string(tmp.path().join("license.json")).unwrap())
+            .unwrap();
     assert_eq!(
         before.token, after.token,
         "a NotEntitled candidate must leave the previously-stored good record untouched"
@@ -648,7 +696,9 @@ async fn refresh_with_an_expired_candidate_is_not_entitled_and_leaves_the_record
 #[tokio::test]
 #[allow(clippy::await_holding_lock)] // Process-wide env mutation must remain serialized.
 async fn refresh_with_a_future_issued_candidate_is_not_entitled_and_leaves_both_files_intact() {
-    let _lock = license::LICENSE_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _lock = license::LICENSE_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
     let signing_key = test_signing_key();
     let _pubkey_env = EnvVarGuard::set(
         "USAGECHECK_LICENSE_PUBKEY",
@@ -666,7 +716,8 @@ async fn refresh_with_a_future_issued_candidate_is_not_entitled_and_leaves_both_
         issued_at: Utc::now() - Duration::hours(1),
         expires_at: None,
     };
-    let (url, handle) = spawn_one_shot_server(200, signed_success_body(&signing_key, &good_payload));
+    let (url, handle) =
+        spawn_one_shot_server(200, signed_success_body(&signing_key, &good_payload));
     let _api_env = EnvVarGuard::set("USAGECHECK_LICENSE_API", &url);
     let status = license::activate_in(Some(tmp.path()), "TEST-KEY")
         .await
@@ -675,7 +726,8 @@ async fn refresh_with_a_future_issued_candidate_is_not_entitled_and_leaves_both_
     assert_eq!(status, LicenseStatus::Pro { expires_at: None });
 
     let before: LicenseRecord =
-        serde_json::from_str(&std::fs::read_to_string(tmp.path().join("license.json")).unwrap()).unwrap();
+        serde_json::from_str(&std::fs::read_to_string(tmp.path().join("license.json")).unwrap())
+            .unwrap();
     let before_files = snapshot_license_files(tmp.path());
 
     // A newer, validly-signed candidate whose issued_at is in the FUTURE —
@@ -684,14 +736,19 @@ async fn refresh_with_a_future_issued_candidate_is_not_entitled_and_leaves_both_
         issued_at: Utc::now() + Duration::hours(1),
         ..good_payload.clone()
     };
-    let (url2, handle2) = spawn_one_shot_server(200, signed_success_body(&signing_key, &future_payload));
+    let (url2, handle2) =
+        spawn_one_shot_server(200, signed_success_body(&signing_key, &future_payload));
     let _api_env2 = EnvVarGuard::set("USAGECHECK_LICENSE_API", &url2);
     let result = license::refresh_in(Some(tmp.path())).await;
     join_mock_server(handle2);
-    assert_eq!(result, Err(ActivationError::NotEntitled(LicenseStatus::Free)));
+    assert_eq!(
+        result,
+        Err(ActivationError::NotEntitled(LicenseStatus::Free))
+    );
 
     let after: LicenseRecord =
-        serde_json::from_str(&std::fs::read_to_string(tmp.path().join("license.json")).unwrap()).unwrap();
+        serde_json::from_str(&std::fs::read_to_string(tmp.path().join("license.json")).unwrap())
+            .unwrap();
     assert_eq!(before.token, after.token);
     assert_eq!(
         snapshot_license_files(tmp.path()),
@@ -709,7 +766,9 @@ async fn refresh_with_a_future_issued_candidate_is_not_entitled_and_leaves_both_
 #[tokio::test]
 #[allow(clippy::await_holding_lock)] // Process-wide env mutation must remain serialized.
 async fn refresh_recovers_from_a_far_future_watermark_and_returns_pro() {
-    let _lock = license::LICENSE_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _lock = license::LICENSE_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
     let signing_key = test_signing_key();
     let _pubkey_env = EnvVarGuard::set(
         "USAGECHECK_LICENSE_PUBKEY",
@@ -774,7 +833,9 @@ async fn refresh_recovers_from_a_far_future_watermark_and_returns_pro() {
 #[tokio::test]
 #[allow(clippy::await_holding_lock)] // Process-wide env mutation must remain serialized.
 async fn activation_recovers_from_a_deleted_watermark_and_returns_pro() {
-    let _lock = license::LICENSE_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _lock = license::LICENSE_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
     let signing_key = test_signing_key();
     let _pubkey_env = EnvVarGuard::set(
         "USAGECHECK_LICENSE_PUBKEY",
@@ -819,7 +880,9 @@ async fn activation_recovers_from_a_deleted_watermark_and_returns_pro() {
 #[tokio::test]
 #[allow(clippy::await_holding_lock)] // Process-wide env mutation must remain serialized.
 async fn activation_propagates_a_watermark_write_failure_and_never_publishes_a_record() {
-    let _lock = license::LICENSE_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _lock = license::LICENSE_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
     let signing_key = test_signing_key();
     let _pubkey_env = EnvVarGuard::set(
         "USAGECHECK_LICENSE_PUBKEY",
@@ -870,7 +933,10 @@ async fn activation_propagates_a_watermark_write_failure_and_never_publishes_a_r
 
     // (c) a subsequent status_in() is non-Pro.
     assert!(
-        !matches!(license::status_in(Some(tmp.path())), LicenseStatus::Pro { .. }),
+        !matches!(
+            license::status_in(Some(tmp.path())),
+            LicenseStatus::Pro { .. }
+        ),
         "with no record on disk, status must never read as Pro"
     );
 }
@@ -882,7 +948,9 @@ async fn activation_propagates_a_watermark_write_failure_and_never_publishes_a_r
 #[tokio::test]
 #[allow(clippy::await_holding_lock)] // Process-wide env mutation must remain serialized.
 async fn activate_rejects_a_token_identical_to_a_verifiable_stored_one_as_replayed() {
-    let _lock = license::LICENSE_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _lock = license::LICENSE_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
     let signing_key = test_signing_key();
     let _pubkey_env = EnvVarGuard::set(
         "USAGECHECK_LICENSE_PUBKEY",
@@ -908,7 +976,8 @@ async fn activate_rejects_a_token_identical_to_a_verifiable_stored_one_as_replay
     assert_eq!(status, LicenseStatus::Pro { expires_at: None });
 
     let before: LicenseRecord =
-        serde_json::from_str(&std::fs::read_to_string(tmp.path().join("license.json")).unwrap()).unwrap();
+        serde_json::from_str(&std::fs::read_to_string(tmp.path().join("license.json")).unwrap())
+            .unwrap();
 
     // A second `activate` call whose server response reuses the SAME
     // issued_at as the currently-stored, still-verifiable token.
@@ -919,7 +988,8 @@ async fn activate_rejects_a_token_identical_to_a_verifiable_stored_one_as_replay
     assert_eq!(result, Err(ActivationError::ReplayedToken));
 
     let after: LicenseRecord =
-        serde_json::from_str(&std::fs::read_to_string(tmp.path().join("license.json")).unwrap()).unwrap();
+        serde_json::from_str(&std::fs::read_to_string(tmp.path().join("license.json")).unwrap())
+            .unwrap();
     assert_eq!(
         before.token, after.token,
         "a replayed activate response must leave the stored record completely untouched"
@@ -929,7 +999,9 @@ async fn activate_rejects_a_token_identical_to_a_verifiable_stored_one_as_replay
 #[tokio::test]
 #[allow(clippy::await_holding_lock)] // Process-wide env mutation must remain serialized.
 async fn activate_with_a_corrupted_stored_token_accepts_a_valid_fresh_candidate() {
-    let _lock = license::LICENSE_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _lock = license::LICENSE_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
     let signing_key = test_signing_key();
     let _pubkey_env = EnvVarGuard::set(
         "USAGECHECK_LICENSE_PUBKEY",
@@ -972,7 +1044,8 @@ async fn activate_with_a_corrupted_stored_token_accepts_a_valid_fresh_candidate(
     );
 
     let after: LicenseRecord =
-        serde_json::from_str(&std::fs::read_to_string(tmp.path().join("license.json")).unwrap()).unwrap();
+        serde_json::from_str(&std::fs::read_to_string(tmp.path().join("license.json")).unwrap())
+            .unwrap();
     assert_ne!(
         after.token, corrupted.token,
         "the record must be REPLACED once the fresh candidate resolves to Pro"
@@ -993,7 +1066,9 @@ async fn activation_refuses_before_any_network_or_write_when_device_id_cannot_be
     // `activate_in` never reads it here — it fails closed on the
     // unpersistable device id first) — still needs the crate-wide lock, or
     // the set/restore below can race a concurrent test's own value.
-    let _lock = license::LICENSE_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _lock = license::LICENSE_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
 
     let tmp = tempfile::tempdir().unwrap();
     let device_id_path = tmp.path().join("device-id");
@@ -1026,7 +1101,10 @@ async fn activation_refuses_before_any_network_or_write_when_device_id_cannot_be
     // activation from the one this refusal reported.
     std::fs::remove_file(&device_id_path).unwrap();
     let second = device::device_id_in(Some(tmp.path()));
-    assert_eq!(first, second, "recovery must yield the same id, not a freshly minted one");
+    assert_eq!(
+        first, second,
+        "recovery must yield the same id, not a freshly minted one"
+    );
 }
 
 // (C) The in-process cache must not be trusted blindly once `persisted` was
@@ -1039,7 +1117,9 @@ async fn activation_refuses_before_any_network_or_write_when_device_id_cannot_be
 async fn refresh_re_establishes_device_durability_before_any_network_contact() {
     use std::os::unix::fs::symlink;
 
-    let _lock = license::LICENSE_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _lock = license::LICENSE_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
     let signing_key = test_signing_key();
     let _pubkey_env = EnvVarGuard::set(
         "USAGECHECK_LICENSE_PUBKEY",
@@ -1049,7 +1129,10 @@ async fn refresh_re_establishes_device_durability_before_any_network_contact() {
     let tmp = tempfile::tempdir().unwrap();
     let device_id_path = tmp.path().join("device-id");
     let this_device = device::device_id_in(Some(tmp.path()));
-    assert!(device_id_path.exists(), "sanity: device id should be persisted after minting");
+    assert!(
+        device_id_path.exists(),
+        "sanity: device id should be persisted after minting"
+    );
 
     let payload = token::TokenPayload {
         v: 1,
@@ -1068,7 +1151,8 @@ async fn refresh_re_establishes_device_durability_before_any_network_contact() {
     assert_eq!(status, LicenseStatus::Pro { expires_at: None });
 
     let before: LicenseRecord =
-        serde_json::from_str(&std::fs::read_to_string(tmp.path().join("license.json")).unwrap()).unwrap();
+        serde_json::from_str(&std::fs::read_to_string(tmp.path().join("license.json")).unwrap())
+            .unwrap();
 
     // Simulate the device-id file being lost after activation (deleted, or a
     // dropped network volume) AND being unable to re-persist it (path
@@ -1094,7 +1178,8 @@ async fn refresh_re_establishes_device_durability_before_any_network_contact() {
     );
 
     let after: LicenseRecord =
-        serde_json::from_str(&std::fs::read_to_string(tmp.path().join("license.json")).unwrap()).unwrap();
+        serde_json::from_str(&std::fs::read_to_string(tmp.path().join("license.json")).unwrap())
+            .unwrap();
     assert_eq!(
         before.token, after.token,
         "a refused refresh must leave the previously-stored good record untouched"
@@ -1109,7 +1194,9 @@ async fn refresh_re_establishes_device_durability_before_any_network_contact() {
 #[tokio::test]
 #[allow(clippy::await_holding_lock)] // Process-wide env mutation must remain serialized.
 async fn concurrent_refresh_calls_never_lose_the_newer_committed_token() {
-    let _lock = license::LICENSE_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _lock = license::LICENSE_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
     let signing_key = test_signing_key();
     let _pubkey_env = EnvVarGuard::set(
         "USAGECHECK_LICENSE_PUBKEY",
@@ -1127,7 +1214,8 @@ async fn concurrent_refresh_calls_never_lose_the_newer_committed_token() {
         issued_at: Utc::now() - Duration::hours(2),
         expires_at: None,
     };
-    let (url, handle) = spawn_one_shot_server(200, signed_success_body(&signing_key, &baseline_payload));
+    let (url, handle) =
+        spawn_one_shot_server(200, signed_success_body(&signing_key, &baseline_payload));
     let _api_env = EnvVarGuard::set("USAGECHECK_LICENSE_API", &url);
     let status = license::activate_in(Some(tmp.path()), "TEST-KEY")
         .await
@@ -1196,8 +1284,16 @@ async fn concurrent_refresh_calls_never_lose_the_newer_committed_token() {
     );
     let overlap_detected = join_mock_server(handle2);
 
-    assert_eq!(r1, Ok(LicenseStatus::Pro { expires_at: None }), "first-resolving refresh: {r1:?}");
-    assert_eq!(r2, Ok(LicenseStatus::Pro { expires_at: None }), "second-resolving refresh: {r2:?}");
+    assert_eq!(
+        r1,
+        Ok(LicenseStatus::Pro { expires_at: None }),
+        "first-resolving refresh: {r1:?}"
+    );
+    assert_eq!(
+        r2,
+        Ok(LicenseStatus::Pro { expires_at: None }),
+        "second-resolving refresh: {r2:?}"
+    );
 
     // THE property that actually depends on `activate_lock`: the two
     // requests' windows must never overlap. Removing the lock makes this
@@ -1210,7 +1306,8 @@ async fn concurrent_refresh_calls_never_lose_the_newer_committed_token() {
     );
 
     let final_record: LicenseRecord =
-        serde_json::from_str(&std::fs::read_to_string(tmp.path().join("license.json")).unwrap()).unwrap();
+        serde_json::from_str(&std::fs::read_to_string(tmp.path().join("license.json")).unwrap())
+            .unwrap();
     let final_payload = token::verify_token(&final_record.token, &signing_key.verifying_key())
         .expect("final stored token must still verify");
     assert_eq!(
@@ -1231,7 +1328,9 @@ async fn concurrent_refresh_calls_never_lose_the_newer_committed_token() {
 #[tokio::test]
 #[allow(clippy::await_holding_lock)] // Process-wide env mutation must remain serialized.
 async fn deactivate_never_loses_to_a_refresh_that_commits_after_it_starts() {
-    let _lock = license::LICENSE_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _lock = license::LICENSE_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
     let signing_key = test_signing_key();
     let _pubkey_env = EnvVarGuard::set(
         "USAGECHECK_LICENSE_PUBKEY",
@@ -1249,7 +1348,8 @@ async fn deactivate_never_loses_to_a_refresh_that_commits_after_it_starts() {
         issued_at: Utc::now() - Duration::hours(1),
         expires_at: None,
     };
-    let (url, handle) = spawn_one_shot_server(200, signed_success_body(&signing_key, &baseline_payload));
+    let (url, handle) =
+        spawn_one_shot_server(200, signed_success_body(&signing_key, &baseline_payload));
     let _api_env = EnvVarGuard::set("USAGECHECK_LICENSE_API", &url);
     let status = license::activate_in(Some(tmp.path()), "TEST-KEY")
         .await
@@ -1376,7 +1476,9 @@ fn classify_error_surfaces_a_structured_body_over_the_generic_fallback() {
 
 #[test]
 fn resolve_endpoint_defaults_when_env_unset_or_blank() {
-    let _lock = license::LICENSE_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _lock = license::LICENSE_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
     let previous = std::env::var_os("USAGECHECK_LICENSE_API");
     std::env::remove_var("USAGECHECK_LICENSE_API");
     assert_eq!(resolve_endpoint(), DEFAULT_ENDPOINT);
@@ -1392,8 +1494,13 @@ fn resolve_endpoint_defaults_when_env_unset_or_blank() {
 
 #[test]
 fn resolve_endpoint_honors_a_set_override() {
-    let _lock = license::LICENSE_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    let _guard = EnvVarGuard::set("USAGECHECK_LICENSE_API", "http://staging.example.test/verify");
+    let _lock = license::LICENSE_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    let _guard = EnvVarGuard::set(
+        "USAGECHECK_LICENSE_API",
+        "http://staging.example.test/verify",
+    );
     assert_eq!(resolve_endpoint(), "http://staging.example.test/verify");
 }
 
@@ -1421,7 +1528,10 @@ fn doc_worked_example_token_verifies_against_the_documented_pubkey() {
     assert_eq!(payload.key_id, "test-key-id");
     assert_eq!(payload.plan, "pro");
     assert_eq!(payload.device, "0".repeat(64));
-    assert_eq!(payload.issued_at, "2026-01-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap());
+    assert_eq!(
+        payload.issued_at,
+        "2026-01-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap()
+    );
     assert_eq!(payload.expires_at, None);
 
     // And the token is REPRODUCIBLE from the payload + key, matching what
