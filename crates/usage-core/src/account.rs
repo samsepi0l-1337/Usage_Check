@@ -28,6 +28,8 @@ pub enum Provider {
     Trae,
     Kiro,
     Factory,
+    Moonshot,
+    NanoGpt,
 }
 
 impl Provider {
@@ -56,6 +58,8 @@ impl Provider {
             Provider::Trae => "trae",
             Provider::Kiro => "kiro",
             Provider::Factory => "factory",
+            Provider::Moonshot => "moonshot",
+            Provider::NanoGpt => "nanogpt",
         }
     }
     #[allow(clippy::should_implement_trait)]
@@ -84,6 +88,8 @@ impl Provider {
             "trae" => Some(Provider::Trae),
             "kiro" => Some(Provider::Kiro),
             "factory" => Some(Provider::Factory),
+            "moonshot" => Some(Provider::Moonshot),
+            "nanogpt" => Some(Provider::NanoGpt),
             _ => None,
         }
     }
@@ -113,6 +119,8 @@ impl Provider {
             Provider::Trae => "Trae",
             Provider::Kiro => "Kiro",
             Provider::Factory => "Factory",
+            Provider::Moonshot => "Moonshot API",
+            Provider::NanoGpt => "NanoGPT",
         }
     }
 }
@@ -197,6 +205,16 @@ mod tests {
         let json = serde_json::to_string(&account).unwrap();
         let decoded: Account = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded, account);
+    }
+
+    #[test]
+    fn documented_wallet_providers_are_registered_and_pro_gated() {
+        for slug in ["moonshot", "nanogpt"] {
+            let provider = Provider::from_str(slug).expect("documented wallet provider");
+            assert_eq!(provider.as_str(), slug);
+            assert_eq!(serde_json::to_string(&provider).unwrap(), format!("\"{slug}\""));
+            assert!(crate::edition::requires_pro(provider));
+        }
     }
 
     #[test]

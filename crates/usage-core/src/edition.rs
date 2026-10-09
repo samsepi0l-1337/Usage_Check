@@ -32,6 +32,8 @@ pub fn paid_providers() -> &'static [Provider] {
         Provider::Trae,
         Provider::Kiro,
         Provider::Factory,
+        Provider::Moonshot,
+        Provider::NanoGpt,
     ]
 }
 
