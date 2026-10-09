@@ -535,7 +535,7 @@ mode), on by default. There is no edition feature and no
 | **Factory** | **Experimental.** `usedRatio` from subscription usage. Encrypted `auth.v2` fails closed. |
 | **Claude CLI accounts** | Usage depends on a status-line bridge installed into the isolated profile; a newly added Claude CLI account shows `waiting_for_usage` until `claude` is run in that profile and renders its status line at least once. |
 | **Offline grace** | A Pro license verified once keeps working offline for 14 days (`license::OFFLINE_GRACE`); beyond that (or on a detected clock rollback) the tray shows `License: verification needed` until the next successful online refresh. |
-| **Local API** | `GET /v1/usage/{provider}` documents `codex` \| `claude` \| `agy` only; Pro providers appear in the full `/v1/usage` snapshot once a Pro license is active. |
+| **Local API** | `GET /v1/usage/{provider}` accepts all 25 registered provider IDs listed in `docs/openapi.yaml`. Both filtered and full `/v1/usage` snapshots retain stored Pro accounts as `pro_required` without quota values while unlicensed. |
 
 ## Build and release
 
@@ -595,7 +595,7 @@ cargo build -p usage-app --release
 ## 한국어 요약
 
 - UsageCheck는 **단일 바이너리**입니다. Codex, Claude, Gemini(agy)는 무료.
-- Pro 라이선스 키를 활성화하면 런타임에 Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot, Windsurf, MiniMax, Augment, Poe, Fireworks, Novita, Amp, Z.AI, Alibaba Token Plan, Trae, Kiro, Factory가 열립니다 (별도 바이너리 없음).
+- Pro 라이선스 키를 활성화하면 런타임에 Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot, Windsurf, MiniMax, Augment, Poe, Fireworks, Novita, Amp, Z.AI, Alibaba Token Plan, Trae, Kiro, Factory, Moonshot API, NanoGPT가 열리는 설계입니다 (별도 바이너리 없음). **이 릴리스에서는 Pro 활성화를 사용할 수 없습니다** — 문서 상단 상태 참고.
 - 트레이 메뉴 → 라이선스 섹션 → **Activate from clipboard**로 키 등록,
   **Deactivate license**로 해제, **Get a license…**로 구매 페이지 열기.
 - 활성화는 Ed25519 서명 토큰(디바이스 바인딩, 오프라인 유예 14일)으로 검증됩니다 — 자세한 내용은 `docs/LICENSE_API.md`.

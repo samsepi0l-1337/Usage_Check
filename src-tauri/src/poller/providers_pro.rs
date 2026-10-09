@@ -892,10 +892,6 @@ pub(super) async fn poll_factory(
     }
 }
 
-#[cfg(test)]
-#[path = "providers_pro_tests.rs"]
-mod tests;
-
 pub(super) async fn poll_moonshot(
     store: &AccountStore,
     client: &reqwest::Client,
@@ -925,3 +921,7 @@ pub(super) async fn poll_nanogpt(
         Err(status) => account_usage_from_wallet(account, None, status_for_failure(status)),
     }
 }
+
+#[cfg(test)]
+#[path = "providers_pro_tests.rs"]
+mod tests;

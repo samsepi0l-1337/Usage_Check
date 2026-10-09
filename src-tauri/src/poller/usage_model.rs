@@ -675,10 +675,6 @@ fn local_status_label(provenance: LocalProvenance) -> Option<&'static str> {
     }
 }
 
-#[cfg(test)]
-#[path = "usage_model_tests.rs"]
-mod tests;
-
 /// Wallet balances have no documented quota denominator, so no percentage windows.
 pub(super) fn account_usage_from_wallet(
     account: &Account,
@@ -699,3 +695,7 @@ pub(super) fn account_usage_from_wallet(
         local_status: None,
     }
 }
+
+#[cfg(test)]
+#[path = "usage_model_tests.rs"]
+mod tests;
