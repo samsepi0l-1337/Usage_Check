@@ -45,8 +45,6 @@ jobs:
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri -> target
 
       - name: Install Linux deps
         run: |
@@ -56,7 +54,9 @@ jobs:
       - name: Guard - embedded license public key is not the placeholder
         id: pubkey
         continue-on-error: true
-        run: cargo test -p usage-app -- embedded_public_key_is_not_placeholder --ignored
+        run: |
+          ./scripts/bootstrap-dev.sh
+          cargo test -p usage-app --locked -- embedded_public_key_is_not_placeholder --ignored
 
       - name: Report - placeholder key still embedded
         if: steps.pubkey.outcome == 'failure'
@@ -95,23 +95,19 @@ jobs:
             artifact: windows
 
     runs-on: ${{ matrix.platform }}
+    defaults:
+      run:
+        shell: bash
 
     steps:
       - name: Checkout
         uses: actions/checkout@v7
-
-      - name: Setup Node
-        uses: actions/setup-node@v7
-        with:
-          node-version: 22
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri -> target
 
       - name: Install Linux deps
         if: runner.os == 'Linux'
@@ -120,9 +116,7 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
       - name: Ensure frontend dist exists
-        run: |
-          mkdir -p ui/dist
-          printf '%s\n' '<!doctype html><html><body></body></html>' > ui/dist/index.html
+        run: ./scripts/bootstrap-dev.sh
 
       - name: Install Tauri CLI
         run: cargo install tauri-cli --version "^2" --locked
@@ -130,11 +124,7 @@ jobs:
       # Single unified build — no more free/pro edition split (Pro providers
       # are unlocked at runtime by a license key, not by a separate binary).
       - name: Build bundles
-        working-directory: src-tauri
-        shell: bash
-        run: |
-          set -euo pipefail
-          cargo tauri build --features custom-protocol ${{ matrix.args }}
+        run: ./scripts/build-edition.sh ${{ matrix.args }} -- --locked
 
       - name: Collect bundle paths
         id: bundles
