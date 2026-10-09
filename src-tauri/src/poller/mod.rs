@@ -44,7 +44,7 @@ use last_success::{apply_last_success, last_success_cache};
 /// Entitlement is read twice on purpose. The first read parameterizes the poll;
 /// the second, AFTER every awaited fetch has resolved, re-applies the Free gate
 /// to THIS snapshot, so a license deactivated mid-poll cannot be reported with
-/// real quota numbers for surplus accounts.
+/// real quota numbers for paid providers or surplus free accounts.
 ///
 /// This closes the WITHIN-ONE-POLL window only. The separate window — an older
 /// refresh finishing after a newer one and publishing stale data — is closed at
@@ -53,8 +53,9 @@ use last_success::{apply_last_success, last_success_cache};
 /// when there is no second refresh at all.
 ///
 /// Downgrade-only by design. A Free→Pro change is NOT re-polled, so an upgrade
-/// landing mid-poll leaves surplus accounts reading `pro_required` until the
-/// next refresh. That direction under-reports rather than over-reports.
+/// landing mid-poll leaves paid providers and surplus free accounts reading
+/// `pro_required` until the next refresh. That direction under-reports rather
+/// than over-reports.
 pub async fn poll_all(store: &AccountStore) -> Vec<AccountUsage> {
     let mut snapshot = poll_all_with(store, crate::license::is_pro()).await;
     if !crate::license::is_pro() {
@@ -63,7 +64,8 @@ pub async fn poll_all(store: &AccountStore) -> Vec<AccountUsage> {
     snapshot
 }
 
-/// Re-applies the Free-state per-provider cap to an already-assembled snapshot.
+/// Re-applies paid-provider restrictions and the Free-state per-provider cap
+/// to an already-assembled snapshot.
 /// Idempotent, and performs no I/O: the ranking is recomputed from the
 /// snapshot's own accounts, which `poll_all_with` emits in index order.
 fn apply_free_gate(snapshot: &mut [AccountUsage]) {
@@ -71,7 +73,9 @@ fn apply_free_gate(snapshot: &mut [AccountUsage]) {
         snapshot.iter().map(|usage| usage.account.clone()).collect();
     let surplus = usage_core::edition::free_surplus_account_ids(&accounts);
     for usage in snapshot.iter_mut() {
-        if surplus.contains(&usage.account.id) {
+        if usage_core::edition::requires_pro(usage.account.provider)
+            || surplus.contains(&usage.account.id)
+        {
             *usage = account_usage_pro_required(&usage.account);
         }
     }
