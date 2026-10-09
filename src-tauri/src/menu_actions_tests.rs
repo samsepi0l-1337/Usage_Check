@@ -221,9 +221,16 @@ fn refusal_publishes_a_user_visible_reason() {
 }
 
 #[tokio::test]
-#[allow(clippy::await_holding_lock)] // Process-wide app-data env mutation must remain serialized.
+#[allow(clippy::await_holding_lock)] // Keep app-data env and retained-snapshot publication isolated.
 async fn refusal_rerenders_without_starting_a_poll_refresh() {
     let _env_lock = LICENSE_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    // Earlier dispatch tests can leave refresh tasks in flight. Keep their
+    // publication out of this test's retained snapshot; a refresh started by
+    // this app still increments RefreshStarts before claiming the generation.
+    let _publication_lock = REFRESH_GENERATION
+        .value
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
     let tmp = tempfile::tempdir().expect("create isolated app-data directory");
     let _app_data_env = AppDataDirGuard::set(tmp.path());
     let app = build_mock_app(tmp.path().join("store"));
