@@ -393,11 +393,6 @@ pub fn trae_state_vscdb() -> Option<PathBuf> {
     editor_state_vscdb("Trae")
 }
 
-/// Kiro IDE `state.vscdb` (read-only) — usageState cache only.
-pub fn kiro_state_vscdb() -> Option<PathBuf> {
-    editor_state_vscdb("Kiro")
-}
-
 /// Kiro desktop auth token: `~/.aws/sso/cache/kiro-auth-token.json`.
 pub fn kiro_auth_token_file() -> Option<PathBuf> {
     home_dir().map(|h| {

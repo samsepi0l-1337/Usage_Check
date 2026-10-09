@@ -125,25 +125,6 @@ pub fn load_kiro_cli_auth() -> Result<ImportedAccount, String> {
     load_kiro_cli_auth_from(&path)
 }
 
-/// Optional IDE usageState cache (only when the token file is missing).
-pub fn read_kiro_usage_state(path: &Path) -> Option<serde_json::Value> {
-    use rusqlite::{Connection, OpenFlags};
-
-    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
-    let mut stmt = conn
-        .prepare("SELECT value FROM ItemTable WHERE key = ?1 LIMIT 1")
-        .ok()?;
-    let raw: String = stmt.query_row(["kiro.kiroAgent"], |row| row.get(0)).ok()?;
-    let root: serde_json::Value = serde_json::from_str(&raw).ok()?;
-    if let Some(state) = root.pointer("/kiro.resourceNotifications.usageState") {
-        return Some(state.clone());
-    }
-    root.get("usageState")
-        .cloned()
-        .or_else(|| root.get("usage_state").cloned())
-        .or(Some(root))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

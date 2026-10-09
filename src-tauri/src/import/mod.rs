@@ -67,7 +67,7 @@ pub(crate) use kimi::{load_kimi_cli_auth, parse_kimi_credentials_json};
 #[allow(unused_imports)]
 pub(crate) use kiro::{
     kiro_endpoints, kiro_region_from_token, kiro_region_ok, load_kiro_cli_auth,
-    parse_kiro_auth_token, read_kiro_usage_state, region_from_profile_arn,
+    parse_kiro_auth_token, region_from_profile_arn,
 };
 #[allow(unused_imports)]
 pub(crate) use minimax::{fetch_minimax_quota_json, load_minimax_cli_auth};
