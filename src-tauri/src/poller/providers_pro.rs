@@ -713,6 +713,23 @@ fn kiro_http_status(status: Option<u16>, region_was_defaulted: bool) -> &'static
     }
 }
 
+fn apply_kiro_refresh(
+    creds: &mut usage_core::account::Credentials,
+    access_token: String,
+    refresh_token: Option<String>,
+    profile_arn: Option<String>,
+) {
+    creds.access_token = access_token;
+    // Refresh does not return an expiry; the previous token's timestamp is stale.
+    creds.expires_at = None;
+    if let Some(refresh_token) = refresh_token {
+        creds.refresh_token = Some(refresh_token);
+    }
+    if let Some(profile_arn) = profile_arn {
+        creds.account_id = Some(profile_arn);
+    }
+}
+
 pub(super) async fn poll_kiro(
     store: &AccountStore,
     client: &reqwest::Client,
@@ -745,13 +762,7 @@ pub(super) async fn poll_kiro(
             if let Ok((access, new_refresh, arn)) =
                 refresh_kiro_access_token(client, &refresh, &region).await
             {
-                creds.access_token = access;
-                if let Some(rt) = new_refresh {
-                    creds.refresh_token = Some(rt);
-                }
-                if let Some(arn) = arn {
-                    creds.account_id = Some(arn);
-                }
+                apply_kiro_refresh(&mut creds, access, new_refresh, arn);
                 let _ = store.update_credentials(AccountStore::credential_key(account), &creds);
             }
         }
@@ -776,13 +787,7 @@ pub(super) async fn poll_kiro(
                     refresh_kiro_access_token(client, refresh, &region).await
                 {
                     let mut updated = creds.clone();
-                    updated.access_token = access;
-                    if let Some(rt) = new_refresh {
-                        updated.refresh_token = Some(rt);
-                    }
-                    if let Some(arn) = arn {
-                        updated.account_id = Some(arn);
-                    }
+                    apply_kiro_refresh(&mut updated, access, new_refresh, arn);
                     let _ =
                         store.update_credentials(AccountStore::credential_key(account), &updated);
                     let arn = updated.account_id.clone().unwrap_or(profile_arn);

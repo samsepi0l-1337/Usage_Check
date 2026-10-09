@@ -197,3 +197,31 @@ mod paid_identity_regressions {
         assert_eq!(usage.status, "needs_setup");
     }
 }
+
+#[test]
+fn kiro_refresh_discards_old_expiry_and_preserves_omitted_metadata() {
+    for rotate in [false, true] {
+        let mut creds = usage_core::account::Credentials {
+            access_token: "old-access".into(),
+            refresh_token: Some("old-refresh".into()),
+            account_id: Some("old-profile".into()),
+            expires_at: Some(chrono::Utc::now() - chrono::Duration::days(1)),
+        };
+        apply_kiro_refresh(
+            &mut creds,
+            "new-access".into(),
+            rotate.then(|| "new-refresh".into()),
+            rotate.then(|| "new-profile".into()),
+        );
+        assert_eq!(creds.access_token, "new-access");
+        assert_eq!(creds.expires_at, None, "new token has no known expiry");
+        assert_eq!(
+            creds.refresh_token.as_deref(),
+            Some(if rotate { "new-refresh" } else { "old-refresh" })
+        );
+        assert_eq!(
+            creds.account_id.as_deref(),
+            Some(if rotate { "new-profile" } else { "old-profile" })
+        );
+    }
+}
