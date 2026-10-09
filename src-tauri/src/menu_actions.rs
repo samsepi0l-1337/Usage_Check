@@ -232,6 +232,23 @@ pub(crate) fn cli_coordinator_setup<R: Runtime>(app: &AppHandle<R>, provider: Pr
     });
 }
 
+pub(crate) fn import_api_key_clipboard<R: Runtime>(app: &AppHandle<R>, provider: Provider) {
+    let app2 = app.clone();
+    tauri::async_runtime::spawn(async move {
+        match crate::import::import_api_key_from_clipboard(provider) {
+            Ok(imported) => {
+                let store = app2.state::<AccountStore>();
+                record_add_outcome(
+                    "import API key",
+                    store.add(provider, imported.label, imported.credentials),
+                );
+            }
+            Err(error) => set_add_account_reason(Some(error)),
+        }
+        refresh_tray(&app2).await;
+    });
+}
+
 pub(crate) fn import_grok_clipboard<R: Runtime>(app: &AppHandle<R>) {
     let app2 = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -444,6 +461,7 @@ pub(crate) enum AuthAction {
     CliCoordinator,
     Import,
     GrokClipboard,
+    ApiKeyClipboard,
 }
 
 pub(crate) fn classify_auth_action(provider: Provider, method: AuthMethod) -> AuthAction {
@@ -455,6 +473,7 @@ pub(crate) fn classify_auth_action(provider: Provider, method: AuthMethod) -> Au
         },
         AuthMethod::LocalDatabase | AuthMethod::ManagementKeyEnvironment => AuthAction::Import,
         AuthMethod::ManagementKeyClipboard => AuthAction::GrokClipboard,
+        AuthMethod::ApiKeyClipboard => AuthAction::ApiKeyClipboard,
     }
 }
 
@@ -468,6 +487,7 @@ pub(crate) fn dispatch_auth_action<R: Runtime>(
         AuthAction::CliCoordinator => cli_coordinator_setup(app, provider),
         AuthAction::Import => import_provider(app, provider),
         AuthAction::GrokClipboard => import_grok_clipboard(app),
+        AuthAction::ApiKeyClipboard => import_api_key_clipboard(app, provider),
     }
 }
 

@@ -212,8 +212,15 @@ mod tests {
         for slug in ["moonshot", "nanogpt"] {
             let provider = Provider::from_str(slug).expect("documented wallet provider");
             assert_eq!(provider.as_str(), slug);
-            assert_eq!(serde_json::to_string(&provider).unwrap(), format!("\"{slug}\""));
+            assert_eq!(
+                serde_json::to_string(&provider).unwrap(),
+                format!("\"{slug}\"")
+            );
             assert!(crate::edition::requires_pro(provider));
+            assert_eq!(
+                auth_capability(provider).methods,
+                &[AuthMethod::ApiKeyClipboard]
+            );
         }
     }
 

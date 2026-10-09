@@ -139,8 +139,8 @@ mod tests {
 
     #[test]
     fn all_providers_includes_free_and_paid() {
-        assert_eq!(paid_providers().len(), 20);
-        assert_eq!(all_providers().len(), 23);
+        assert_eq!(paid_providers().len(), 22);
+        assert_eq!(all_providers().len(), 25);
     }
 
     #[test]

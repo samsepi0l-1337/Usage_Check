@@ -13,6 +13,18 @@ pub struct AuthActionSpec {
 /// The full registry of Add Account actions, independent of license state.
 const ALL_AUTH_ACTION_SPECS: &[AuthActionSpec] = &[
     AuthActionSpec {
+        provider: Provider::Moonshot,
+        method: AuthMethod::ApiKeyClipboard,
+        event_id: "add-moonshot-clipboard",
+        label: "Import Moonshot API (clipboard)",
+    },
+    AuthActionSpec {
+        provider: Provider::NanoGpt,
+        method: AuthMethod::ApiKeyClipboard,
+        event_id: "add-nanogpt-clipboard",
+        label: "Import NanoGPT (clipboard)",
+    },
+    AuthActionSpec {
         provider: Provider::Codex,
         method: AuthMethod::Cli,
         event_id: "add-codex-cli",

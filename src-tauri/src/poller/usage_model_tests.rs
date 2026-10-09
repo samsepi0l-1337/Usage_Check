@@ -665,3 +665,25 @@ fn assemble_failed_outcome_yields_empty_breakdown() {
 
     assert!(result.breakdown.is_empty());
 }
+
+#[test]
+fn wallet_snapshot_keeps_balance_without_inventing_quota_windows() {
+    for provider in [Provider::Moonshot, Provider::NanoGpt] {
+        let account = Account {
+            id: provider.as_str().into(),
+            provider,
+            label: "My wallet".into(),
+            auth_source: AuthSource::BrowserOAuth {
+                credential_id: "wallet-secret".into(),
+            },
+        };
+        let usage = account_usage_from_wallet(&account, Some("$12.00 left".into()), "ok");
+        assert_eq!(usage.display_name, "My wallet");
+        assert_eq!(usage.detail_suffix.as_deref(), Some("$12.00 left"));
+        assert_eq!(usage.status, "ok");
+        assert!(usage.five_hour.is_none());
+        assert!(usage.week.is_none());
+        assert!(usage.breakdown.is_empty());
+        assert_eq!(usage.totals, WindowTotals::default());
+    }
+}

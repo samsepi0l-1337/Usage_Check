@@ -135,7 +135,7 @@ paths:
                 $ref: "#/components/schemas/Error"
               example:
                 error: unknown_provider
-                message: "unknown provider 'foo' (expected codex, claude, agy, cursor, grok, higgsfield, kimi, opencode, deepseek, openrouter, copilot, windsurf, minimax, augment, poe, fireworks, novita, amp, zai, bailian, trae, kiro, or factory)"
+                message: "unknown provider 'foo' (expected codex, claude, agy, cursor, grok, higgsfield, kimi, opencode, deepseek, openrouter, copilot, windsurf, minimax, augment, poe, fireworks, novita, amp, zai, bailian, trae, kiro, factory, moonshot, or nanogpt)"
   /v1/accounts:
     get:
       tags: [usage]
@@ -228,7 +228,7 @@ components:
   schemas:
     Provider:
       type: string
-      enum: [codex, claude, agy, cursor, grok, higgsfield, kimi, opencode, deepseek, openrouter, copilot, windsurf, minimax, augment, poe, fireworks, novita, amp, zai, bailian, trae, kiro, factory]
+      enum: [codex, claude, agy, cursor, grok, higgsfield, kimi, opencode, deepseek, openrouter, copilot, windsurf, minimax, augment, poe, fireworks, novita, amp, zai, bailian, trae, kiro, factory, moonshot, nanogpt]
       description: Usage provider category.
     Status:
       type: string
@@ -524,4 +524,4 @@ components:
           example: unknown_provider
         message:
           type: string
-          example: "unknown provider 'foo' (expected codex, claude, agy, cursor, grok, higgsfield, kimi, opencode, deepseek, openrouter, copilot, windsurf, minimax, augment, poe, fireworks, novita, amp, zai, bailian, trae, kiro, or factory)"
+          example: "unknown provider 'foo' (expected codex, claude, agy, cursor, grok, higgsfield, kimi, opencode, deepseek, openrouter, copilot, windsurf, minimax, augment, poe, fireworks, novita, amp, zai, bailian, trae, kiro, factory, moonshot, or nanogpt)"

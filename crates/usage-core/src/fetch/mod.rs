@@ -14,6 +14,8 @@ pub mod higgsfield;
 pub mod kimi;
 pub mod kiro;
 pub mod minimax;
+pub mod moonshot;
+pub mod nanogpt;
 pub mod novita;
 pub mod opencode;
 pub mod openrouter;

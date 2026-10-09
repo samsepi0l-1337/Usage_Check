@@ -890,3 +890,33 @@ pub(super) async fn poll_factory(
 #[cfg(test)]
 #[path = "providers_pro_tests.rs"]
 mod tests;
+
+pub(super) async fn poll_moonshot(
+    store: &AccountStore,
+    client: &reqwest::Client,
+    account: &Account,
+) -> AccountUsage {
+    use super::{http::fetch_moonshot_balance, usage_model::account_usage_from_wallet};
+    let Some(creds) = store.credentials(AccountStore::credential_key(account)) else {
+        return account_usage_from_wallet(account, None, "needs_login");
+    };
+    match fetch_moonshot_balance(client, &creds).await {
+        Ok(balance) => account_usage_from_wallet(account, balance.detail_suffix, "ok"),
+        Err(status) => account_usage_from_wallet(account, None, status_for_failure(status)),
+    }
+}
+
+pub(super) async fn poll_nanogpt(
+    store: &AccountStore,
+    client: &reqwest::Client,
+    account: &Account,
+) -> AccountUsage {
+    use super::{http::fetch_nanogpt_balance, usage_model::account_usage_from_wallet};
+    let Some(creds) = store.credentials(AccountStore::credential_key(account)) else {
+        return account_usage_from_wallet(account, None, "needs_login");
+    };
+    match fetch_nanogpt_balance(client, &creds).await {
+        Ok(balance) => account_usage_from_wallet(account, balance.detail_suffix, "ok"),
+        Err(status) => account_usage_from_wallet(account, None, status_for_failure(status)),
+    }
+}

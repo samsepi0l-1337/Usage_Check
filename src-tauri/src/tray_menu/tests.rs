@@ -1025,3 +1025,23 @@
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0], format!("     {}", format_usage_detail(&u)));
     }
+
+#[test]
+fn wallet_clipboard_actions_are_pro_gated_and_use_the_native_registry() {
+    for (event, provider) in [
+        ("add-moonshot-clipboard", Provider::Moonshot),
+        ("add-nanogpt-clipboard", Provider::NanoGpt),
+    ] {
+        let spec = spec_for_event(event).expect("wallet action registered");
+        assert_eq!(spec.provider, provider);
+        assert_eq!(spec.method, AuthMethod::ApiKeyClipboard);
+        assert!(!is_dispatch_allowed(&spec, false));
+        assert!(is_dispatch_allowed(&spec, true));
+        assert!(!auth_action_specs_with(false)
+            .iter()
+            .any(|s| s.provider == provider));
+        assert!(auth_action_specs_with(true)
+            .iter()
+            .any(|s| s.provider == provider));
+    }
+}

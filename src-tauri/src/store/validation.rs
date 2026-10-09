@@ -49,6 +49,8 @@ impl AccountStore {
                         | Provider::Amp
                         | Provider::Zai
                         | Provider::Kiro
+                        | Provider::Moonshot
+                        | Provider::NanoGpt
                         | Provider::Factory
                 )
             }

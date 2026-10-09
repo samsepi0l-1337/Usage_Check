@@ -678,3 +678,24 @@ fn local_status_label(provenance: LocalProvenance) -> Option<&'static str> {
 #[cfg(test)]
 #[path = "usage_model_tests.rs"]
 mod tests;
+
+/// Wallet balances have no documented quota denominator, so no percentage windows.
+pub(super) fn account_usage_from_wallet(
+    account: &Account,
+    detail_suffix: Option<String>,
+    status: &str,
+) -> AccountUsage {
+    AccountUsage {
+        display_name: display_name_for(account, None, None),
+        plan: None,
+        account: account.clone(),
+        five_hour: None,
+        week: None,
+        totals: WindowTotals::default(),
+        pool_breakdown: Vec::new(),
+        breakdown: Vec::new(),
+        detail_suffix,
+        status: status.into(),
+        local_status: None,
+    }
+}
