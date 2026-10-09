@@ -28,6 +28,8 @@ const SCHEMA_MARKER: &str = "schema-v2";
 const CREDS_DIR: &str = "credentials";
 
 pub(crate) fn set_private_dir_permissions(path: &Path) {
+    #[cfg(not(unix))]
+    let _ = path;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

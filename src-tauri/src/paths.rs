@@ -49,10 +49,10 @@ pub fn usagecheck_app_data_dir() -> Option<PathBuf> {
     }
     #[cfg(target_os = "windows")]
     {
-        return std::env::var_os("APPDATA")
+        std::env::var_os("APPDATA")
             .map(PathBuf::from)
             .or_else(home_dir)
-            .map(|root| root.join(APP_DIR));
+            .map(|root| root.join(APP_DIR))
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
@@ -356,7 +356,7 @@ fn editor_state_vscdb(app_name: &str) -> Option<PathBuf> {
     }
     #[cfg(target_os = "windows")]
     {
-        return std::env::var_os("APPDATA")
+        std::env::var_os("APPDATA")
             .map(PathBuf::from)
             .or_else(home_dir)
             .map(|h| {
@@ -364,7 +364,7 @@ fn editor_state_vscdb(app_name: &str) -> Option<PathBuf> {
                     .join("User")
                     .join("globalStorage")
                     .join("state.vscdb")
-            });
+            })
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {

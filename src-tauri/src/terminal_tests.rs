@@ -163,8 +163,13 @@ fn test_terminal_command_clone_works() {
     assert_eq!(cloned.args, cmd.args);
 }
 
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 #[test]
 fn test_render_script_signature_accepts_path() {
+    #[cfg(target_os = "macos")]
+    let render_script = render_macos_script;
+    #[cfg(target_os = "windows")]
+    let render_script = render_windows_script;
     let cmd = TerminalCommand {
         executable: PathBuf::from("/usr/bin/test"),
         args: vec![],
@@ -174,8 +179,8 @@ fn test_render_script_signature_accepts_path() {
     let path1 = PathBuf::from("/path/to/script1.sh");
     let path2 = PathBuf::from("/path/to/script2.sh");
 
-    let script1 = render_macos_script(&cmd, &path1);
-    let script2 = render_macos_script(&cmd, &path2);
+    let script1 = render_script(&cmd, &path1);
+    let script2 = render_script(&cmd, &path2);
 
     assert_ne!(script1, script2);
     assert!(script1.contains("script1"));

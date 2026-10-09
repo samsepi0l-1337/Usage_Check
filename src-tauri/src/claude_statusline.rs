@@ -58,7 +58,7 @@ fn write_snapshot(snapshot_path: &Path, snapshot: &Value) -> Result<(), String> 
 
     #[cfg(windows)]
     if snapshot_path.exists() {
-        fs::remove_file(&snapshot_path)
+        fs::remove_file(snapshot_path)
             .map_err(|error| format!("failed to replace snapshot: {error}"))?;
     }
 
