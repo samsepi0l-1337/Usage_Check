@@ -173,6 +173,11 @@ impl AccountStore {
     /// SECURITY: never log the returned tokens.
     pub fn cli_profile_credentials(&self, account_id: &str) -> Option<Credentials> {
         uuid::Uuid::parse_str(account_id).ok()?;
+        reject_symlink(
+            &self.root.join(CLI_TOKEN_CACHE_DIR),
+            "cli token cache directory",
+        )
+        .ok()?;
         let path = self
             .root
             .join(CLI_TOKEN_CACHE_DIR)
@@ -201,6 +206,13 @@ impl AccountStore {
 
     pub(super) fn remove_cli_profile_credentials(&self, account_id: &str) {
         if uuid::Uuid::parse_str(account_id).is_err() {
+            return;
+        }
+        if let Err(error) = reject_symlink(
+            &self.root.join(CLI_TOKEN_CACHE_DIR),
+            "cli token cache directory",
+        ) {
+            eprintln!("failed to remove CLI token cache: {error}");
             return;
         }
         let path = self

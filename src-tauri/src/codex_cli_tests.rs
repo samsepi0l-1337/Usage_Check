@@ -1,6 +1,59 @@
 use super::*;
 use std::io::Cursor;
 
+#[cfg(unix)]
+#[tokio::test]
+async fn probe_codex_stops_app_server_after_success() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let executable = root.path().join("codex");
+    std::fs::write(
+        &executable,
+        r#"#!/bin/sh
+echo $$ > "$CODEX_HOME/pid"
+/bin/cat > /dev/null
+echo '{"id":2,"result":{"id":"test-user","email":"test@example.com"}}'
+echo '{"id":3,"result":{"primaryWindow":{"usedPercent":25,"windowDurationMins":300}}}'
+exec /bin/sleep 30
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let result = probe_codex_with_executable(root.path(), &executable).await;
+    let pid = std::fs::read_to_string(root.path().join("pid")).unwrap();
+    let pid = pid.trim();
+    let is_running = || {
+        std::process::Command::new("/bin/kill")
+            .args(["-0", pid])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .unwrap()
+            .success()
+    };
+    for _ in 0..100 {
+        if !is_running() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let leaked = is_running();
+    if leaked {
+        std::process::Command::new("/bin/kill")
+            .arg(pid)
+            .status()
+            .unwrap();
+    }
+    assert!(
+        result.is_ok(),
+        "mock app-server exchange failed: {result:?}"
+    );
+    assert!(
+        !leaked,
+        "Codex app-server remained running after probe returned"
+    );
+}
+
 #[test]
 fn test_which_codex_checks_path() {
     let path_val = std::env::var("PATH").unwrap_or_default();
@@ -139,7 +192,10 @@ fn test_cli_adapter_login_command_clears_env_vars() {
     let adapter = CodexCliAdapter;
     let cmd = adapter.login_command(std::path::Path::new("/tmp/profile"));
 
-    assert_eq!(cmd.executable.to_string_lossy(), "codex");
+    assert_eq!(
+        cmd.executable,
+        crate::cli_bin::which_bin("codex").unwrap_or_else(|| "codex".into())
+    );
     assert!(cmd.args.contains(&OsString::from("login")));
 
     let env_remove_strs: Vec<String> = cmd

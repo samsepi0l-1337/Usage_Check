@@ -19,17 +19,8 @@ pub struct CodexProbe {
     pub secondary: Option<usage_core::models::QuotaUsage>,
 }
 
-/// Resolve the Codex executable on PATH (no `which` crate; use env::split_paths)
 fn which_codex() -> Option<std::path::PathBuf> {
-    if let Ok(path) = std::env::var("PATH") {
-        for dir in std::env::split_paths(&path) {
-            let candidate = dir.join(if cfg!(windows) { "codex.exe" } else { "codex" });
-            if candidate.is_file() {
-                return Some(candidate);
-            }
-        }
-    }
-    None
+    crate::cli_bin::which_bin("codex")
 }
 
 /// Extract JSONL exchange into a testable function that consumes an async reader.
@@ -135,8 +126,14 @@ where
 /// with a 10-second timeout. Returns CodexProbe with account and rate limits.
 pub async fn probe_codex(profile_root: &Path) -> Result<CodexProbe, String> {
     let codex_exe = which_codex().ok_or_else(|| "codex not found on PATH".to_string())?;
+    probe_codex_with_executable(profile_root, &codex_exe).await
+}
 
-    let mut child = tokio::process::Command::new(&codex_exe)
+async fn probe_codex_with_executable(
+    profile_root: &Path,
+    executable: &Path,
+) -> Result<CodexProbe, String> {
+    let mut child = tokio::process::Command::new(executable)
         .arg("app-server")
         .arg("--stdio")
         .env("CODEX_HOME", profile_root)
@@ -144,7 +141,8 @@ pub async fn probe_codex(profile_root: &Path) -> Result<CodexProbe, String> {
         .env_remove("OPENAI_API_KEY")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
         .spawn()
         .map_err(|e| format!("failed to spawn codex app-server: {}", e))?;
 
@@ -160,9 +158,17 @@ pub async fn probe_codex(profile_root: &Path) -> Result<CodexProbe, String> {
     // Read responses with 10-second timeout
     let future = probe_codex_exchange(BufReader::new(stdout), stdin);
 
-    tokio::time::timeout(std::time::Duration::from_secs(10), future)
+    let result = tokio::time::timeout(std::time::Duration::from_secs(10), future)
         .await
-        .map_err(|_| "codex app-server timed out (10s)".to_string())?
+        .map_err(|_| "codex app-server timed out (10s)".to_string())
+        .and_then(|result| result);
+    // Each poll owns a short-lived app-server. Reap it on every result;
+    // kill_on_drop also covers cancellation of this async task.
+    let cleanup = child
+        .kill()
+        .await
+        .map_err(|e| format!("stop codex app-server: {e}"));
+    result.and_then(|probe| cleanup.map(|()| probe))
 }
 
 /// Build account from probe result
@@ -231,7 +237,7 @@ impl ProviderAdapter for CodexCliAdapter {
 
     fn login_command(&self, profile_root: &Path) -> TerminalCommand {
         TerminalCommand {
-            executable: std::path::PathBuf::from("codex"),
+            executable: which_codex().unwrap_or_else(|| "codex".into()),
             args: vec![OsString::from("login")],
             env: vec![(
                 OsString::from("CODEX_HOME"),

@@ -7,50 +7,8 @@ use crate::terminal::TerminalCommand;
 use serde_json::Value;
 use usage_core::account::{Account, AuthSource, ProfileOwnership, Provider};
 
-/// Directories to search for a provider CLI. A GUI process launched by launchd /
-/// Finder inherits a minimal PATH (`/usr/bin:/bin:/usr/sbin:/sbin`) that omits the
-/// Homebrew / user-local dirs where `claude` is typically installed, so we augment
-/// the process PATH with the common locations.
-fn candidate_bin_dirs() -> Vec<PathBuf> {
-    let mut dirs: Vec<PathBuf> = Vec::new();
-    if let Ok(path) = std::env::var("PATH") {
-        dirs.extend(std::env::split_paths(&path));
-    }
-    #[cfg(not(windows))]
-    for extra in ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"] {
-        dirs.push(PathBuf::from(extra));
-    }
-    if let Some(home) = crate::paths::home_dir() {
-        for sub in [
-            ".local/bin",
-            ".claude/local",
-            ".bun/bin",
-            ".deno/bin",
-            ".volta/bin",
-            ".npm-global/bin",
-            "bin",
-        ] {
-            dirs.push(home.join(sub));
-        }
-    }
-    dirs
-}
-
-/// Resolve the Claude executable to an absolute path, searching a PATH superset so it
-/// is found even from a GUI process with a minimal PATH.
 fn which_claude() -> Option<PathBuf> {
-    let bin = if cfg!(windows) {
-        "claude.exe"
-    } else {
-        "claude"
-    };
-    for dir in candidate_bin_dirs() {
-        let candidate = dir.join(bin);
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-    }
-    None
+    crate::cli_bin::which_bin("claude")
 }
 
 /// Parse Claude auth status --json output to extract anchor, display label, and plan.
