@@ -306,7 +306,7 @@ fn metrics_endpoint_serves_prometheus_text() {
     assert!(reply.content_type.starts_with("text/plain"));
     assert!(reply.body.contains("usagecheck_account_count 2"));
     assert!(reply.body.contains(
-        "usagecheck_used_percent{provider=\"codex\",account=\"a@example.com\",window=\"5h\"} 42.5"
+        "usagecheck_used_percent{provider=\"codex\",account=\"a@example.com\",account_id=\"a\",window=\"5h\"} 42.5"
     ));
     assert!(!reply.body.contains("access_token"));
 }
@@ -484,4 +484,20 @@ fn provider_filter_accepts_pro_providers() {
         assert_eq!(body["count"], 1);
         assert_eq!(body["accounts"][0]["provider"], provider);
     }
+}
+
+#[test]
+fn flat_exports_do_not_label_credit_balances_as_seven_day_windows() {
+    let mut credits = sample(Provider::Higgsfield, "credits", None, Some(95.0));
+    credits.week.as_mut().unwrap().window_seconds = None;
+    let state = state_with(&[credits]);
+    let csv = route(&state, "GET", "/v1/usage.csv");
+    assert!(csv
+        .body
+        .contains("higgsfield,credits@example.com,,ok,unknown,,95"));
+    let metrics = route(&state, "GET", "/metrics");
+    assert!(metrics.body.contains("window=\"unknown\"} 95"));
+    let resp = state.usage_response();
+    let alerts = serde_json::to_value(crate::api_alerts::alerts_response(&resp, 90.0)).unwrap();
+    assert_eq!(alerts["alerts"][0]["window"], "unknown");
 }

@@ -45,23 +45,19 @@ pub struct AlertsResponse<'a> {
 }
 
 /// Collects every account/window (and agy pool/window) whose used-percent is at
-/// or above `threshold`. Non-finite percents never trip the `>=` comparison.
+/// or above `threshold`. Non-finite percents are omitted.
 pub fn alerts_response(resp: &UsageResponse, threshold: f64) -> AlertsResponse<'_> {
     let mut alerts = Vec::new();
     for a in &resp.accounts {
         let account = a.display_name.as_str();
         // Account-level windows (pool = None), then each agy pool's windows.
-        let account_windows = [
-            ("5h", a.five_hour.as_ref()),
-            ("7d", a.week.as_ref()),
-        ];
-        for (window, quota) in account_windows {
+        for quota in [a.five_hour.as_ref(), a.week.as_ref()] {
             if let Some(q) = quota {
-                if q.used_percent >= threshold {
+                if q.used_percent.is_finite() && q.used_percent >= threshold {
                     alerts.push(Alert {
                         provider: a.provider,
                         account,
-                        window,
+                        window: q.export_window_label(),
                         pool: None,
                         used_percent: q.used_percent,
                     });
@@ -69,17 +65,13 @@ pub fn alerts_response(resp: &UsageResponse, threshold: f64) -> AlertsResponse<'
             }
         }
         for pool in &a.pools {
-            let pool_windows = [
-                ("5h", pool.five_hour.as_ref()),
-                ("7d", pool.week.as_ref()),
-            ];
-            for (window, quota) in pool_windows {
+            for quota in [pool.five_hour.as_ref(), pool.week.as_ref()] {
                 if let Some(q) = quota {
-                    if q.used_percent >= threshold {
+                    if q.used_percent.is_finite() && q.used_percent >= threshold {
                         alerts.push(Alert {
                             provider: a.provider,
                             account,
-                            window,
+                            window: q.export_window_label(),
                             pool: Some(&pool.name),
                             used_percent: q.used_percent,
                         });

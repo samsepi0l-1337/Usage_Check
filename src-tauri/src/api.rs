@@ -144,6 +144,11 @@ pub struct QuotaDto {
 }
 
 impl QuotaDto {
+    /// Label for flat exports that cannot express a nullable window.
+    pub(crate) fn export_window_label(&self) -> &str {
+        self.window_label.0.as_deref().unwrap_or("unknown")
+    }
+
     fn from_quota(q: &QuotaUsage, label_hint: WindowLabelHint) -> QuotaDto {
         QuotaDto {
             used_percent: q.percent,

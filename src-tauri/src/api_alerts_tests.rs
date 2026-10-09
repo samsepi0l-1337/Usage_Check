@@ -19,7 +19,10 @@ fn dto(provider: Provider, name: &str, five: Option<f64>, week: Option<f64>) -> 
         plan: None,
         status: "ok".into(),
         five_hour: five.map(quota),
-        week: week.map(quota),
+        week: week.map(|percent| QuotaDto {
+            window_label: "7d".into(),
+            ..quota(percent)
+        }),
         pools: Vec::new(),
         breakdown: Vec::new(),
         token_totals: TokenTotalsDto {
@@ -83,7 +86,10 @@ fn pool_windows_are_included() {
     agy.pools = vec![PoolDto {
         name: "Gemini Models".into(),
         five_hour: None,
-        week: Some(quota(99.0)),
+        week: Some(QuotaDto {
+            window_label: "7d".into(),
+            ..quota(99.0)
+        }),
     }];
     let resp = response(vec![agy]);
     let out = alerts_response(&resp, 90.0);
@@ -91,4 +97,21 @@ fn pool_windows_are_included() {
     assert_eq!(v["count"], 1);
     assert_eq!(v["alerts"][0]["pool"], "Gemini Models");
     assert_eq!(v["alerts"][0]["window"], "7d");
+}
+
+#[test]
+fn rejects_nonfinite_account_and_pool_usage_and_preserves_billing_window() {
+    let mut cursor = dto(Provider::Cursor, "alice", None, Some(95.0));
+    cursor.week.as_mut().unwrap().window_label = "billing period".into();
+    let mut invalid = dto(Provider::Agy, "invalid", Some(f64::INFINITY), None);
+    invalid.pools = vec![PoolDto {
+        name: "invalid pool".into(),
+        five_hour: Some(quota(f64::INFINITY)),
+        week: None,
+    }];
+    let resp = response(vec![cursor, invalid]);
+    let json = serde_json::to_value(alerts_response(&resp, 90.0)).unwrap();
+    assert_eq!(json["count"], 1);
+    assert_eq!(json["alerts"][0]["window"], "billing period");
+    assert_eq!(json["alerts"][0]["used_percent"], 95.0);
 }
