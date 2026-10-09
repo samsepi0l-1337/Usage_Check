@@ -28,6 +28,8 @@ const SCHEMA_MARKER: &str = "schema-v2";
 const CREDS_DIR: &str = "credentials";
 
 pub(crate) fn set_private_dir_permissions(path: &Path) {
+    #[cfg(not(unix))]
+    let _ = path;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -104,9 +106,7 @@ pub(crate) fn reject_symlink(path: &Path, description: &str) -> Result<(), Strin
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SecretSource {
     BrowserOAuth,
-    XaiManagement {
-        team_id: String,
-    },
+    XaiManagement { team_id: String },
 }
 
 /// File-backed schema-v2 account store rooted in UsageCheck's app-data folder.

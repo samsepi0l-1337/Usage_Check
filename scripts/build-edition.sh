@@ -16,8 +16,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-mkdir -p "$ROOT_DIR/ui/dist"
-printf '%s\n' '<!doctype html><html><body></body></html>' > "$ROOT_DIR/ui/dist/index.html"
+"$ROOT_DIR/scripts/bootstrap-dev.sh"
 
 cd "$ROOT_DIR/src-tauri"
 

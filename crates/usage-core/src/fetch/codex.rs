@@ -1,6 +1,6 @@
+use crate::models::{QuotaUsage, UsageBreakdownRow};
 use chrono::{TimeZone, Utc};
 use serde_json::Value;
-use crate::models::{QuotaUsage, UsageBreakdownRow};
 
 pub struct CodexQuota {
     pub plan: Option<String>,
@@ -67,7 +67,10 @@ fn parse_spark_breakdown(root: &Value) -> Option<UsageBreakdownRow> {
         entry.get("limit_name").and_then(Value::as_str) == Some("GPT-5.3-Codex-Spark")
             || entry.get("metered_feature").and_then(Value::as_str) == Some("codex_bengalfox")
     })?;
-    let usage = entry.get("rate_limit").and_then(|rl| rl.get("primary_window")).and_then(window)?;
+    let usage = entry
+        .get("rate_limit")
+        .and_then(|rl| rl.get("primary_window"))
+        .and_then(window)?;
     Some(UsageBreakdownRow {
         label: "Spark".to_string(),
         usage,
@@ -151,10 +154,8 @@ pub fn parse_codex_usage(root: &Value) -> CodexQuota {
     }
 }
 
-
 #[cfg(test)]
-pub
-mod tests {
+pub mod tests {
     use super::*;
     use serde_json::json;
 
@@ -356,7 +357,7 @@ pub struct AppServerAccount {
 
 /// Parse account info from app-server account/read response.
 /// Accepts chatgpt identity only; rejects null or API-key accounts.
-/// 
+///
 /// FIX BUG 1: The input `value` is now the WHOLE line object ({"id":2,"result":{...}}).
 /// This function unwraps "result" exactly once, avoiding double-nesting.
 pub fn parse_app_server_account(value: &Value) -> Result<AppServerAccount, String> {
@@ -396,10 +397,12 @@ pub fn parse_app_server_account(value: &Value) -> Result<AppServerAccount, Strin
 /// Parse rate-limit windows from app-server rateLimits/read response.
 /// Maps usedPercent, windowDurationMins*60, resetsAt to QuotaUsage.
 /// Returns (primary, secondary); missing windows are None.
-/// 
+///
 /// FIX BUG 1: The input `value` is now the WHOLE line object ({"id":3,"result":{...}}).
 /// This function unwraps "result" exactly once, avoiding double-nesting.
-pub fn parse_app_server_rate_limits(value: &Value) -> Result<(Option<QuotaUsage>, Option<QuotaUsage>), String> {
+pub fn parse_app_server_rate_limits(
+    value: &Value,
+) -> Result<(Option<QuotaUsage>, Option<QuotaUsage>), String> {
     let rate_limits = value
         .get("result")
         .or_else(|| value.get("rate_limits"))
@@ -432,10 +435,8 @@ pub fn parse_app_server_rate_limits(value: &Value) -> Result<(Option<QuotaUsage>
     Ok((primary, secondary))
 }
 
-
 #[cfg(test)]
-pub
-mod app_server {
+pub mod app_server {
     use super::*;
     use serde_json::json;
 

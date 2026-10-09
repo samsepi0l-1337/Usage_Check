@@ -120,6 +120,41 @@ fn result_id_set(results: &[AccountUsage]) -> BTreeSet<String> {
     result_ids(results).into_iter().collect()
 }
 
+#[test]
+fn downgrade_removes_paid_provider_usage_from_a_completed_pro_snapshot() {
+    let mut snapshot: Vec<_> = usage_core::edition::paid_providers()
+        .iter()
+        .map(|provider| {
+            let account = usage_core::account::Account {
+                id: format!("downgrade-{provider:?}"),
+                provider: *provider,
+                label: format!("{provider:?}@example.test"),
+                auth_source: AuthSource::BrowserOAuth {
+                    credential_id: "unused".into(),
+                },
+            };
+            let mut usage = account_usage_pro_required(&account);
+            usage.status = "ok".into();
+            usage.plan = Some("Pro".into());
+            usage.week = Some(QuotaUsage {
+                percent: 42.0,
+                resets_at: None,
+                window_seconds: None,
+            });
+            usage.detail_suffix = Some("100 credits left".into());
+            usage
+        })
+        .collect();
+    let ids = result_ids(&snapshot);
+
+    apply_free_gate(&mut snapshot);
+
+    assert_eq!(result_ids(&snapshot), ids);
+    for usage in &snapshot {
+        assert_is_gated_placeholder(usage);
+    }
+}
+
 #[tokio::test]
 #[allow(clippy::await_holding_lock)] // Process-wide env mutation must remain serialized.
 async fn free_downgrade_keeps_the_first_account_and_gates_the_rest() {

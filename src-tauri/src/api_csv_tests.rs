@@ -11,7 +11,13 @@ fn quota(percent: f64) -> QuotaDto {
     }
 }
 
-fn dto(provider: Provider, name: &str, plan: Option<&str>, five: Option<f64>, week: Option<f64>) -> AccountUsageDto {
+fn dto(
+    provider: Provider,
+    name: &str,
+    plan: Option<&str>,
+    five: Option<f64>,
+    week: Option<f64>,
+) -> AccountUsageDto {
     AccountUsageDto {
         id: name.into(),
         provider,
@@ -20,7 +26,10 @@ fn dto(provider: Provider, name: &str, plan: Option<&str>, five: Option<f64>, we
         plan: plan.map(Into::into),
         status: "ok".into(),
         five_hour: five.map(quota),
-        week: week.map(quota),
+        week: week.map(|percent| QuotaDto {
+            window_label: "7d".into(),
+            ..quota(percent)
+        }),
         pools: Vec::new(),
         breakdown: Vec::new(),
         token_totals: TokenTotalsDto {
@@ -71,7 +80,10 @@ fn emits_header_and_row_per_window() {
         Some(18.0),
     )]));
     let lines: Vec<&str> = body.lines().collect();
-    assert_eq!(lines[0], "provider,account,plan,status,window,pool,used_percent");
+    assert_eq!(
+        lines[0],
+        "provider,account,plan,status,window,pool,used_percent"
+    );
     assert!(lines.contains(&"codex,alice,pro,ok,5h,,42.5"));
     assert!(lines.contains(&"codex,alice,pro,ok,7d,,18"));
 }
@@ -90,7 +102,13 @@ fn skips_absent_and_nonfinite_windows() {
 
 #[test]
 fn empty_plan_renders_as_empty_field() {
-    let body = csv_body(&response(vec![dto(Provider::Codex, "a", None, Some(1.0), None)]));
+    let body = csv_body(&response(vec![dto(
+        Provider::Codex,
+        "a",
+        None,
+        Some(1.0),
+        None,
+    )]));
     assert!(body.contains("codex,a,,ok,5h,,1"));
 }
 
@@ -100,8 +118,21 @@ fn emits_pool_rows() {
     agy.pools = vec![PoolDto {
         name: "Gemini Models".into(),
         five_hour: None,
-        week: Some(quota(30.0)),
+        week: Some(QuotaDto {
+            window_label: "7d".into(),
+            ..quota(30.0)
+        }),
     }];
     let body = csv_body(&response(vec![agy]));
     assert!(body.contains("agy,bob,,ok,7d,Gemini Models,30"));
+}
+
+#[test]
+fn preserves_custom_and_billing_window_labels() {
+    let mut account = dto(Provider::Cursor, "alice", None, Some(5.0), Some(95.0));
+    account.five_hour.as_mut().unwrap().window_label = "2h".into();
+    account.week.as_mut().unwrap().window_label = "billing period".into();
+    let body = csv_body(&response(vec![account]));
+    assert!(body.contains("cursor,alice,,ok,2h,,5"));
+    assert!(body.contains("cursor,alice,,ok,billing period,,95"));
 }

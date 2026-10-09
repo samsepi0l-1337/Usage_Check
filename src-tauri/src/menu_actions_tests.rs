@@ -75,11 +75,16 @@ impl Drop for PubkeyEnvGuard {
 fn build_mock_app(store_root: std::path::PathBuf) -> tauri::App<tauri::test::MockRuntime> {
     tauri::test::mock_builder()
         .manage(AccountStore::new_at(store_root))
+        .manage(RefreshStarts::default())
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
         .expect("build mock tauri app")
 }
 
-const PAID_PROVIDER_EVENTS: &[&str] = &["add-cursor-local", "add-grok-clipboard", "add-higgsfield-cli"];
+const PAID_PROVIDER_EVENTS: &[&str] = &[
+    "add-cursor-local",
+    "add-grok-clipboard",
+    "add-higgsfield-cli",
+];
 
 fn credentials() -> Credentials {
     Credentials {
@@ -116,7 +121,10 @@ fn dispatch_gate_refuses_all_three_paid_providers_when_unlicensed() {
     // No license.json exists at this fresh, isolated app-data dir, so
     // `crate::license::is_pro()` is deterministically false — independent of
     // whatever the machine actually running this test has cached for real.
-    assert!(!crate::license::is_pro(), "sanity: fresh app-data dir must be unlicensed");
+    assert!(
+        !crate::license::is_pro(),
+        "sanity: fresh app-data dir must be unlicensed"
+    );
 
     let app = build_mock_app(tmp.path().join("store"));
     for event_id in PAID_PROVIDER_EVENTS.iter().copied() {
@@ -213,31 +221,37 @@ fn refusal_publishes_a_user_visible_reason() {
 }
 
 #[tokio::test]
-#[allow(clippy::await_holding_lock)] // Process-wide app-data env mutation must remain serialized.
+#[allow(clippy::await_holding_lock)] // Keep app-data env and retained-snapshot publication isolated.
 async fn refusal_rerenders_without_starting_a_poll_refresh() {
     let _env_lock = LICENSE_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    // Earlier dispatch tests can leave refresh tasks in flight. Keep their
+    // publication out of this test's retained snapshot; a refresh started by
+    // this app still increments RefreshStarts before claiming the generation.
+    let _publication_lock = REFRESH_GENERATION
+        .value
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
     let tmp = tempfile::tempdir().expect("create isolated app-data directory");
     let _app_data_env = AppDataDirGuard::set(tmp.path());
     let app = build_mock_app(tmp.path().join("store"));
-    let retained_usage = crate::poller::account_usage_pro_required(&account(
-        "retained-claude",
-        Provider::Claude,
-    ));
+    let retained_usage =
+        crate::poller::account_usage_pro_required(&account("retained-claude", Provider::Claude));
     let retained_at = chrono::Utc::now();
     retain_last_snapshot(&[retained_usage], Some(retained_at));
-    let generation_before = REFRESH_GENERATION.load(Ordering::SeqCst);
+    let starts_before = app.state::<RefreshStarts>().0.load(Ordering::SeqCst);
 
     assert_eq!(
         handle_menu_event(app.handle(), "add-grok-clipboard"),
         DispatchOutcome::Refused
     );
 
-    // Give an incorrectly detached refresh ample opportunity to claim a
-    // generation before asserting that refusal is render-only.
+    // Give an incorrectly detached refresh ample opportunity to start before
+    // asserting that refusal is render-only for this app.
+    // Other dispatch tests may still have asynchronous refreshes in flight.
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     assert_eq!(
-        REFRESH_GENERATION.load(Ordering::SeqCst),
-        generation_before,
+        app.state::<RefreshStarts>().0.load(Ordering::SeqCst),
+        starts_before,
         "a refused Add action must not start a provider poll"
     );
     let retained = last_snapshot();
@@ -283,14 +297,14 @@ fn the_cap_gate_keys_off_is_pro_not_has_stored_license() {
 #[test]
 fn a_superseded_refresh_does_not_publish() {
     let _env_lock = LICENSE_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    let generation = REFRESH_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
-    let _newer_generation = REFRESH_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+    let generations = RefreshGeneration::new();
+    let generation = generations.claim();
+    let _newer_generation = generations.claim();
 
-    // This exercises the stamp COMPARISON, not the publish path it guards.
-    // `build_mock_app` intentionally manages no `ApiState`; optional API
-    // publication is covered separately above, without pretending this test
-    // drives the generation-guarded refresh publication path.
-    assert_ne!(REFRESH_GENERATION.load(Ordering::SeqCst), generation);
+    // Exercise the same publication guard used by API and tray publication.
+    let mut published = false;
+    assert!(!generations.publish(generation, || published = true));
+    assert!(!published);
 }
 
 #[test]
@@ -312,7 +326,10 @@ fn unrecognized_event_id_is_not_an_auth_dispatch() {
         handle_menu_event(app.handle(), "not-a-real-event-id"),
         DispatchOutcome::Other
     );
-    assert_eq!(handle_menu_event(app.handle(), "about"), DispatchOutcome::Other);
+    assert_eq!(
+        handle_menu_event(app.handle(), "about"),
+        DispatchOutcome::Other
+    );
 }
 
 // --- Stage C: license tray section -----------------------------------
@@ -383,5 +400,54 @@ fn last_license_attempt_reflects_the_most_recent_recorded_attempt() {
     assert_eq!(
         last_license_attempt(),
         Some(Err(ActivationErrorClass::Network))
+    );
+}
+
+#[test]
+fn a_newer_refresh_cannot_be_overwritten_during_publication() {
+    use std::sync::{mpsc, Arc, Mutex};
+    use std::time::Duration;
+
+    let generations = Arc::new(RefreshGeneration::new());
+    let published = Arc::new(Mutex::new(0));
+    let old_generation = generations.claim();
+    let (old_entered_tx, old_entered_rx) = mpsc::channel();
+    let (release_old_tx, release_old_rx) = mpsc::channel();
+    let old = {
+        let generations = generations.clone();
+        let published = published.clone();
+        std::thread::spawn(move || {
+            generations.publish(old_generation, || {
+                old_entered_tx.send(()).unwrap();
+                release_old_rx.recv().unwrap();
+                *published.lock().unwrap() = 1;
+            });
+        })
+    };
+    old_entered_rx.recv().unwrap();
+    let (new_started_tx, new_started_rx) = mpsc::channel();
+    let (new_done_tx, new_done_rx) = mpsc::channel();
+    let new = {
+        let generations = generations.clone();
+        let published = published.clone();
+        std::thread::spawn(move || {
+            new_started_tx.send(()).unwrap();
+            let generation = generations.claim();
+            generations.publish(generation, || *published.lock().unwrap() = 2);
+            new_done_tx.send(()).unwrap();
+        })
+    };
+    new_started_rx.recv().unwrap();
+    // The unfixed path lets the newer publication finish while the older
+    // publication is paused. The fixed path serializes both operations.
+    let _ = new_done_rx.recv_timeout(Duration::from_millis(100));
+    release_old_tx.send(()).unwrap();
+    old.join().unwrap();
+    new.join().unwrap();
+
+    assert_eq!(
+        *published.lock().unwrap(),
+        2,
+        "the newest snapshot must survive"
     );
 }

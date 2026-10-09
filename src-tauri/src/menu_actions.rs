@@ -5,10 +5,36 @@ use crate::{
 use tauri::Runtime;
 
 /// Monotonic refresh generation. Every `refresh_tray` claims the next value
-/// before polling and re-reads it immediately before publishing; a refresh
-/// whose stamp is no longer the newest discards its snapshot instead of
-/// publishing it.
-static REFRESH_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// before polling. Claims and publication share a lock so an older refresh
+/// cannot pass its check and overwrite a newer snapshot during publication.
+struct RefreshGeneration {
+    value: std::sync::Mutex<u64>,
+}
+
+impl RefreshGeneration {
+    const fn new() -> Self {
+        Self {
+            value: std::sync::Mutex::new(0),
+        }
+    }
+
+    fn claim(&self) -> u64 {
+        let mut value = self.value.lock().unwrap_or_else(|error| error.into_inner());
+        *value += 1;
+        *value
+    }
+
+    fn publish(&self, generation: u64, publish: impl FnOnce()) -> bool {
+        let value = self.value.lock().unwrap_or_else(|error| error.into_inner());
+        if *value != generation {
+            return false;
+        }
+        publish();
+        true
+    }
+}
+
+static REFRESH_GENERATION: RefreshGeneration = RefreshGeneration::new();
 
 /// Most recently published poll snapshot, retained so render-only events can
 /// rebuild the tray without polling providers again. The initial empty value
@@ -48,9 +74,11 @@ fn last_snapshot() -> RetainedSnapshot {
 /// this does not construct an `AccountStore`, poll a provider, or require the
 /// local HTTP API state.
 fn rerender_last_snapshot<R: Runtime>(app: &AppHandle<R>) {
-    let retained = last_snapshot();
     let app2 = app.clone();
     let _ = app.run_on_main_thread(move || {
+        // Read at execution time: a newer refresh may have published while
+        // this render-only event was queued on the platform event loop.
+        let retained = last_snapshot();
         if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             crate::tray_menu::apply_menu(&app2, &retained.usages, retained.updated_at);
         }))
@@ -70,6 +98,10 @@ fn publish_api_snapshot<R: Runtime>(app: &AppHandle<R>, snapshot: &[crate::polle
     }
 }
 
+#[cfg(test)]
+#[derive(Default)]
+struct RefreshStarts(std::sync::atomic::AtomicU64);
+
 /// Polls all accounts and rebuilds the tray menu on the main thread.
 ///
 /// Uses a fresh `AccountStore` handle (file-backed ZST) instead of holding
@@ -83,9 +115,11 @@ fn publish_api_snapshot<R: Runtime>(app: &AppHandle<R>, snapshot: &[crate::polle
 /// callers (`main.rs`) still resolve `R = Wry` as before; nothing about their
 /// behavior changes.
 pub(crate) async fn refresh_tray<R: Runtime>(app: &AppHandle<R>) {
-    use std::sync::atomic::Ordering;
-
-    let generation = REFRESH_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+    #[cfg(test)]
+    if let Some(starts) = app.try_state::<RefreshStarts>() {
+        starts.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+    let generation = REFRESH_GENERATION.claim();
     let store = AccountStore::new();
     let snapshot = crate::poller::poll_all(&store).await;
 
@@ -96,30 +130,29 @@ pub(crate) async fn refresh_tray<R: Runtime>(app: &AppHandle<R>) {
     // for accounts the runtime is no longer entitled to show. Dropping the stale
     // snapshot is correct on both counts: the newer refresh has already
     // published, or is about to.
-    if REFRESH_GENERATION.load(Ordering::SeqCst) != generation {
+    let updated_at = Some(chrono::Utc::now());
+    if !REFRESH_GENERATION.publish(generation, || {
+        retain_last_snapshot(&snapshot, updated_at);
+        publish_api_snapshot(app, &snapshot);
+    }) {
         return;
     }
-
-    let updated_at = Some(chrono::Utc::now());
-    retain_last_snapshot(&snapshot, updated_at);
-    publish_api_snapshot(app, &snapshot);
     let app2 = app.clone();
     let _ = app.run_on_main_thread(move || {
         // Re-read the generation HERE, next to its use. `run_on_main_thread`
         // DEFERS this closure onto the platform event loop, so an arbitrary
         // scheduling gap separates the check above from `apply_menu` below; a
-        // newer refresh can win that gap. Re-checking costs one atomic load and
-        // removes the larger of the two remaining windows (K12).
-        if REFRESH_GENERATION.load(Ordering::SeqCst) != generation {
-            return;
-        }
-        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            crate::tray_menu::apply_menu(&app2, &snapshot, updated_at);
-        }))
-        .is_err()
-        {
-            eprintln!("tray: apply_menu panicked; suppressed to keep the tray alive");
-        }
+        // newer refresh can win that gap. Check and apply under the same
+        // publication lock used by generation claims.
+        REFRESH_GENERATION.publish(generation, || {
+            if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                crate::tray_menu::apply_menu(&app2, &snapshot, updated_at);
+            }))
+            .is_err()
+            {
+                eprintln!("tray: apply_menu panicked; suppressed to keep the tray alive");
+            }
+        });
     });
 }
 
@@ -196,6 +229,23 @@ pub(crate) fn cli_coordinator_setup<R: Runtime>(app: &AppHandle<R>, provider: Pr
             }
             Err(error) => eprintln!("cli setup: {error:?}"),
         }
+    });
+}
+
+pub(crate) fn import_api_key_clipboard<R: Runtime>(app: &AppHandle<R>, provider: Provider) {
+    let app2 = app.clone();
+    tauri::async_runtime::spawn(async move {
+        match crate::import::import_api_key_from_clipboard(provider) {
+            Ok(imported) => {
+                let store = app2.state::<AccountStore>();
+                record_add_outcome(
+                    "import API key",
+                    store.add(provider, imported.label, imported.credentials),
+                );
+            }
+            Err(error) => set_add_account_reason(Some(error)),
+        }
+        refresh_tray(&app2).await;
     });
 }
 
@@ -411,6 +461,7 @@ pub(crate) enum AuthAction {
     CliCoordinator,
     Import,
     GrokClipboard,
+    ApiKeyClipboard,
 }
 
 pub(crate) fn classify_auth_action(provider: Provider, method: AuthMethod) -> AuthAction {
@@ -422,6 +473,7 @@ pub(crate) fn classify_auth_action(provider: Provider, method: AuthMethod) -> Au
         },
         AuthMethod::LocalDatabase | AuthMethod::ManagementKeyEnvironment => AuthAction::Import,
         AuthMethod::ManagementKeyClipboard => AuthAction::GrokClipboard,
+        AuthMethod::ApiKeyClipboard => AuthAction::ApiKeyClipboard,
     }
 }
 
@@ -435,6 +487,7 @@ pub(crate) fn dispatch_auth_action<R: Runtime>(
         AuthAction::CliCoordinator => cli_coordinator_setup(app, provider),
         AuthAction::Import => import_provider(app, provider),
         AuthAction::GrokClipboard => import_grok_clipboard(app),
+        AuthAction::ApiKeyClipboard => import_api_key_clipboard(app, provider),
     }
 }
 

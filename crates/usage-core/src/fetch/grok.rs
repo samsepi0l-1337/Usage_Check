@@ -171,7 +171,10 @@ mod tests {
             "scopeId": "team-from-scope",
             "teamId": "legacy-team"
         });
-        assert_eq!(team_id_from_validation(&v).as_deref(), Some("team-from-scope"));
+        assert_eq!(
+            team_id_from_validation(&v).as_deref(),
+            Some("team-from-scope")
+        );
     }
 
     #[test]

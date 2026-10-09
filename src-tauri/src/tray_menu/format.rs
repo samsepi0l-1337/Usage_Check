@@ -1,10 +1,10 @@
+use crate::license::{ActivationErrorClass, LicenseStatus};
+use crate::poller::AccountUsage;
 use chrono::{DateTime, Utc};
+use usage_core::account::Provider;
 use usage_core::fetch::agy::AgyQuotaPool;
 use usage_core::fetch::codex::window_label;
 use usage_core::models::{QuotaUsage, UsageBreakdownRow};
-use usage_core::account::Provider;
-use crate::license::{ActivationErrorClass, LicenseStatus};
-use crate::poller::AccountUsage;
 
 fn status_dot(status: &str) -> &'static str {
     match status {

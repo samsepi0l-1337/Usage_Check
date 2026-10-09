@@ -146,6 +146,7 @@ fn registry_specs_classify_as_expected() {
             },
             AuthMethod::LocalDatabase | AuthMethod::ManagementKeyEnvironment => AuthAction::Import,
             AuthMethod::ManagementKeyClipboard => AuthAction::GrokClipboard,
+            AuthMethod::ApiKeyClipboard => AuthAction::ApiKeyClipboard,
         };
         assert_eq!(
             action, expected,

@@ -14,6 +14,7 @@ use chrono::Utc;
 use usage_core::account::{Credentials, Provider};
 
 mod amp;
+mod api_key;
 mod augment;
 mod bailian;
 mod claude;
@@ -38,6 +39,7 @@ pub(crate) static CLAUDE_CONFIG_DIR_ENV_LOCK: std::sync::Mutex<()> = std::sync::
 
 #[allow(unused_imports)]
 pub(crate) use amp::{load_amp_cli_auth, parse_amp_secrets};
+pub(crate) use api_key::import_api_key_from_clipboard;
 pub(crate) use augment::{fetch_augment_account_json, load_augment_cli_auth};
 #[allow(unused_imports)]
 pub(crate) use bailian::{fetch_bailian_token_plan_json, load_bailian_cli_auth};
@@ -51,7 +53,9 @@ pub(crate) use claude::{
 pub(crate) use codex::{load_codex_cli_auth, parse_codex_auth_json};
 #[allow(unused_imports)]
 pub(crate) use copilot::{load_copilot_cli_auth, parse_copilot_oauth_token, parse_gh_hosts_yml};
-pub(crate) use deepseek::{load_deepseek_cli_auth, parse_deepseek_api_key};
+pub(crate) use deepseek::load_deepseek_cli_auth;
+#[cfg(test)]
+use deepseek::parse_deepseek_api_key;
 #[allow(unused_imports)]
 pub(crate) use factory::{load_factory_cli_auth, parse_factory_auth_json};
 #[allow(unused_imports)]
@@ -66,8 +70,8 @@ pub(crate) use higgsfield::load_higgsfield_cli_auth;
 pub(crate) use kimi::{load_kimi_cli_auth, parse_kimi_credentials_json};
 #[allow(unused_imports)]
 pub(crate) use kiro::{
-    kiro_endpoints, kiro_region_from_token, kiro_region_ok, load_kiro_cli_auth,
-    parse_kiro_auth_token, read_kiro_usage_state, region_from_profile_arn,
+    kiro_endpoints, kiro_region_ok, load_kiro_cli_auth, parse_kiro_auth_token,
+    region_from_profile_arn,
 };
 #[allow(unused_imports)]
 pub(crate) use minimax::{fetch_minimax_quota_json, load_minimax_cli_auth};
@@ -139,6 +143,7 @@ pub fn import_from_cli(provider: Provider) -> Result<ImportedAccount, String> {
         Provider::Trae => crate::trae_local::load_trae_local_auth(),
         Provider::Kiro => load_kiro_cli_auth(),
         Provider::Factory => load_factory_cli_auth(),
+        Provider::Moonshot | Provider::NanoGpt => Err("copy your API key and use Import from clipboard".into()),
     }
 }
 

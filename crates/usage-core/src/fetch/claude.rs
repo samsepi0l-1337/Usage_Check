@@ -1,6 +1,6 @@
+use crate::models::{QuotaUsage, UsageBreakdownRow};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
-use crate::models::{QuotaUsage, UsageBreakdownRow};
 
 pub struct ClaudeQuota {
     pub five_hour: Option<QuotaUsage>,
@@ -12,8 +12,11 @@ pub struct ClaudeQuota {
 
 fn parse_resets_at(v: &Value) -> Option<DateTime<Utc>> {
     match v.get("resets_at") {
-        Some(Value::String(s)) => DateTime::parse_from_rfc3339(s).ok().map(|d| d.with_timezone(&Utc)),
-        Some(Value::Number(n)) => n.as_f64()
+        Some(Value::String(s)) => DateTime::parse_from_rfc3339(s)
+            .ok()
+            .map(|d| d.with_timezone(&Utc)),
+        Some(Value::Number(n)) => n
+            .as_f64()
             .and_then(|s| chrono::TimeZone::timestamp_opt(&Utc, s as i64, 0).single()),
         _ => None,
     }
@@ -21,7 +24,11 @@ fn parse_resets_at(v: &Value) -> Option<DateTime<Utc>> {
 
 fn window(v: &Value) -> Option<QuotaUsage> {
     let percent = v.get("utilization")?.as_f64()?;
-    Some(QuotaUsage { percent, resets_at: parse_resets_at(v), window_seconds: None })
+    Some(QuotaUsage {
+        percent,
+        resets_at: parse_resets_at(v),
+        window_seconds: None,
+    })
 }
 
 /// Weekly per-model window duration for `limits[]` entries (matches the

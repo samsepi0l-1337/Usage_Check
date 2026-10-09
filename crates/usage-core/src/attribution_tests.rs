@@ -666,9 +666,17 @@ fn test_conflicting_dedupekeys_order_invariance() {
     };
 
     // Call with [R1, R2] order
-    let result1 = assign_local_usage(std::slice::from_ref(&acct), &[root_r1.clone(), root_r2.clone()], now);
+    let result1 = assign_local_usage(
+        std::slice::from_ref(&acct),
+        &[root_r1.clone(), root_r2.clone()],
+        now,
+    );
     // Call with [R2, R1] order (reversed)
-    let result2 = assign_local_usage(std::slice::from_ref(&acct), &[root_r2.clone(), root_r1.clone()], now);
+    let result2 = assign_local_usage(
+        std::slice::from_ref(&acct),
+        &[root_r2.clone(), root_r1.clone()],
+        now,
+    );
 
     assert_eq!(result1.len(), 1);
     assert_eq!(result2.len(), 1);
@@ -855,5 +863,105 @@ fn test_order_invariance_with_mixed_fixtures() {
             "Provenance must match for {}",
             id
         );
+    }
+}
+
+#[test]
+fn codex_account_id_takes_precedence_over_shared_email() {
+    let accounts = [
+        AccountRef {
+            account_id: "a",
+            creds_account_id: Some("org-a"),
+            expected_identity: Some("same@example.com"),
+            is_browser_oauth: false,
+            profile_roots: vec![],
+        },
+        AccountRef {
+            account_id: "b",
+            creds_account_id: Some("org-b"),
+            expected_identity: Some("same@example.com"),
+            is_browser_oauth: false,
+            profile_roots: vec![],
+        },
+    ];
+    let identity = RootIdentity::CodexAuth {
+        account_id: Some("org-a".into()),
+        email: Some("same@example.com".into()),
+    };
+    assert_eq!(matching_accounts(&accounts, &identity), vec![0]);
+    let unknown = RootIdentity::CodexAuth {
+        account_id: Some("org-c".into()),
+        email: Some("same@example.com".into()),
+    };
+    assert!(matching_accounts(&accounts, &unknown).is_empty());
+}
+
+#[test]
+fn scan_health_cannot_restore_conflicted_or_ambiguous_totals() {
+    let now = Utc::now();
+    let accounts = [
+        AccountRef {
+            account_id: "a",
+            creds_account_id: Some("org-a"),
+            expected_identity: None,
+            is_browser_oauth: false,
+            profile_roots: vec![PathBuf::from("/shared")],
+        },
+        AccountRef {
+            account_id: "b",
+            creds_account_id: Some("org-b"),
+            expected_identity: None,
+            is_browser_oauth: false,
+            profile_roots: vec![PathBuf::from("/shared")],
+        },
+    ];
+    for identity in [
+        RootIdentity::CodexAuth {
+            account_id: Some("unknown".into()),
+            email: None,
+        },
+        RootIdentity::None,
+    ] {
+        for health in [
+            LocalProvenance::Partial,
+            LocalProvenance::Unavailable,
+            LocalProvenance::Truncated,
+        ] {
+            let proven = ScannedRoot {
+                root_key: PathBuf::from("/proven"),
+                source_roots: vec![],
+                events: vec![ModelTokenEvent {
+                    timestamp: now,
+                    model: "m".into(),
+                    tokens: 123,
+                    dedupe_key: None,
+                }],
+                health,
+                identity: RootIdentity::CodexAuth {
+                    account_id: Some("org-a".into()),
+                    email: None,
+                },
+            };
+            let blocked = ScannedRoot {
+                root_key: PathBuf::from("/shared"),
+                source_roots: vec![PathBuf::from("/shared")],
+                events: vec![],
+                health: LocalProvenance::Ok,
+                identity: identity.clone(),
+            };
+            for roots in [
+                [proven.clone(), blocked.clone()],
+                [blocked.clone(), proven.clone()],
+            ] {
+                let result = assign_local_usage(&accounts, &roots, now);
+                let usage = &result[0].1;
+                assert_eq!(usage.provenance, health);
+                assert_eq!(
+                    usage.totals,
+                    crate::models::WindowTotals::default(),
+                    "{identity:?} + {health:?}"
+                );
+            }
+        }
     }
 }

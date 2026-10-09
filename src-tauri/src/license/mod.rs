@@ -90,7 +90,10 @@ pub enum LicenseStatus {
 /// can ever take, and is therefore always treated as a mismatch by
 /// [`decide_status`] rather than compared for equality.
 fn is_valid_device_id_format(candidate: &str) -> bool {
-    candidate.len() == 64 && candidate.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    candidate.len() == 64
+        && candidate
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 /// Pure decision: given the on-disk record (if any), the current time, this
@@ -269,8 +272,8 @@ fn write_record_in(app_data_dir: Option<&Path>, record: &LicenseRecord) -> Resul
     reject_symlink(dir, "app data directory")?;
     let path = dir.join(LICENSE_FILE);
     reject_symlink(&path, "license file")?;
-    let json =
-        serde_json::to_string_pretty(record).map_err(|e| format!("serialize license record: {e}"))?;
+    let json = serde_json::to_string_pretty(record)
+        .map_err(|e| format!("serialize license record: {e}"))?;
     write_private_file(&path, &json)
 }
 
@@ -333,13 +336,19 @@ pub fn status() -> LicenseStatus {
 /// tempdir instead of global license state.
 #[cfg(test)]
 fn is_pro_in(app_data_dir: Option<&Path>) -> bool {
-    matches!(status_in(app_data_dir), LicenseStatus::Pro { .. } | LicenseStatus::ProDevOverride)
+    matches!(
+        status_in(app_data_dir),
+        LicenseStatus::Pro { .. } | LicenseStatus::ProDevOverride
+    )
 }
 
 /// True only when [`status`] grants Pro, including the explicitly-marked
 /// debug-only [`LicenseStatus::ProDevOverride`] local verification state.
 pub fn is_pro() -> bool {
-    matches!(status(), LicenseStatus::Pro { .. } | LicenseStatus::ProDevOverride)
+    matches!(
+        status(),
+        LicenseStatus::Pro { .. } | LicenseStatus::ProDevOverride
+    )
 }
 
 /// True when a license record is persisted on disk, regardless of whether it
@@ -723,7 +732,10 @@ pub async fn maybe_periodic_refresh() {
 /// `token` submodules crate-wide) so the license module's internal API
 /// surface widens by exactly one test-only function, not by whole modules.
 #[cfg(test)]
-pub(crate) fn testing_persist_pro_license(app_data_dir: &Path, signing_key: &ed25519_dalek::SigningKey) {
+pub(crate) fn testing_persist_pro_license(
+    app_data_dir: &Path,
+    signing_key: &ed25519_dalek::SigningKey,
+) {
     let this_device_id = device::device_id_in(Some(app_data_dir));
     let now = Utc::now();
     let issued_at = now - Duration::hours(1);

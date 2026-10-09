@@ -56,7 +56,7 @@ fn push_row(
         csv_field(account),
         csv_field(plan),
         csv_field(status),
-        window,
+        csv_field(window),
         csv_field(pool),
         percent,
     ));
@@ -72,17 +72,53 @@ pub fn csv_body(resp: &UsageResponse) -> String {
         let account = a.display_name.as_str();
         let status = a.status.as_str();
         if let Some(q) = &a.five_hour {
-            push_row(&mut out, provider, account, plan, status, "5h", "", q.used_percent);
+            push_row(
+                &mut out,
+                provider,
+                account,
+                plan,
+                status,
+                q.export_window_label(),
+                "",
+                q.used_percent,
+            );
         }
         if let Some(q) = &a.week {
-            push_row(&mut out, provider, account, plan, status, "7d", "", q.used_percent);
+            push_row(
+                &mut out,
+                provider,
+                account,
+                plan,
+                status,
+                q.export_window_label(),
+                "",
+                q.used_percent,
+            );
         }
         for pool in &a.pools {
             if let Some(q) = &pool.five_hour {
-                push_row(&mut out, provider, account, plan, status, "5h", &pool.name, q.used_percent);
+                push_row(
+                    &mut out,
+                    provider,
+                    account,
+                    plan,
+                    status,
+                    q.export_window_label(),
+                    &pool.name,
+                    q.used_percent,
+                );
             }
             if let Some(q) = &pool.week {
-                push_row(&mut out, provider, account, plan, status, "7d", &pool.name, q.used_percent);
+                push_row(
+                    &mut out,
+                    provider,
+                    account,
+                    plan,
+                    status,
+                    q.export_window_label(),
+                    &pool.name,
+                    q.used_percent,
+                );
             }
         }
     }

@@ -47,7 +47,7 @@ fn used_percent(raw: f64) -> Option<f64> {
 }
 
 fn parse_reset(ms: f64) -> Option<DateTime<Utc>> {
-    if !(ms > 0.0) {
+    if ms.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater) {
         return None;
     }
     let seconds = if ms.abs() >= 100_000_000_000.0 {

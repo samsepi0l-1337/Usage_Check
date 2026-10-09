@@ -135,7 +135,7 @@ paths:
                 $ref: "#/components/schemas/Error"
               example:
                 error: unknown_provider
-                message: "unknown provider 'foo' (expected codex, claude, agy, cursor, grok, higgsfield, kimi, opencode, deepseek, openrouter, copilot, windsurf, minimax, augment, poe, fireworks, novita, amp, zai, bailian, trae, kiro, or factory)"
+                message: "unknown provider 'foo' (expected codex, claude, agy, cursor, grok, higgsfield, kimi, opencode, deepseek, openrouter, copilot, windsurf, minimax, augment, poe, fireworks, novita, amp, zai, bailian, trae, kiro, factory, moonshot, or nanogpt)"
   /v1/accounts:
     get:
       tags: [usage]
@@ -174,8 +174,9 @@ paths:
       description: >
         The current usage snapshot as CSV (text/csv). Header:
         `provider,account,plan,status,window,pool,used_percent`, then one row
-        per account/window (and per agy pool/window). Fields with commas,
-        quotes, or newlines are RFC-4180 quoted.
+        per account/window (and per agy pool/window). The window column uses
+        the quota window_label, or "unknown" when no time window is known.
+        Fields with commas, quotes, or newlines are RFC-4180 quoted.
       operationId: getUsageCsv
       responses:
         "200":
@@ -192,7 +193,10 @@ paths:
         Usage snapshot in Prometheus text-exposition format
         (text/plain; version=0.0.4): a `usagecheck_account_count` gauge plus one
         `usagecheck_used_percent` gauge per account/window (and per agy pool),
-        labeled by provider/account. Suitable as a scrape target.
+        labeled by provider/account/account_id. The stable account_id distinguishes
+        accounts with the same display name. This label changes existing series
+        identities. The window label uses the quota window_label, or "unknown"
+        when no time window is known. Suitable as a scrape target.
       operationId: getMetrics
       responses:
         "200":
@@ -224,7 +228,7 @@ components:
   schemas:
     Provider:
       type: string
-      enum: [codex, claude, agy, cursor, grok, higgsfield, kimi, opencode, deepseek, openrouter, copilot, windsurf, minimax, augment, poe, fireworks, novita, amp, zai, bailian, trae, kiro, factory]
+      enum: [codex, claude, agy, cursor, grok, higgsfield, kimi, opencode, deepseek, openrouter, copilot, windsurf, minimax, augment, poe, fireworks, novita, amp, zai, bailian, trae, kiro, factory, moonshot, nanogpt]
       description: Usage provider category.
     Status:
       type: string
@@ -289,6 +293,15 @@ components:
           oneOf:
             - $ref: "#/components/schemas/Quota"
             - type: "null"
+    Breakdown:
+      type: object
+      required: [label, usage]
+      properties:
+        label:
+          type: string
+          description: Provider-specific quota or credit category.
+        usage:
+          $ref: "#/components/schemas/Quota"
     TokenTotals:
       type: object
       description: |
@@ -346,7 +359,7 @@ components:
           type: string
         window:
           type: string
-          enum: ["5h", "7d"]
+          description: Quota window_label, or "unknown" when no time window is known.
         pool:
           type: [string, "null"]
           description: agy pool name, when the alert is for a pool window.
@@ -367,7 +380,7 @@ components:
             $ref: "#/components/schemas/Alert"
     AccountUsage:
       type: object
-      required: [id, provider, auth_kind, display_name, status, pools, token_totals]
+      required: [id, provider, auth_kind, display_name, status, pools, breakdown, token_totals]
       properties:
         id:
           type: string
@@ -396,12 +409,20 @@ components:
           oneOf:
             - $ref: "#/components/schemas/Quota"
             - type: "null"
-          description: Account-level 7-day window (most constrained pool for agy).
+          description: >-
+            Account-level longer quota or balance (most constrained pool for agy).
+            Consult window_label for its duration; this may be a 7-day window,
+            billing period, or a balance without a known time window.
         pools:
           type: array
           description: Per-pool breakdown (agy only; empty for Codex/Claude).
           items:
             $ref: "#/components/schemas/Pool"
+        breakdown:
+          type: array
+          description: Provider-specific quotas or credit categories.
+          items:
+            $ref: "#/components/schemas/Breakdown"
         token_totals:
           $ref: "#/components/schemas/TokenTotals"
         local_status:
@@ -503,4 +524,4 @@ components:
           example: unknown_provider
         message:
           type: string
-          example: "unknown provider 'foo' (expected codex, claude, agy, cursor, grok, higgsfield, kimi, opencode, deepseek, openrouter, copilot, windsurf, minimax, augment, poe, fireworks, novita, amp, zai, bailian, trae, kiro, or factory)"
+          example: "unknown provider 'foo' (expected codex, claude, agy, cursor, grok, higgsfield, kimi, opencode, deepseek, openrouter, copilot, windsurf, minimax, augment, poe, fireworks, novita, amp, zai, bailian, trae, kiro, factory, moonshot, or nanogpt)"

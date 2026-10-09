@@ -67,16 +67,6 @@ pub fn kiro_endpoints(region: &str) -> Option<(String, String)> {
     Some((refresh, usage))
 }
 
-/// Region from `region` / `awsRegion` or `profileArn` (`arn:aws:codewhisperer:<region>:…`).
-pub fn kiro_region_from_token(root: &serde_json::Value) -> Option<String> {
-    if let Some(region) = first_string(root, &["region", "awsRegion", "aws_region"]) {
-        if let Some(ok) = normalize_kiro_region(&region) {
-            return Some(ok);
-        }
-    }
-    region_from_profile_arn(&first_string(root, &["profileArn", "profile_arn", "arn"])?)
-}
-
 pub fn region_from_profile_arn(arn: &str) -> Option<String> {
     // arn:aws:codewhisperer:us-east-1:123:profile/…
     let region = arn.split(':').nth(3)?;
@@ -125,25 +115,6 @@ pub fn load_kiro_cli_auth() -> Result<ImportedAccount, String> {
     load_kiro_cli_auth_from(&path)
 }
 
-/// Optional IDE usageState cache (only when the token file is missing).
-pub fn read_kiro_usage_state(path: &Path) -> Option<serde_json::Value> {
-    use rusqlite::{Connection, OpenFlags};
-
-    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
-    let mut stmt = conn
-        .prepare("SELECT value FROM ItemTable WHERE key = ?1 LIMIT 1")
-        .ok()?;
-    let raw: String = stmt.query_row(["kiro.kiroAgent"], |row| row.get(0)).ok()?;
-    let root: serde_json::Value = serde_json::from_str(&raw).ok()?;
-    if let Some(state) = root.pointer("/kiro.resourceNotifications.usageState") {
-        return Some(state.clone());
-    }
-    root.get("usageState")
-        .cloned()
-        .or_else(|| root.get("usage_state").cloned())
-        .or(Some(root))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -170,21 +141,10 @@ mod tests {
     }
 
     #[test]
-    fn region_from_arn_and_field() {
+    fn region_from_arn() {
         assert_eq!(
             region_from_profile_arn("arn:aws:codewhisperer:eu-central-1:1:profile/x").as_deref(),
             Some("eu-central-1")
-        );
-        assert_eq!(
-            kiro_region_from_token(&json!({ "region": "us-west-2" })).as_deref(),
-            Some("us-west-2")
-        );
-        assert_eq!(
-            kiro_region_from_token(&json!({
-                "profileArn": "arn:aws:codewhisperer:ap-southeast-1:1:profile/x"
-            }))
-            .as_deref(),
-            Some("ap-southeast-1")
         );
     }
 
@@ -216,10 +176,6 @@ mod tests {
         ] {
             assert!(!kiro_region_ok(hostile), "{hostile}");
             assert!(kiro_endpoints(hostile).is_none(), "{hostile}");
-            assert!(
-                kiro_region_from_token(&json!({ "region": hostile })).is_none(),
-                "{hostile}"
-            );
             assert!(
                 region_from_profile_arn(&format!("arn:aws:codewhisperer:{hostile}:1:profile/x"))
                     .is_none(),

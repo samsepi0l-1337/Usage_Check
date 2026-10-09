@@ -184,27 +184,47 @@ pub(super) async fn poll_grok(
     }
 }
 
-pub(super) async fn poll_higgsfield(store: &AccountStore, account: &Account) -> AccountUsage {
-    if store
-        .credentials(AccountStore::credential_key(account))
-        .is_none()
-    {
-        return account_usage_from_higgsfield(
-            account,
-            &HiggsfieldCredits {
-                email: None,
-                plan: None,
-                credits_remaining: None,
-                credits_total: None,
-                renews_at: None,
-            },
-            "needs_login",
-        );
+fn cli_identity_status(account: &Account, email: Option<&str>) -> &'static str {
+    use usage_core::account::AuthSource;
+    let expected = match &account.auth_source {
+        AuthSource::HiggsfieldCli { expected_identity }
+        | AuthSource::MiniMaxCli { expected_identity }
+        | AuthSource::AugmentCli { expected_identity } => expected_identity.trim(),
+        _ => return "needs_login",
+    };
+    match email.map(str::trim).filter(|email| !email.is_empty()) {
+        Some(email) if !expected.is_empty() && email == expected => "ok",
+        Some(_) if !expected.is_empty() => "identity_changed",
+        _ => "needs_setup",
     }
+}
 
-    match fetch_higgsfield_account_json() {
+fn empty_higgsfield() -> HiggsfieldCredits {
+    HiggsfieldCredits {
+        email: None,
+        plan: None,
+        credits_remaining: None,
+        credits_total: None,
+        renews_at: None,
+    }
+}
+
+pub(super) async fn poll_higgsfield(_store: &AccountStore, account: &Account) -> AccountUsage {
+    higgsfield_usage(account, fetch_higgsfield_account_json())
+}
+
+fn higgsfield_usage(account: &Account, result: Result<serde_json::Value, ()>) -> AccountUsage {
+    match result {
         Ok(root) => {
             let credits = parse_higgsfield_account(&root);
+            let identity_status = cli_identity_status(account, credits.email.as_deref());
+            if identity_status != "ok" {
+                return account_usage_from_higgsfield(
+                    account,
+                    &empty_higgsfield(),
+                    identity_status,
+                );
+            }
             let status = if credits.credits_remaining.is_some() {
                 "ok"
             } else {
@@ -212,24 +232,26 @@ pub(super) async fn poll_higgsfield(store: &AccountStore, account: &Account) -> 
             };
             account_usage_from_higgsfield(account, &credits, status)
         }
-        Err(()) => account_usage_from_higgsfield(
-            account,
-            &HiggsfieldCredits {
-                email: None,
-                plan: None,
-                credits_remaining: None,
-                credits_total: None,
-                renews_at: None,
-            },
-            "needs_setup",
-        ),
+        Err(()) => account_usage_from_higgsfield(account, &empty_higgsfield(), "needs_setup"),
     }
 }
 
 pub(super) async fn poll_minimax(_store: &AccountStore, account: &Account) -> AccountUsage {
-    match crate::import::fetch_minimax_quota_json() {
+    minimax_usage(account, crate::import::fetch_minimax_quota_json())
+}
+
+fn minimax_usage(account: &Account, result: Result<serde_json::Value, String>) -> AccountUsage {
+    match result {
         Ok(root) => {
             let quota = parse_minimax_quota(&root);
+            let identity_status = cli_identity_status(account, quota.email.as_deref());
+            if identity_status != "ok" {
+                return account_usage_from_minimax(
+                    account,
+                    &MiniMaxQuota::default(),
+                    identity_status,
+                );
+            }
             let status = if quota.five_hour.is_some() || quota.week.is_some() {
                 "ok"
             } else {
@@ -242,9 +264,21 @@ pub(super) async fn poll_minimax(_store: &AccountStore, account: &Account) -> Ac
 }
 
 pub(super) async fn poll_augment(_store: &AccountStore, account: &Account) -> AccountUsage {
-    match crate::import::fetch_augment_account_json() {
+    augment_usage(account, crate::import::fetch_augment_account_json())
+}
+
+fn augment_usage(account: &Account, result: Result<serde_json::Value, String>) -> AccountUsage {
+    match result {
         Ok(root) => {
             let credits = parse_augment_account(&root);
+            let identity_status = cli_identity_status(account, credits.email.as_deref());
+            if identity_status != "ok" {
+                return account_usage_from_augment(
+                    account,
+                    &AugmentCredits::default(),
+                    identity_status,
+                );
+            }
             let status = if credits.credits_remaining.is_some() {
                 "ok"
             } else {
@@ -679,14 +713,21 @@ fn kiro_http_status(status: Option<u16>, region_was_defaulted: bool) -> &'static
     }
 }
 
-fn kiro_usage_state_cache() -> Option<KiroQuota> {
-    let path = crate::paths::kiro_state_vscdb()?;
-    if !path.is_file() {
-        return None;
+fn apply_kiro_refresh(
+    creds: &mut usage_core::account::Credentials,
+    access_token: String,
+    refresh_token: Option<String>,
+    profile_arn: Option<String>,
+) {
+    creds.access_token = access_token;
+    // Refresh does not return an expiry; the previous token's timestamp is stale.
+    creds.expires_at = None;
+    if let Some(refresh_token) = refresh_token {
+        creds.refresh_token = Some(refresh_token);
     }
-    let root = crate::import::read_kiro_usage_state(&path)?;
-    let quota = usage_core::fetch::kiro::parse_kiro_usage_limits(&root);
-    quota.period.is_some().then_some(quota)
+    if let Some(profile_arn) = profile_arn {
+        creds.account_id = Some(profile_arn);
+    }
 }
 
 pub(super) async fn poll_kiro(
@@ -694,36 +735,16 @@ pub(super) async fn poll_kiro(
     client: &reqwest::Client,
     account: &Account,
 ) -> AccountUsage {
-    let token_path = crate::paths::kiro_auth_token_file();
-    let file_token = token_path
-        .as_ref()
-        .filter(|p| p.is_file())
-        .and_then(|p| std::fs::read_to_string(p).ok())
-        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok());
-
-    let mut creds = if let Some(root) = file_token.as_ref() {
-        crate::import::parse_kiro_auth_token(root).map(|imported| imported.credentials)
-    } else {
-        store.credentials(AccountStore::credential_key(account))
+    // Imports own a credential snapshot; the desktop cache can belong to another account.
+    let Some(mut creds) = store.credentials(AccountStore::credential_key(account)) else {
+        return account_usage_from_kiro(account, &KiroQuota::default(), "needs_login");
     };
 
-    if creds.is_none() {
-        if let Some(quota) = kiro_usage_state_cache() {
-            return account_usage_from_kiro(account, &quota, "ok");
-        }
-        return account_usage_from_kiro(account, &KiroQuota::default(), "needs_login");
-    }
-
     let mut region_defaulted = false;
-    let region = file_token
-        .as_ref()
-        .and_then(crate::import::kiro_region_from_token)
-        .or_else(|| {
-            creds
-                .as_ref()
-                .and_then(|c| c.account_id.as_deref())
-                .and_then(crate::import::region_from_profile_arn)
-        })
+    let region = creds
+        .account_id
+        .as_deref()
+        .and_then(crate::import::region_from_profile_arn)
         .unwrap_or_else(|| {
             region_defaulted = true;
             "us-east-1".to_string()
@@ -732,30 +753,21 @@ pub(super) async fn poll_kiro(
         return account_usage_from_kiro(account, &KiroQuota::default(), "needs_setup");
     }
 
-    if let Some(c) = creds.as_mut() {
-        if let Some(refresh) = c.refresh_token.clone() {
-            let expired = c
-                .expires_at
-                .map(|exp| exp <= chrono::Utc::now() + chrono::Duration::seconds(60))
-                .unwrap_or(false);
-            if expired {
-                if let Ok((access, new_refresh, arn)) =
-                    refresh_kiro_access_token(client, &refresh, &region).await
-                {
-                    c.access_token = access;
-                    if let Some(rt) = new_refresh {
-                        c.refresh_token = Some(rt);
-                    }
-                    if let Some(arn) = arn {
-                        c.account_id = Some(arn);
-                    }
-                    let _ = store.update_credentials(AccountStore::credential_key(account), c);
-                }
+    if let Some(refresh) = creds.refresh_token.clone() {
+        let expired = creds
+            .expires_at
+            .map(|exp| exp <= chrono::Utc::now() + chrono::Duration::seconds(60))
+            .unwrap_or(false);
+        if expired {
+            if let Ok((access, new_refresh, arn)) =
+                refresh_kiro_access_token(client, &refresh, &region).await
+            {
+                apply_kiro_refresh(&mut creds, access, new_refresh, arn);
+                let _ = store.update_credentials(AccountStore::credential_key(account), &creds);
             }
         }
     }
 
-    let creds = creds.unwrap();
     let Some(profile_arn) = creds.account_id.clone().filter(|s| !s.is_empty()) else {
         return account_usage_from_kiro(account, &KiroQuota::default(), "needs_setup");
     };
@@ -775,13 +787,7 @@ pub(super) async fn poll_kiro(
                     refresh_kiro_access_token(client, refresh, &region).await
                 {
                     let mut updated = creds.clone();
-                    updated.access_token = access;
-                    if let Some(rt) = new_refresh {
-                        updated.refresh_token = Some(rt);
-                    }
-                    if let Some(arn) = arn {
-                        updated.account_id = Some(arn);
-                    }
+                    apply_kiro_refresh(&mut updated, access, new_refresh, arn);
                     let _ =
                         store.update_credentials(AccountStore::credential_key(account), &updated);
                     let arn = updated.account_id.clone().unwrap_or(profile_arn);
@@ -803,18 +809,11 @@ pub(super) async fn poll_kiro(
             }
             account_usage_from_kiro(account, &KiroQuota::default(), "needs_login")
         }
-        Err(status) => {
-            if file_token.is_none() {
-                if let Some(quota) = kiro_usage_state_cache() {
-                    return account_usage_from_kiro(account, &quota, "ok");
-                }
-            }
-            account_usage_from_kiro(
-                account,
-                &KiroQuota::default(),
-                kiro_http_status(status, region_defaulted),
-            )
-        }
+        Err(status) => account_usage_from_kiro(
+            account,
+            &KiroQuota::default(),
+            kiro_http_status(status, region_defaulted),
+        ),
     }
 }
 
@@ -890,6 +889,36 @@ pub(super) async fn poll_factory(
         Err(status) => {
             account_usage_from_factory(account, &FactoryUsage::default(), factory_status(status))
         }
+    }
+}
+
+pub(super) async fn poll_moonshot(
+    store: &AccountStore,
+    client: &reqwest::Client,
+    account: &Account,
+) -> AccountUsage {
+    use super::{http::fetch_moonshot_balance, usage_model::account_usage_from_wallet};
+    let Some(creds) = store.credentials(AccountStore::credential_key(account)) else {
+        return account_usage_from_wallet(account, None, "needs_login");
+    };
+    match fetch_moonshot_balance(client, &creds).await {
+        Ok(balance) => account_usage_from_wallet(account, balance.detail_suffix, "ok"),
+        Err(status) => account_usage_from_wallet(account, None, status_for_failure(status)),
+    }
+}
+
+pub(super) async fn poll_nanogpt(
+    store: &AccountStore,
+    client: &reqwest::Client,
+    account: &Account,
+) -> AccountUsage {
+    use super::{http::fetch_nanogpt_balance, usage_model::account_usage_from_wallet};
+    let Some(creds) = store.credentials(AccountStore::credential_key(account)) else {
+        return account_usage_from_wallet(account, None, "needs_login");
+    };
+    match fetch_nanogpt_balance(client, &creds).await {
+        Ok(balance) => account_usage_from_wallet(account, balance.detail_suffix, "ok"),
+        Err(status) => account_usage_from_wallet(account, None, status_for_failure(status)),
     }
 }
 

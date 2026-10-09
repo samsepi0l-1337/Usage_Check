@@ -51,9 +51,11 @@ fn sample_auth_source(provider: Provider, identity: &str) -> AuthSource {
             database_path: "/profiles/trae/state.vscdb".into(),
             expected_identity: identity.into(),
         },
-        Provider::Kiro | Provider::Factory => AuthSource::BrowserOAuth {
-            credential_id: format!("{identity}-credential"),
-        },
+        Provider::Kiro | Provider::Factory | Provider::Moonshot | Provider::NanoGpt => {
+            AuthSource::BrowserOAuth {
+                credential_id: format!("{identity}-credential"),
+            }
+        }
     }
 }
 fn sample(provider: Provider, id: &str, five: Option<f64>, week: Option<f64>) -> AccountUsage {
@@ -138,7 +140,12 @@ fn dto_derives_window_label_when_duration_is_known() {
 
 #[test]
 fn dto_labels_cursor_and_grok_usage_as_billing_periods() {
-    for provider in [Provider::Cursor, Provider::Grok] {
+    for provider in [
+        Provider::Cursor,
+        Provider::Grok,
+        Provider::Moonshot,
+        Provider::NanoGpt,
+    ] {
         let mut usage = sample(provider, "billing", None, Some(42.0));
         usage.week.as_mut().unwrap().window_seconds = None;
 
@@ -306,7 +313,7 @@ fn metrics_endpoint_serves_prometheus_text() {
     assert!(reply.content_type.starts_with("text/plain"));
     assert!(reply.body.contains("usagecheck_account_count 2"));
     assert!(reply.body.contains(
-        "usagecheck_used_percent{provider=\"codex\",account=\"a@example.com\",window=\"5h\"} 42.5"
+        "usagecheck_used_percent{provider=\"codex\",account=\"a@example.com\",account_id=\"a\",window=\"5h\"} 42.5"
     ));
     assert!(!reply.body.contains("access_token"));
 }
@@ -455,6 +462,8 @@ fn provider_filter_accepts_pro_providers() {
         sample(Provider::Trae, "trae", None, None),
         sample(Provider::Kiro, "kiro", None, None),
         sample(Provider::Factory, "factory", None, None),
+        sample(Provider::Moonshot, "moonshot", None, None),
+        sample(Provider::NanoGpt, "nanogpt", None, None),
     ]);
     for provider in [
         "cursor",
@@ -477,6 +486,8 @@ fn provider_filter_accepts_pro_providers() {
         "trae",
         "kiro",
         "factory",
+        "moonshot",
+        "nanogpt",
     ] {
         let reply = route(&state, "GET", &format!("/v1/usage/{provider}"));
         assert_eq!(reply.status, 200);
@@ -484,4 +495,20 @@ fn provider_filter_accepts_pro_providers() {
         assert_eq!(body["count"], 1);
         assert_eq!(body["accounts"][0]["provider"], provider);
     }
+}
+
+#[test]
+fn flat_exports_do_not_label_credit_balances_as_seven_day_windows() {
+    let mut credits = sample(Provider::Higgsfield, "credits", None, Some(95.0));
+    credits.week.as_mut().unwrap().window_seconds = None;
+    let state = state_with(&[credits]);
+    let csv = route(&state, "GET", "/v1/usage.csv");
+    assert!(csv
+        .body
+        .contains("higgsfield,credits@example.com,,ok,unknown,,95"));
+    let metrics = route(&state, "GET", "/metrics");
+    assert!(metrics.body.contains("window=\"unknown\"} 95"));
+    let resp = state.usage_response();
+    let alerts = serde_json::to_value(crate::api_alerts::alerts_response(&resp, 90.0)).unwrap();
+    assert_eq!(alerts["alerts"][0]["window"], "unknown");
 }

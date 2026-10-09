@@ -5,6 +5,7 @@ use crate::account::Provider;
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum AuthMethod {
     Cli,
+    ApiKeyClipboard,
     BrowserOAuth,
     LocalDatabase,
     ManagementKeyClipboard,
@@ -19,6 +20,7 @@ pub struct AuthCapability {
 pub fn auth_capability(provider: Provider) -> AuthCapability {
     let methods: &'static [AuthMethod] = match provider {
         Provider::Codex | Provider::Claude => &[AuthMethod::Cli, AuthMethod::BrowserOAuth],
+        Provider::Moonshot | Provider::NanoGpt => &[AuthMethod::ApiKeyClipboard],
         Provider::Agy => &[AuthMethod::BrowserOAuth],
         Provider::Cursor => &[AuthMethod::LocalDatabase],
         Provider::Grok => &[

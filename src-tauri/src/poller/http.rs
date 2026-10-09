@@ -471,10 +471,7 @@ const COPILOT_USER_URL: &str = "https://api.github.com/copilot_internal/user";
 const COPILOT_EDITOR_VERSION: &str = "vscode/1.98.1";
 const COPILOT_PLUGIN_VERSION: &str = "copilot-chat/0.26.7";
 
-fn copilot_request<'a>(
-    client: &'a reqwest::Client,
-    authorization: &str,
-) -> reqwest::RequestBuilder {
+fn copilot_request(client: &reqwest::Client, authorization: &str) -> reqwest::RequestBuilder {
     client
         .get(COPILOT_USER_URL)
         .header("Accept", "application/json")
@@ -797,5 +794,85 @@ mod windsurf_fallback_tests {
         assert!(super::trae_should_try_fallback(Some(404)));
         assert!(super::trae_should_try_fallback(Some(500)));
         assert!(super::trae_should_try_fallback(None));
+    }
+}
+
+fn moonshot_balance_request(client: &reqwest::Client, key: &str) -> reqwest::RequestBuilder {
+    client
+        .get("https://api.moonshot.ai/v1/users/me/balance")
+        .header("Accept", "application/json")
+        .header("User-Agent", "UsageCheck")
+        .bearer_auth(key)
+}
+
+fn nanogpt_balance_request(client: &reqwest::Client, key: &str) -> reqwest::RequestBuilder {
+    // Officially documented read-only balance query despite using POST.
+    client
+        .post("https://api.nano-gpt.com/api/check-balance")
+        .header("Accept", "application/json")
+        .header("User-Agent", "UsageCheck")
+        .header("x-api-key", key)
+}
+
+pub(super) async fn fetch_moonshot_balance(
+    client: &reqwest::Client,
+    creds: &Credentials,
+) -> Result<usage_core::fetch::moonshot::MoonshotBalance, Option<u16>> {
+    let response = moonshot_balance_request(client, &creds.access_token)
+        .send()
+        .await
+        .map_err(|_| None)?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(Some(status.as_u16()));
+    }
+    let body = response.json().await.map_err(|_| Some(status.as_u16()))?;
+    usage_core::fetch::moonshot::parse_moonshot_balance(&body).ok_or(Some(status.as_u16()))
+}
+
+pub(super) async fn fetch_nanogpt_balance(
+    client: &reqwest::Client,
+    creds: &Credentials,
+) -> Result<usage_core::fetch::nanogpt::NanoGptBalance, Option<u16>> {
+    let response = nanogpt_balance_request(client, &creds.access_token)
+        .send()
+        .await
+        .map_err(|_| None)?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(Some(status.as_u16()));
+    }
+    let body = response.json().await.map_err(|_| Some(status.as_u16()))?;
+    usage_core::fetch::nanogpt::parse_nanogpt_balance(&body).ok_or(Some(status.as_u16()))
+}
+
+#[cfg(test)]
+mod wallet_request_tests {
+    use super::*;
+
+    #[test]
+    fn documented_wallet_requests_keep_auth_methods_and_hosts_separate() {
+        let client = reqwest::Client::new();
+        let moonshot = moonshot_balance_request(&client, "test-key")
+            .build()
+            .unwrap();
+        assert_eq!(moonshot.method(), reqwest::Method::GET);
+        assert_eq!(
+            moonshot.url().as_str(),
+            "https://api.moonshot.ai/v1/users/me/balance"
+        );
+        assert_eq!(moonshot.headers()["Authorization"], "Bearer test-key");
+        assert!(!moonshot.headers().contains_key("x-api-key"));
+        let nano = nanogpt_balance_request(&client, "test-key")
+            .build()
+            .unwrap();
+        assert_eq!(nano.method(), reqwest::Method::POST);
+        assert_eq!(
+            nano.url().as_str(),
+            "https://api.nano-gpt.com/api/check-balance"
+        );
+        assert_eq!(nano.headers()["x-api-key"], "test-key");
+        assert!(!nano.headers().contains_key("Authorization"));
+        assert!(nano.body().is_none());
     }
 }

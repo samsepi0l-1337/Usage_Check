@@ -33,7 +33,7 @@ pub struct CursorSession {
     pub refresh_token: Option<String>,
     pub email: Option<String>,
     pub plan: Option<String>,
-    pub identity: String,  // JWT sub → trimmed-lowercase email fallback
+    pub identity: String, // JWT sub → trimmed-lowercase email fallback
 }
 
 /// Error reading Cursor session from local DB.
@@ -59,7 +59,7 @@ impl std::error::Error for CursorLocalError {}
 /// Decode JWT payload (middle segment: base64url → JSON).
 fn decode_jwt_payload(token: &str) -> Result<serde_json::Value, String> {
     use base64::Engine;
-    
+
     let parts: Vec<&str> = token.split('.').collect();
     if parts.len() != 3 {
         return Err("Invalid JWT format".to_string());
@@ -76,8 +76,7 @@ fn decode_jwt_payload(token: &str) -> Result<serde_json::Value, String> {
         .decode(&payload_b64)
         .map_err(|e| format!("Base64 decode failed: {}", e))?;
 
-    serde_json::from_slice(&decoded)
-        .map_err(|e| format!("JWT payload parse failed: {}", e))
+    serde_json::from_slice(&decoded).map_err(|e| format!("JWT payload parse failed: {}", e))
 }
 
 /// Read Cursor session from local DB (read-only, identity from JWT or email).
@@ -85,8 +84,7 @@ pub fn read_cursor_session(path: &Path) -> Result<CursorSession, CursorLocalErro
     let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|e| CursorLocalError::OpenFailed(e.to_string()))?;
 
-    let access_token = read_item(&conn, ACCESS_TOKEN_KEY)
-        .ok_or(CursorLocalError::TokenMissing)?;
+    let access_token = read_item(&conn, ACCESS_TOKEN_KEY).ok_or(CursorLocalError::TokenMissing)?;
     let refresh_token = read_item(&conn, REFRESH_TOKEN_KEY);
     let cached_email = read_item(&conn, EMAIL_KEY);
     let plan = read_item(&conn, PLAN_KEY);
@@ -169,11 +167,7 @@ mod tests {
     use rusqlite::{params, Connection};
     use tempfile::NamedTempFile;
 
-    fn create_test_db_with_jwt(
-        sub: Option<&str>,
-        email: &str,
-        plan: &str,
-    ) -> NamedTempFile {
+    fn create_test_db_with_jwt(sub: Option<&str>, email: &str, plan: &str) -> NamedTempFile {
         let temp = NamedTempFile::new().unwrap();
         let conn = Connection::open(temp.path()).unwrap();
         conn.execute(

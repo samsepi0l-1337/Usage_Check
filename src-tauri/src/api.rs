@@ -75,7 +75,9 @@ impl WindowLabelHint {
             | Provider::Amp
             | Provider::Trae
             | Provider::Kiro
-            | Provider::Factory => WindowLabelHint::BillingPeriod,
+            | Provider::Factory
+            | Provider::Moonshot
+            | Provider::NanoGpt => WindowLabelHint::BillingPeriod,
             Provider::Higgsfield
             | Provider::DeepSeek
             | Provider::Augment
@@ -94,7 +96,9 @@ impl WindowLabelHint {
             | Provider::Amp
             | Provider::Trae
             | Provider::Kiro
-            | Provider::Factory => WindowLabelHint::BillingPeriod,
+            | Provider::Factory
+            | Provider::Moonshot
+            | Provider::NanoGpt => WindowLabelHint::BillingPeriod,
             Provider::Codex
             | Provider::Claude
             | Provider::Agy
@@ -144,6 +148,11 @@ pub struct QuotaDto {
 }
 
 impl QuotaDto {
+    /// Label for flat exports that cannot express a nullable window.
+    pub(crate) fn export_window_label(&self) -> &str {
+        self.window_label.0.as_deref().unwrap_or("unknown")
+    }
+
     fn from_quota(q: &QuotaUsage, label_hint: WindowLabelHint) -> QuotaDto {
         QuotaDto {
             used_percent: q.percent,
@@ -464,7 +473,7 @@ pub(crate) fn route(state: &ApiState, method: &str, path: &str) -> Reply {
                         serde_json::json!({
                             "error": "unknown_provider",
                             "message": format!(
-                                "unknown provider '{}' (expected codex, claude, agy, cursor, grok, higgsfield, kimi, opencode, deepseek, openrouter, copilot, windsurf, minimax, augment, poe, fireworks, novita, amp, zai, bailian, trae, kiro, or factory)",
+                                "unknown provider '{}' (expected codex, claude, agy, cursor, grok, higgsfield, kimi, opencode, deepseek, openrouter, copilot, windsurf, minimax, augment, poe, fireworks, novita, amp, zai, bailian, trae, kiro, factory, moonshot, or nanogpt)",
                                 name
                             ),
                         })

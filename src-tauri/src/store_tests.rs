@@ -277,6 +277,68 @@ fn migrate_claude_identity_anchors_skips_profiles_without_account_uuid() {
 }
 
 #[test]
+fn migrate_claude_identity_anchors_preserves_changed_login() {
+    for (anchor, label) in [
+        ("original-uuid", "original@example.com"),
+        ("shared-org", "original@example.com"),
+    ] {
+        let sandbox = TestSandbox::new();
+        let store = sandbox.store();
+        let profile_root = sandbox.root.join("claude-profile");
+        write_claude_oauth_identity(
+            &profile_root,
+            "other@example.com",
+            Some("other-uuid"),
+            "shared-org",
+        );
+        let account = claude_reference(profile_root, anchor, label);
+        store.initialize_v2().unwrap();
+        store.save_index(std::slice::from_ref(&account)).unwrap();
+
+        assert_eq!(store.migrate_claude_identity_anchors().unwrap(), 0);
+        assert_eq!(store.account(&account.id), Some(account));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn cli_token_cache_rejects_symlinked_directory_on_read() {
+    use std::os::unix::fs::symlink;
+    let sandbox = TestSandbox::new();
+    let store = sandbox.store();
+    store.initialize_v2().unwrap();
+    let outside = sandbox.root.join("outside");
+    fs::create_dir(&outside).unwrap();
+    let account_id = uuid::Uuid::new_v4().to_string();
+    let outside_token = outside.join(format!("{account_id}.json"));
+    let contents = serde_json::to_string(&credentials("outside-account")).unwrap();
+    fs::write(&outside_token, &contents).unwrap();
+    symlink(&outside, store.root.join("cli-token-cache")).unwrap();
+
+    assert!(store.cli_profile_credentials(&account_id).is_none());
+    assert_eq!(fs::read_to_string(outside_token).unwrap(), contents);
+}
+
+#[cfg(unix)]
+#[test]
+fn cli_token_cache_rejects_symlinked_directory_on_remove() {
+    use std::os::unix::fs::symlink;
+    let sandbox = TestSandbox::new();
+    let store = sandbox.store();
+    store.initialize_v2().unwrap();
+    let outside = sandbox.root.join("outside");
+    fs::create_dir(&outside).unwrap();
+    let account_id = uuid::Uuid::new_v4().to_string();
+    let outside_token = outside.join(format!("{account_id}.json"));
+    let contents = serde_json::to_string(&credentials("outside-account")).unwrap();
+    fs::write(&outside_token, &contents).unwrap();
+    symlink(&outside, store.root.join("cli-token-cache")).unwrap();
+
+    store.remove_cli_profile_credentials(&account_id);
+    assert_eq!(fs::read_to_string(outside_token).unwrap(), contents);
+}
+
+#[test]
 fn migrate_claude_identity_anchors_preserves_unknown_entries() {
     let sandbox = TestSandbox::new();
     let store = sandbox.store();

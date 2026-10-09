@@ -81,17 +81,29 @@ impl AccountStore {
                 continue;
             }
             let Some((uuid, email)) = (match &account.auth_source {
-                AuthSource::CliProfile { profile_root, .. } => {
-                    let (email, account_uuid, _org) =
+                AuthSource::CliProfile {
+                    profile_root,
+                    expected_identity,
+                    ..
+                } => {
+                    let (email, account_uuid, org) =
                         crate::import::claude_oauth_identity_set_in(profile_root);
-                    account_uuid.filter(|s| !s.is_empty()).map(|uuid| {
-                        (
-                            uuid,
-                            email
-                                .map(|mail| mail.trim().to_lowercase())
-                                .filter(|mail| !mail.is_empty()),
-                        )
-                    })
+                    let email = email
+                        .map(|mail| mail.trim().to_lowercase())
+                        .filter(|mail| !mail.is_empty());
+                    // Migrate only a matching legacy anchor. A subsequent CLI login
+                    // must not replace the stored account's identity or label.
+                    let anchor_matches = account_uuid.as_deref() == Some(expected_identity)
+                        || email.as_deref() == Some(expected_identity)
+                        || org.as_deref() == Some(expected_identity);
+                    let label_matches = !account.label.contains('@')
+                        || email.as_deref() == Some(account.label.trim().to_lowercase().as_str());
+                    if !anchor_matches || !label_matches {
+                        continue;
+                    }
+                    account_uuid
+                        .filter(|s| !s.is_empty())
+                        .map(|uuid| (uuid, email))
                 }
                 _ => None,
             }) else {
@@ -198,6 +210,8 @@ impl AccountStore {
             | Provider::Amp
             | Provider::Zai
             | Provider::Kiro
+            | Provider::Moonshot
+            | Provider::NanoGpt
             | Provider::Factory => self.add_secret_with(
                 provider,
                 label,

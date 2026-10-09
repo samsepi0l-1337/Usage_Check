@@ -11,7 +11,9 @@ pub const METRICS_CONTENT_TYPE: &str = "text/plain; version=0.0.4; charset=utf-8
 
 /// Escapes a Prometheus label value: backslash, double-quote, and newline.
 fn escape_label(v: &str) -> String {
-    v.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n")
+    v.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
 }
 
 /// Appends one `usagecheck_used_percent` gauge line. Non-finite values (NaN /
@@ -20,6 +22,7 @@ fn push_metric(
     out: &mut String,
     provider: &str,
     account: &str,
+    account_id: &str,
     pool: Option<&str>,
     window: &str,
     value: f64,
@@ -32,18 +35,19 @@ fn push_metric(
         None => String::new(),
     };
     out.push_str(&format!(
-        "usagecheck_used_percent{{provider=\"{}\",account=\"{}\"{},window=\"{}\"}} {}\n",
+        "usagecheck_used_percent{{provider=\"{}\",account=\"{}\",account_id=\"{}\"{},window=\"{}\"}} {}\n",
         escape_label(provider),
         escape_label(account),
+        escape_label(account_id),
         pool_label,
-        window,
+        escape_label(window),
         value,
     ));
 }
 
 /// Renders the usage snapshot as Prometheus text-format metrics: an
 /// `usagecheck_account_count` gauge plus one `usagecheck_used_percent` gauge
-/// per account/window (and per agy pool/window), labeled by provider/account.
+/// per account/window (and per agy pool/window), labeled by provider/account/account_id.
 pub fn metrics_body(resp: &UsageResponse) -> String {
     let mut out = String::new();
     out.push_str("# HELP usagecheck_account_count Number of accounts in the snapshot.\n");
@@ -56,17 +60,49 @@ pub fn metrics_body(resp: &UsageResponse) -> String {
     for a in &resp.accounts {
         let (provider, account) = (a.provider.as_str(), a.display_name.as_str());
         if let Some(q) = &a.five_hour {
-            push_metric(&mut out, provider, account, None, "5h", q.used_percent);
+            push_metric(
+                &mut out,
+                provider,
+                account,
+                &a.id,
+                None,
+                q.export_window_label(),
+                q.used_percent,
+            );
         }
         if let Some(q) = &a.week {
-            push_metric(&mut out, provider, account, None, "7d", q.used_percent);
+            push_metric(
+                &mut out,
+                provider,
+                account,
+                &a.id,
+                None,
+                q.export_window_label(),
+                q.used_percent,
+            );
         }
         for pool in &a.pools {
             if let Some(q) = &pool.five_hour {
-                push_metric(&mut out, provider, account, Some(&pool.name), "5h", q.used_percent);
+                push_metric(
+                    &mut out,
+                    provider,
+                    account,
+                    &a.id,
+                    Some(&pool.name),
+                    q.export_window_label(),
+                    q.used_percent,
+                );
             }
             if let Some(q) = &pool.week {
-                push_metric(&mut out, provider, account, Some(&pool.name), "7d", q.used_percent);
+                push_metric(
+                    &mut out,
+                    provider,
+                    account,
+                    &a.id,
+                    Some(&pool.name),
+                    q.export_window_label(),
+                    q.used_percent,
+                );
             }
         }
     }

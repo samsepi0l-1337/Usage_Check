@@ -3,7 +3,7 @@
 > **Status: Pro activation is NOT available in the current release.** The
 > licensing service is not live, and shipped builds embed the documented
 > placeholder verification key, so every activation attempt fails and no
-> license key unlocks Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot, Windsurf, MiniMax, Augment, Poe, Fireworks, Novita, Amp, Z.AI, Alibaba Token Plan, Trae, Kiro or Factory — for anyone. Codex, Claude
+> license key unlocks Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot, Windsurf, MiniMax, Augment, Poe, Fireworks, Novita, Amp, Z.AI, Alibaba Token Plan, Trae, Kiro, Factory, Moonshot API or NanoGPT — for anyone. Codex, Claude
 > and agy remain free, with one active account per provider in the unlicensed
 > Free state. The runtime gate preserves already-configured paid accounts and
 > surplus free-provider accounts and renders them as `pro_required`. This
@@ -14,7 +14,7 @@
 UsageCheck ships as **one binary** for everyone. Codex, Claude, and agy
 (Gemini/Antigravity) are free, with one active account each in Free and
 unlimited accounts in Pro. A **Pro license key** is designed to unlock
-Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot, Windsurf, MiniMax, Augment, Poe, Fireworks, Novita, Amp, Z.AI, Alibaba Token Plan, Trae, Kiro, and Factory at **runtime** — there is no separate Free/Pro
+Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot, Windsurf, MiniMax, Augment, Poe, Fireworks, Novita, Amp, Z.AI, Alibaba Token Plan, Trae, Kiro, Factory, Moonshot API, and NanoGPT at **runtime** — there is no separate Free/Pro
 binary, no compile-time edition Cargo feature, and no `tauri.pro.conf.json`
 override.
 This replaces the two-binary/compile-time-edition split UsageCheck used
@@ -34,7 +34,7 @@ For local development-only Pro verification, see [`docs/dev-pro.md`](dev-pro.md)
 | Product name | `UsageCheck` |
 | Bundle ID | `com.usagecheck.desktop` |
 | Config | `src-tauri/tauri.conf.json` (the only Tauri config — no per-edition override file) |
-| Providers | Codex, Claude, Gemini (agy) free with one active account each while unlicensed; unlimited accounts plus Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot, Windsurf, MiniMax, Augment, Poe, Fireworks, Novita, Amp, Z.AI, Alibaba Token Plan, Trae, Kiro, Factory once Pro is active |
+| Providers | Codex, Claude, Gemini (agy) free with one active account each while unlicensed; unlimited accounts plus Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot, Windsurf, MiniMax, Augment, Poe, Fireworks, Novita, Amp, Z.AI, Alibaba Token Plan, Trae, Kiro, Factory, Moonshot API, NanoGPT once Pro is active |
 
 **Gemini** is not a separate `Provider` enum variant. It is implemented as
 `Provider::Agy` (Antigravity), which polls the Antigravity **Gemini Models**
@@ -77,6 +77,8 @@ clock-rollback handling: [`docs/LICENSE_API.md`](LICENSE_API.md).
 | **Higgsfield** | Yes | **Add Higgsfield (CLI)** | `higgsfield account status --json` subprocess | Credits used % + `N credits left` |
 | **Kimi Code** | Yes | **Add Kimi (CLI)** — `~/.kimi-code/credentials` (or `$KIMI_CODE_HOME`) | `GET https://api.kimi.com/coding/v1/usages` (fallback `api.kimi.ai`) | 5h / 7d used % |
 | **OpenCode Go** | Yes | **Add OpenCode Go (CLI)** — `auth.json` `opencode-go` key | `GET https://opencode.ai/zen/go/v1/usage` | rolling / weekly used % + monthly row |
+| **Moonshot API** | Yes | **Import Moonshot API (clipboard)** — international API key | [Official `GET https://api.moonshot.ai/v1/users/me/balance`](https://platform.moonshot.ai/docs/api/balance), Bearer key | Available USD balance; separate from Kimi Code quota, no used % |
+| **NanoGPT** | Yes | **Import NanoGPT (clipboard)** — API key | [Official `POST https://api.nano-gpt.com/api/check-balance`](https://docs.nano-gpt.com/api-reference/endpoint/check-balance), `x-api-key` | Read-only balance query; USD and XNO shown separately, no used % |
 | **DeepSeek** | Yes | **Add DeepSeek (dsh)** — `~/.dsh/.credentials.yaml` or `.env` | Official `GET https://api.deepseek.com/user/balance` | Remaining balance (`¥`/`$ left`), no invented used % |
 | **OpenRouter** | Yes | **Add OpenRouter (CLI)** — `~/.ori/config.json` or OpenCode `auth.json` `openrouter` | Official `GET https://openrouter.ai/api/v1/key` | Period used % when capped; otherwise `$ left` / `$ used` |
 | **GitHub Copilot** | Yes | **Import GitHub Copilot (local, Experimental)** — `~/.config/github-copilot` / `gh` hosts.yml | Undocumented `GET https://api.github.com/copilot_internal/user` | Premium used % (monthly) or `unlimited` |
@@ -200,6 +202,24 @@ subscription quota. There is no SuperGrok integration.
    (including OpenRouter) are ignored by this provider.
 4. Polling uses `GET https://opencode.ai/zen/go/v1/usage`. HTTP 403 means
    a Zen key or no Go subscription (`needs_setup`).
+
+#### Moonshot API and NanoGPT wallets
+
+With Pro active, copy one API key and choose its **Import … (clipboard)** tray
+entry. UsageCheck snapshots the key into the existing app-owned credential store;
+subsequent polling does not reread CLI credentials or clipboard contents.
+These balance APIs return no username, so tray labels use a short SHA-256 key
+fingerprint. The full fingerprint supplies the existing store deduplication identity:
+reimporting the same key is rejected, while different keys (even for the same wallet)
+remain separate accounts. The fingerprint is not the provider's account ID.
+
+Moonshot uses the international API endpoint and displays `data.available_balance`
+in USD. Keys from the Chinese platform are independent and unsupported here.
+HTTP 401/403 asks for login again; failed or malformed responses produce `error`
+rather than a zero balance. NanoGPT's documented POST endpoint only queries balances;
+`usd_balance` and `nano_balance` are displayed separately with no currency conversion.
+Neither wallet has a documented quota denominator, so neither produces used %.
+Live authenticated calls require each user's key and remain unverified in development.
 
 #### DeepSeek
 
@@ -515,7 +535,7 @@ mode), on by default. There is no edition feature and no
 | **Factory** | **Experimental.** `usedRatio` from subscription usage. Encrypted `auth.v2` fails closed. |
 | **Claude CLI accounts** | Usage depends on a status-line bridge installed into the isolated profile; a newly added Claude CLI account shows `waiting_for_usage` until `claude` is run in that profile and renders its status line at least once. |
 | **Offline grace** | A Pro license verified once keeps working offline for 14 days (`license::OFFLINE_GRACE`); beyond that (or on a detected clock rollback) the tray shows `License: verification needed` until the next successful online refresh. |
-| **Local API** | `GET /v1/usage/{provider}` documents `codex` \| `claude` \| `agy` only; Pro providers appear in the full `/v1/usage` snapshot once a Pro license is active. |
+| **Local API** | `GET /v1/usage/{provider}` accepts all 25 registered provider IDs listed in `docs/openapi.yaml`. Both filtered and full `/v1/usage` snapshots retain stored Pro accounts as `pro_required` without quota values while unlicensed. |
 
 ## Build and release
 
@@ -575,7 +595,7 @@ cargo build -p usage-app --release
 ## 한국어 요약
 
 - UsageCheck는 **단일 바이너리**입니다. Codex, Claude, Gemini(agy)는 무료.
-- Pro 라이선스 키를 활성화하면 런타임에 Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot, Windsurf, MiniMax, Augment, Poe, Fireworks, Novita, Amp, Z.AI, Alibaba Token Plan, Trae, Kiro, Factory가 열립니다 (별도 바이너리 없음).
+- Pro 라이선스 키를 활성화하면 런타임에 Cursor, Grok, Higgsfield, Kimi, OpenCode Go, DeepSeek, OpenRouter, GitHub Copilot, Windsurf, MiniMax, Augment, Poe, Fireworks, Novita, Amp, Z.AI, Alibaba Token Plan, Trae, Kiro, Factory, Moonshot API, NanoGPT가 열리는 설계입니다 (별도 바이너리 없음). **이 릴리스에서는 Pro 활성화를 사용할 수 없습니다** — 문서 상단 상태 참고.
 - 트레이 메뉴 → 라이선스 섹션 → **Activate from clipboard**로 키 등록,
   **Deactivate license**로 해제, **Get a license…**로 구매 페이지 열기.
 - 활성화는 Ed25519 서명 토큰(디바이스 바인딩, 오프라인 유예 14일)으로 검증됩니다 — 자세한 내용은 `docs/LICENSE_API.md`.
