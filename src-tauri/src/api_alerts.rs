@@ -51,31 +51,33 @@ pub fn alerts_response(resp: &UsageResponse, threshold: f64) -> AlertsResponse<'
     for a in &resp.accounts {
         let account = a.display_name.as_str();
         // Account-level windows (pool = None), then each agy pool's windows.
-        for quota in [a.five_hour.as_ref(), a.week.as_ref()] {
-            if let Some(q) = quota {
+        for q in [a.five_hour.as_ref(), a.week.as_ref()]
+            .into_iter()
+            .flatten()
+        {
+            if q.used_percent.is_finite() && q.used_percent >= threshold {
+                alerts.push(Alert {
+                    provider: a.provider,
+                    account,
+                    window: q.export_window_label(),
+                    pool: None,
+                    used_percent: q.used_percent,
+                });
+            }
+        }
+        for pool in &a.pools {
+            for q in [pool.five_hour.as_ref(), pool.week.as_ref()]
+                .into_iter()
+                .flatten()
+            {
                 if q.used_percent.is_finite() && q.used_percent >= threshold {
                     alerts.push(Alert {
                         provider: a.provider,
                         account,
                         window: q.export_window_label(),
-                        pool: None,
+                        pool: Some(&pool.name),
                         used_percent: q.used_percent,
                     });
-                }
-            }
-        }
-        for pool in &a.pools {
-            for quota in [pool.five_hour.as_ref(), pool.week.as_ref()] {
-                if let Some(q) = quota {
-                    if q.used_percent.is_finite() && q.used_percent >= threshold {
-                        alerts.push(Alert {
-                            provider: a.provider,
-                            account,
-                            window: q.export_window_label(),
-                            pool: Some(&pool.name),
-                            used_percent: q.used_percent,
-                        });
-                    }
                 }
             }
         }

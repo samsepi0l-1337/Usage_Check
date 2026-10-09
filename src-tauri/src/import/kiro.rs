@@ -67,16 +67,6 @@ pub fn kiro_endpoints(region: &str) -> Option<(String, String)> {
     Some((refresh, usage))
 }
 
-/// Region from `region` / `awsRegion` or `profileArn` (`arn:aws:codewhisperer:<region>:…`).
-pub fn kiro_region_from_token(root: &serde_json::Value) -> Option<String> {
-    if let Some(region) = first_string(root, &["region", "awsRegion", "aws_region"]) {
-        if let Some(ok) = normalize_kiro_region(&region) {
-            return Some(ok);
-        }
-    }
-    region_from_profile_arn(&first_string(root, &["profileArn", "profile_arn", "arn"])?)
-}
-
 pub fn region_from_profile_arn(arn: &str) -> Option<String> {
     // arn:aws:codewhisperer:us-east-1:123:profile/…
     let region = arn.split(':').nth(3)?;
@@ -151,21 +141,10 @@ mod tests {
     }
 
     #[test]
-    fn region_from_arn_and_field() {
+    fn region_from_arn() {
         assert_eq!(
             region_from_profile_arn("arn:aws:codewhisperer:eu-central-1:1:profile/x").as_deref(),
             Some("eu-central-1")
-        );
-        assert_eq!(
-            kiro_region_from_token(&json!({ "region": "us-west-2" })).as_deref(),
-            Some("us-west-2")
-        );
-        assert_eq!(
-            kiro_region_from_token(&json!({
-                "profileArn": "arn:aws:codewhisperer:ap-southeast-1:1:profile/x"
-            }))
-            .as_deref(),
-            Some("ap-southeast-1")
         );
     }
 
@@ -197,10 +176,6 @@ mod tests {
         ] {
             assert!(!kiro_region_ok(hostile), "{hostile}");
             assert!(kiro_endpoints(hostile).is_none(), "{hostile}");
-            assert!(
-                kiro_region_from_token(&json!({ "region": hostile })).is_none(),
-                "{hostile}"
-            );
             assert!(
                 region_from_profile_arn(&format!("arn:aws:codewhisperer:{hostile}:1:profile/x"))
                     .is_none(),
