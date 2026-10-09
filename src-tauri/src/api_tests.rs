@@ -51,9 +51,11 @@ fn sample_auth_source(provider: Provider, identity: &str) -> AuthSource {
             database_path: "/profiles/trae/state.vscdb".into(),
             expected_identity: identity.into(),
         },
-        Provider::Kiro | Provider::Factory => AuthSource::BrowserOAuth {
-            credential_id: format!("{identity}-credential"),
-        },
+        Provider::Kiro | Provider::Factory | Provider::Moonshot | Provider::NanoGpt => {
+            AuthSource::BrowserOAuth {
+                credential_id: format!("{identity}-credential"),
+            }
+        }
     }
 }
 fn sample(provider: Provider, id: &str, five: Option<f64>, week: Option<f64>) -> AccountUsage {
@@ -138,7 +140,12 @@ fn dto_derives_window_label_when_duration_is_known() {
 
 #[test]
 fn dto_labels_cursor_and_grok_usage_as_billing_periods() {
-    for provider in [Provider::Cursor, Provider::Grok] {
+    for provider in [
+        Provider::Cursor,
+        Provider::Grok,
+        Provider::Moonshot,
+        Provider::NanoGpt,
+    ] {
         let mut usage = sample(provider, "billing", None, Some(42.0));
         usage.week.as_mut().unwrap().window_seconds = None;
 
@@ -455,6 +462,8 @@ fn provider_filter_accepts_pro_providers() {
         sample(Provider::Trae, "trae", None, None),
         sample(Provider::Kiro, "kiro", None, None),
         sample(Provider::Factory, "factory", None, None),
+        sample(Provider::Moonshot, "moonshot", None, None),
+        sample(Provider::NanoGpt, "nanogpt", None, None),
     ]);
     for provider in [
         "cursor",
@@ -477,6 +486,8 @@ fn provider_filter_accepts_pro_providers() {
         "trae",
         "kiro",
         "factory",
+        "moonshot",
+        "nanogpt",
     ] {
         let reply = route(&state, "GET", &format!("/v1/usage/{provider}"));
         assert_eq!(reply.status, 200);

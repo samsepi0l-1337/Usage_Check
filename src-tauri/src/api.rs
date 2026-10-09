@@ -75,7 +75,9 @@ impl WindowLabelHint {
             | Provider::Amp
             | Provider::Trae
             | Provider::Kiro
-            | Provider::Factory => WindowLabelHint::BillingPeriod,
+            | Provider::Factory
+            | Provider::Moonshot
+            | Provider::NanoGpt => WindowLabelHint::BillingPeriod,
             Provider::Higgsfield
             | Provider::DeepSeek
             | Provider::Augment
@@ -94,7 +96,9 @@ impl WindowLabelHint {
             | Provider::Amp
             | Provider::Trae
             | Provider::Kiro
-            | Provider::Factory => WindowLabelHint::BillingPeriod,
+            | Provider::Factory
+            | Provider::Moonshot
+            | Provider::NanoGpt => WindowLabelHint::BillingPeriod,
             Provider::Codex
             | Provider::Claude
             | Provider::Agy
@@ -469,7 +473,7 @@ pub(crate) fn route(state: &ApiState, method: &str, path: &str) -> Reply {
                         serde_json::json!({
                             "error": "unknown_provider",
                             "message": format!(
-                                "unknown provider '{}' (expected codex, claude, agy, cursor, grok, higgsfield, kimi, opencode, deepseek, openrouter, copilot, windsurf, minimax, augment, poe, fireworks, novita, amp, zai, bailian, trae, kiro, or factory)",
+                                "unknown provider '{}' (expected codex, claude, agy, cursor, grok, higgsfield, kimi, opencode, deepseek, openrouter, copilot, windsurf, minimax, augment, poe, fireworks, novita, amp, zai, bailian, trae, kiro, factory, moonshot, or nanogpt)",
                                 name
                             ),
                         })
