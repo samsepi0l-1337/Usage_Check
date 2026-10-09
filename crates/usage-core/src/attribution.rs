@@ -93,6 +93,7 @@ pub fn assign_local_usage(
 struct Assignment {
     events: Vec<ModelTokenEvent>,
     provenance: Option<LocalProvenance>,
+    attribution_blocked: bool,
 }
 
 impl Assignment {
@@ -102,6 +103,12 @@ impl Assignment {
     }
 
     fn add_signal(&mut self, provenance: LocalProvenance) {
+        // Scan health can outrank identity errors for display, but cannot
+        // make conflicted or ambiguous attribution safe to count again.
+        self.attribution_blocked |= matches!(
+            provenance,
+            LocalProvenance::Conflict | LocalProvenance::Ambiguous
+        );
         self.provenance = Some(match self.provenance {
             Some(current) => merge_provenance(current, provenance),
             None => provenance,
@@ -110,10 +117,7 @@ impl Assignment {
 
     fn finish(mut self, now: DateTime<Utc>) -> LocalUsage {
         let provenance = self.provenance.unwrap_or(LocalProvenance::NoLocalProfile);
-        if matches!(
-            provenance,
-            LocalProvenance::Ambiguous | LocalProvenance::Conflict
-        ) {
+        if self.attribution_blocked {
             return LocalUsage::none(provenance);
         }
 
@@ -136,21 +140,21 @@ fn matching_accounts(accounts: &[AccountRef], identity: &RootIdentity) -> Vec<us
         .iter()
         .enumerate()
         .filter_map(|(index, account)| {
-            let account_id_matches =
-                root_account_id
-                    .zip(account.creds_account_id)
-                    .is_some_and(|(root, expected)| {
-                        !root.trim().is_empty() && !expected.trim().is_empty() && root == expected
-                    });
-            let email_matches =
-                root_email
+            let root_id = root_account_id.filter(|id| !id.trim().is_empty());
+            let expected_id = account.creds_account_id.filter(|id| !id.trim().is_empty());
+            // Account IDs distinguish organizations sharing the same email.
+            // Email is fallback evidence only when either side lacks an ID.
+            let matches = match (root_id, expected_id) {
+                (Some(root), Some(expected)) => root == expected,
+                _ => root_email
                     .zip(account.expected_identity)
                     .is_some_and(|(root, expected)| {
                         !root.trim().is_empty()
                             && !expected.trim().is_empty()
                             && root.eq_ignore_ascii_case(expected)
-                    });
-            (account_id_matches || email_matches).then_some(index)
+                    }),
+            };
+            matches.then_some(index)
         })
         .collect()
 }
