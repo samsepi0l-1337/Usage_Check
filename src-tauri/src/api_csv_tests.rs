@@ -1,5 +1,5 @@
 use super::*;
-use crate::api::{AccountUsageDto, PoolDto, QuotaDto, TokenTotalsDto, UsageResponse};
+use crate::api::{AccountUsageDto, BreakdownDto, PoolDto, QuotaDto, TokenTotalsDto, UsageResponse};
 use usage_core::account::Provider;
 
 fn quota(percent: f64) -> QuotaDto {
@@ -11,7 +11,13 @@ fn quota(percent: f64) -> QuotaDto {
     }
 }
 
-fn dto(provider: Provider, name: &str, plan: Option<&str>, five: Option<f64>, week: Option<f64>) -> AccountUsageDto {
+fn dto(
+    provider: Provider,
+    name: &str,
+    plan: Option<&str>,
+    five: Option<f64>,
+    week: Option<f64>,
+) -> AccountUsageDto {
     AccountUsageDto {
         id: name.into(),
         provider,
@@ -71,7 +77,10 @@ fn emits_header_and_row_per_window() {
         Some(18.0),
     )]));
     let lines: Vec<&str> = body.lines().collect();
-    assert_eq!(lines[0], "provider,account,plan,status,window,pool,used_percent");
+    assert_eq!(
+        lines[0],
+        "provider,account,plan,status,window,pool,used_percent"
+    );
     assert!(lines.contains(&"codex,alice,pro,ok,5h,,42.5"));
     assert!(lines.contains(&"codex,alice,pro,ok,7d,,18"));
 }
@@ -90,7 +99,13 @@ fn skips_absent_and_nonfinite_windows() {
 
 #[test]
 fn empty_plan_renders_as_empty_field() {
-    let body = csv_body(&response(vec![dto(Provider::Codex, "a", None, Some(1.0), None)]));
+    let body = csv_body(&response(vec![dto(
+        Provider::Codex,
+        "a",
+        None,
+        Some(1.0),
+        None,
+    )]));
     assert!(body.contains("codex,a,,ok,5h,,1"));
 }
 
@@ -104,4 +119,16 @@ fn emits_pool_rows() {
     }];
     let body = csv_body(&response(vec![agy]));
     assert!(body.contains("agy,bob,,ok,7d,Gemini Models,30"));
+}
+
+#[test]
+fn emits_claude_fable_breakdown_row() {
+    let mut claude = dto(Provider::Claude, "fix", None, Some(6.0), Some(6.0));
+    claude.breakdown = vec![BreakdownDto {
+        label: "Fable".into(),
+        usage: quota(44.0),
+    }];
+    let body = csv_body(&response(vec![claude]));
+    assert!(body.contains("claude,fix,,ok,7d,,6"));
+    assert!(body.contains("claude,fix,,ok,Fable,,44"));
 }

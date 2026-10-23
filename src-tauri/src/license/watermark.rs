@@ -3,8 +3,9 @@
 //!
 //! Unifying rule: **the watermark may only ever be ADVANCED by
 //! SERVER-AUTHENTICATED time** — a freshly-signed token's own `issued_at`
-//! (see [`repair_watermark_in`], called only from
-//! `super::activate_or_refresh_in`, and only once the candidate has passed
+//! (see [`repair_watermark_in`], called from
+//! `super::activate_or_refresh_in` and `super::persist_signed_pro_license_in`,
+//! and only once the candidate has passed
 //! signature/device/replay verification AND the FULL `decide_status`
 //! evaluation — against an in-memory candidate watermark, not this one —
 //! has resolved to `Pro` (A): a candidate that verifies but is expired,
@@ -85,8 +86,9 @@ pub(super) fn read_watermark_in(app_data_dir: Option<&Path>) -> Option<Watermark
 /// F3: REPLACES the persisted watermark with
 /// `{ max_seen: max(now, source_issued_at), source_issued_at }`, ignoring
 /// whatever was previously on disk (missing, corrupt, or far-future). This
-/// is the ONLY way the watermark ever advances — called exclusively from
-/// `super::activate_or_refresh_in`, and only AFTER the candidate has passed
+/// is the ONLY way the watermark ever advances — called from
+/// `super::activate_or_refresh_in` and `super::persist_signed_pro_license_in`,
+/// and only AFTER the candidate has passed
 /// signature/device/replay verification AND the full `decide_status`
 /// evaluation (run first, against an in-memory candidate watermark computed
 /// with this exact same formula — see `super::activate_or_refresh_in`) has

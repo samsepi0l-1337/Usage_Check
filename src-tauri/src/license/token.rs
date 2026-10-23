@@ -25,22 +25,21 @@ pub struct TokenPayload {
     pub expires_at: Option<DateTime<Utc>>,
 }
 
-/// Why a token failed to verify. Every variant maps to [`super::LicenseStatus::Free`]
-/// in `decide_status` — this type exists for logging/diagnostics only; never
-/// surface it to a user in a way that helps a forger distinguish "wrong
-/// signature" from "wrong device" etc.
+/// Why a token failed to verify. Every variant maps to
+/// [`super::LicenseStatus::Free`] in `decide_status`; this type exists for
+/// logging and diagnostics only.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenError {
     /// Not exactly two dot-separated segments, or a segment is empty.
     MalformedFormat,
-    /// A segment was not valid base64url (no padding).
+    /// A segment was not valid base64url without padding.
     Base64,
     /// The signature segment was not 64 bytes.
     MalformedSignature,
     /// The signature does not verify against the payload bytes.
     InvalidSignature,
-    /// The signature verified, but the payload bytes are not valid
-    /// `TokenPayload` JSON.
+    /// The signature verified, but the payload bytes are not valid payload
+    /// JSON.
     MalformedPayload,
 }
 
@@ -59,12 +58,9 @@ impl std::fmt::Display for TokenError {
 
 /// Verifies `token` against `public_key` and returns the decoded payload.
 ///
-/// Never logs or returns the raw token/signature bytes. Verification uses
-/// [`VerifyingKey::verify_strict`] (rejects malleable/non-canonical
-/// signatures) over the EXACT decoded payload bytes — the payload is only
-/// parsed as JSON after the signature has already been checked against those
-/// same bytes, so nothing about the trusted result depends on a
-/// re-serialization of the JSON.
+/// Never logs or returns the raw token or signature bytes. Verification uses
+/// [`VerifyingKey::verify_strict`] over the exact decoded payload bytes, and
+/// parses JSON only after signature verification succeeds.
 pub fn verify_token(token: &str, public_key: &VerifyingKey) -> Result<TokenPayload, TokenError> {
     let mut parts = token.split('.');
     let payload_b64 = parts.next().ok_or(TokenError::MalformedFormat)?;
@@ -91,10 +87,16 @@ pub fn verify_token(token: &str, public_key: &VerifyingKey) -> Result<TokenPaylo
     serde_json::from_slice::<TokenPayload>(&payload_bytes).map_err(|_| TokenError::MalformedPayload)
 }
 
-#[cfg(test)]
-pub(crate) fn encode_token(payload: &TokenPayload, signing_key: &ed25519_dalek::SigningKey) -> String {
+/// Encodes and signs a payload in the compact license-token wire format.
+/// Serialization is deterministic for this concrete struct; the returned
+/// token contains the payload and signature but is never logged here.
+#[cfg(any(test, debug_assertions))]
+pub(crate) fn encode_token(
+    payload: &TokenPayload,
+    signing_key: &ed25519_dalek::SigningKey,
+) -> String {
     use ed25519_dalek::Signer;
-    let payload_bytes = serde_json::to_vec(payload).expect("serialize test token payload");
+    let payload_bytes = serde_json::to_vec(payload).expect("serialize signed token payload");
     let signature = signing_key.sign(&payload_bytes);
     format!(
         "{}.{}",
@@ -103,13 +105,9 @@ pub(crate) fn encode_token(payload: &TokenPayload, signing_key: &ed25519_dalek::
     )
 }
 
-/// Test helper: decodes a token's payload segment, applies `mutate` to the
-/// parsed JSON, and re-encodes it WITHOUT re-signing — i.e. it keeps the
-/// original signature segment unchanged. This is the "someone hand-edited
-/// the cache file" shape the whole stage exists to defend against: the
-/// resulting string is syntactically a valid token, but its signature no
-/// longer matches the (mutated) payload bytes, so [`verify_token`] must
-/// reject it.
+/// Decodes a token payload, mutates its JSON, and re-encodes it without
+/// re-signing. The returned token is intentionally invalid and is used only
+/// to prove that cache-file tampering is rejected.
 #[cfg(test)]
 pub(crate) fn tamper_payload(token: &str, mutate: impl FnOnce(&mut serde_json::Value)) -> String {
     let (payload_b64, sig_b64) = token.split_once('.').expect("well-formed test token");

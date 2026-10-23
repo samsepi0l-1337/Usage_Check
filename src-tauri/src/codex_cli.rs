@@ -4,6 +4,7 @@ use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 use crate::cli_auth::ProviderAdapter;
+use crate::cli_bin::{login_executable, which_bin};
 use crate::terminal::TerminalCommand;
 use serde_json::Value;
 use usage_core::account::{Account, AuthSource, ProfileOwnership};
@@ -19,17 +20,11 @@ pub struct CodexProbe {
     pub secondary: Option<usage_core::models::QuotaUsage>,
 }
 
-/// Resolve the Codex executable on PATH (no `which` crate; use env::split_paths)
+/// Resolve the Codex executable on the PATH superset (Homebrew and user-local
+/// dirs included). A relative `"codex"` path fails `exists()` in
+/// `CliAuthCoordinator` and surfaces as `NeedsSetup`.
 fn which_codex() -> Option<std::path::PathBuf> {
-    if let Ok(path) = std::env::var("PATH") {
-        for dir in std::env::split_paths(&path) {
-            let candidate = dir.join(if cfg!(windows) { "codex.exe" } else { "codex" });
-            if candidate.is_file() {
-                return Some(candidate);
-            }
-        }
-    }
-    None
+    which_bin("codex")
 }
 
 /// Extract JSONL exchange into a testable function that consumes an async reader.
@@ -231,7 +226,7 @@ impl ProviderAdapter for CodexCliAdapter {
 
     fn login_command(&self, profile_root: &Path) -> TerminalCommand {
         TerminalCommand {
-            executable: std::path::PathBuf::from("codex"),
+            executable: login_executable(which_codex(), "codex"),
             args: vec![OsString::from("login")],
             env: vec![(
                 OsString::from("CODEX_HOME"),

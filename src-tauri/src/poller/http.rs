@@ -31,15 +31,18 @@ const AGY_LOAD_CODE_ASSIST_URLS: &[&str] = &[
     "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
 ];
 
+pub(super) const CODEX_USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
+
 /// Fetches live Codex quota via HTTP using `creds.access_token`. Returns
 /// `Ok(CodexQuota)` on a 200 response, `Err(status_code)` otherwise
 /// (`None` status = network/transport failure, not an HTTP error).
-pub(super) async fn fetch_codex_quota(
+pub(super) async fn fetch_codex_quota_at(
     client: &reqwest::Client,
     creds: &Credentials,
+    usage_url: &str,
 ) -> Result<CodexQuota, Option<u16>> {
     let mut req = client
-        .get("https://chatgpt.com/backend-api/wham/usage")
+        .get(usage_url)
         .header("Accept", "application/json")
         .header("User-Agent", "UsageCheck")
         .bearer_auth(&creds.access_token);
@@ -56,27 +59,52 @@ pub(super) async fn fetch_codex_quota(
     Ok(parse_codex_usage(&body))
 }
 
-/// Fetches live Claude quota via HTTP using `creds.access_token`. Same
-/// success/error shape as `fetch_codex_quota`.
-pub(super) async fn fetch_claude_quota(
+const CLAUDE_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
+const CLAUDE_USAGE_AT_WALL_URL: &str =
+    "https://api.anthropic.com/api/oauth/usage?at_wall=1&skip_spend=1";
+
+async fn fetch_claude_usage_body(
     client: &reqwest::Client,
     creds: &Credentials,
-) -> Result<ClaudeQuota, Option<u16>> {
-    let req = client
-        .get("https://api.anthropic.com/api/oauth/usage")
+    url: &str,
+) -> Result<serde_json::Value, Option<u16>> {
+    let resp = client
+        .get(url)
         .header("Accept", "application/json")
         .header("anthropic-beta", "oauth-2025-04-20")
         .header("anthropic-version", "2023-06-01")
-        .header("User-Agent", "claude-code/2.1.197")
-        .bearer_auth(&creds.access_token);
-
-    let resp = req.send().await.map_err(|_| None)?;
+        .header("User-Agent", "claude-code/2.1.263")
+        .bearer_auth(&creds.access_token)
+        .send()
+        .await
+        .map_err(|_| None)?;
     let status = resp.status();
     if !status.is_success() {
         return Err(Some(status.as_u16()));
     }
-    let body: serde_json::Value = resp.json().await.map_err(|_| Some(status.as_u16()))?;
-    Ok(parse_claude_usage(&body))
+    resp.json().await.map_err(|_| Some(status.as_u16()))
+}
+
+/// Fetches live Claude quota via HTTP using `creds.access_token`. Same
+/// success/error shape as `fetch_codex_quota`. When the default usage
+/// payload has no Fable row, retries Claude Code's `at_wall` usage URL
+/// (per-model weekly caps live there on some plans) and merges Fable.
+pub(super) async fn fetch_claude_quota(
+    client: &reqwest::Client,
+    creds: &Credentials,
+) -> Result<ClaudeQuota, Option<u16>> {
+    let body = fetch_claude_usage_body(client, creds, CLAUDE_USAGE_URL).await?;
+    let mut quota = parse_claude_usage(&body);
+    if quota.breakdown.is_empty() {
+        if let Ok(at_wall) = fetch_claude_usage_body(client, creds, CLAUDE_USAGE_AT_WALL_URL).await
+        {
+            let extra = parse_claude_usage(&at_wall);
+            if !extra.breakdown.is_empty() {
+                quota.breakdown = extra.breakdown;
+            }
+        }
+    }
+    Ok(quota)
 }
 
 async fn resolve_agy_project_id(client: &reqwest::Client, access_token: &str) -> Option<String> {
@@ -759,16 +787,46 @@ pub(super) async fn fetch_factory_usage(
 }
 
 pub(super) fn fetch_higgsfield_account_json() -> Result<serde_json::Value, ()> {
-    use std::process::Command;
+    fetch_higgsfield_account_json_with(crate::import::higgsfield_bin())
+}
 
-    let output = Command::new("higgsfield")
-        .args(["account", "status", "--json"])
-        .output()
-        .map_err(|_| ())?;
-    if !output.status.success() {
-        return Err(());
+pub(super) fn fetch_higgsfield_account_json_with(
+    bin: Option<std::path::PathBuf>,
+) -> Result<serde_json::Value, ()> {
+    let bin = bin.ok_or(())?;
+    crate::import::fetch_higgsfield_account_json_from(&bin).map_err(|_| ())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cli_bin::which_bin_in;
+    use crate::import::write_fake_higgsfield_cli;
+
+    #[test]
+    fn higgsfield_poller_missing_binary_is_err() {
+        assert!(fetch_higgsfield_account_json_with(None).is_err());
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(which_bin_in("higgsfield", [tmp.path().to_path_buf()]).is_none());
+        assert!(fetch_higgsfield_account_json_with(None).is_err());
     }
-    serde_json::from_slice(&output.stdout).map_err(|_| ())
+
+    #[test]
+    fn higgsfield_poller_uses_resolved_bin_from_which_bin_in() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bin_dir = tmp.path().join("bin");
+        std::fs::create_dir(&bin_dir).unwrap();
+        let script =
+            write_fake_higgsfield_cli(&bin_dir, r#"{"email":"poll@example.com","credits":7.5}"#);
+
+        let found = which_bin_in("higgsfield", [bin_dir.clone()]);
+        #[cfg(unix)]
+        assert_eq!(found.as_deref(), Some(script.as_path()));
+        let bin = found.or(Some(script));
+        let root = fetch_higgsfield_account_json_with(bin).expect("fake higgsfield JSON");
+        assert_eq!(root["email"], "poll@example.com");
+        assert_eq!(root["credits"], 7.5);
+    }
 }
 
 #[cfg(test)]

@@ -1080,3 +1080,48 @@ fn kiro_import_reads_token_file() {
         Some("arn:aws:codewhisperer:us-east-1:1:profile/x")
     );
 }
+
+#[test]
+fn higgsfield_missing_binary_mentions_not_found_and_path() {
+    let err = load_higgsfield_cli_auth_with(None).unwrap_err();
+    let lower = err.to_lowercase();
+    assert!(
+        lower.contains("not found"),
+        "missing Higgsfield CLI should say the binary was not found, got: {err}"
+    );
+    assert!(
+        err.contains("PATH") || lower.contains("homebrew"),
+        "missing Higgsfield CLI should mention PATH/Homebrew, got: {err}"
+    );
+}
+
+#[test]
+fn higgsfield_import_uses_resolved_bin_from_which_bin_in() {
+    use crate::cli_bin::which_bin_in;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let bin_dir = tmp.path().join("bin");
+    std::fs::create_dir(&bin_dir).unwrap();
+    let script = write_fake_higgsfield_cli(
+        &bin_dir,
+        r#"{"email":"hf@example.com","credits":42,"subscription_plan_type":"Creator"}"#,
+    );
+
+    let found = which_bin_in("higgsfield", [bin_dir.clone()]);
+    let bin = found.as_deref().unwrap_or(script.as_path());
+    #[cfg(unix)]
+    assert_eq!(found.as_deref(), Some(script.as_path()));
+    let imported = load_higgsfield_cli_auth_from(bin).unwrap();
+    assert_eq!(imported.label, "hf@example.com");
+    assert!(imported.credentials.access_token.is_empty());
+}
+
+#[test]
+fn higgsfield_which_bin_in_reports_missing_in_empty_dir() {
+    use crate::cli_bin::which_bin_in;
+
+    let tmp = tempfile::tempdir().unwrap();
+    assert!(which_bin_in("higgsfield", [tmp.path().to_path_buf()]).is_none());
+    let err = load_higgsfield_cli_auth_with(None).unwrap_err();
+    assert!(err.to_lowercase().contains("not found"), "{err}");
+}

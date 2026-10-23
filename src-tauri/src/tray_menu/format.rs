@@ -1,10 +1,10 @@
+use crate::license::{ActivationErrorClass, LicenseStatus};
+use crate::poller::AccountUsage;
 use chrono::{DateTime, Utc};
+use usage_core::account::Provider;
 use usage_core::fetch::agy::AgyQuotaPool;
 use usage_core::fetch::codex::window_label;
 use usage_core::models::{QuotaUsage, UsageBreakdownRow};
-use usage_core::account::Provider;
-use crate::license::{ActivationErrorClass, LicenseStatus};
-use crate::poller::AccountUsage;
 
 fn status_dot(status: &str) -> &'static str {
     match status {
@@ -283,8 +283,13 @@ pub(crate) fn account_usage_lines(usage: &AccountUsage) -> Vec<String> {
     vec![format!("     {}", format_usage_detail(usage))]
 }
 
-/// Formats a single per-model breakdown row, e.g. "Fable 28%". No reset
-/// suffix — the primary usage line above it already shows the reset.
+/// Formats a single per-model breakdown row, e.g. "Fable 28%" or
+/// "Fable 28% · resets 5d 3h" when that window has its own reset time.
 pub(crate) fn format_breakdown_row(row: &UsageBreakdownRow) -> String {
-    format!("{} {}", row.label, format_percent(row.usage.percent))
+    let mut line = format!("{} {}", row.label, format_percent(row.usage.percent));
+    if let Some(reset) = relative_reset(&row.usage) {
+        line.push_str(" · resets ");
+        line.push_str(&reset);
+    }
+    line
 }

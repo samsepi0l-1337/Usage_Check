@@ -56,12 +56,18 @@ pub struct AccountUsage {
     pub local_status: Option<String>,
 }
 
+/// True when `s` is usable as an account email label (not an org/account UUID).
+pub(super) fn looks_like_email(s: &str) -> bool {
+    let s = s.trim();
+    !s.is_empty() && s.contains('@')
+}
+
 pub(super) fn display_name_for(
     account: &Account,
     email: Option<&str>,
     plan: Option<&str>,
 ) -> String {
-    if let Some(email) = email.filter(|s| !s.is_empty()) {
+    if let Some(email) = email.map(str::trim).filter(|s| looks_like_email(s)) {
         return email.to_string();
     }
     let label = account.label.trim();
@@ -641,7 +647,11 @@ pub fn assemble_account_usage(
         ),
     };
     let mut account = account.clone();
-    if let Some(email) = email.as_deref().filter(|email| !email.is_empty()) {
+    if let Some(email) = email
+        .as_deref()
+        .map(str::trim)
+        .filter(|email| looks_like_email(email))
+    {
         account.label = email.to_string();
     }
 
