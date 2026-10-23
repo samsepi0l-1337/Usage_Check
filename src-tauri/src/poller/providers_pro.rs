@@ -46,10 +46,14 @@ fn cursor_outcome_status(
 ) -> &'static str {
     if session_id != expected_id {
         "identity_changed"
-    } else if fetch.is_err() {
-        "experimental_error"
     } else {
-        "ok"
+        match fetch {
+            Ok(()) => "ok",
+            // Expired/invalid Cursor JWT after refresh still means re-login,
+            // matching the documented 401/403 `needs_login` contract.
+            Err(Some(401) | Some(403)) => "needs_login",
+            Err(_) => "experimental_error",
+        }
     }
 }
 

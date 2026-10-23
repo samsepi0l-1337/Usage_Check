@@ -5,9 +5,10 @@ the runtime Pro gate without changing the production public key or contacting
 the production license endpoint.
 
 **Neither path can unlock a release binary.** The public-key override,
-isolated app-data override, and force-Pro flag are all debug-build-only. A
-release build still rejects the placeholder embedded public key and therefore
-fails closed to Free.
+isolated app-data override, force-Pro flag, `USAGECHECK_LICENSE_KEY`
+auto-activate, and default local seed are all debug-build-only. A release
+build still rejects the placeholder embedded public key and therefore fails
+closed to Free.
 
 ## Step zero: bootstrap a fresh checkout
 
@@ -46,8 +47,11 @@ to the debug app process:
 - `USAGECHECK_APP_DATA_DIR`: `.dev/app-data` by default, so the run cannot
   touch normal UsageCheck data. Set this variable before invoking the script
   to choose another isolated directory.
+- `USAGECHECK_LICENSE_KEY`: default `dev`. Debug startup POSTs this key
+  before the first tray menu, so no clipboard click is required. Setting
+  this variable also skips the placeholder seed, because a placeholder-signed
+  token would fail against `USAGECHECK_LICENSE_PUBKEY`.
 
-Copy any ordinary value, then choose **Activate from clipboard** in the tray.
 The server returns a genuine, freshly signed Pro token for the app's device.
 The server prints only its public key and endpoint; it never prints submitted
 license keys, device IDs, or tokens. Pressing Ctrl-C exits the app and stops
@@ -74,6 +78,21 @@ The submitted key selects development-only server behavior:
 | `device_limit` | `403 device_limit` | Device-cap error path |
 | `expired` | Signed `200` token with a past expiry | Client-side expiry logic |
 | Any other value | Signed `200` perpetual Pro token | Ordinary local activation |
+
+Those injection keys are for clipboard or an explicit `USAGECHECK_LICENSE_KEY`
+override. The script default is `dev`, which is not in that table.
+
+## Default local run
+
+A plain debug `cargo run -p usage-app` (no license env) seeds a
+placeholder-signed perpetual Pro `license.json` and watermark. The tray
+shows `License: Pro`, not `License: Pro (dev override)`. A stored record
+that does not currently grant Pro is overwritten.
+
+Falsy `USAGECHECK_DEV_LICENSE` (`0`, `false`, `no`, `off`) disables the
+seed. `USAGECHECK_FORCE_PRO=1` still wins and still shows
+`License: Pro (dev override)`. Release builds ignore `USAGECHECK_LICENSE_KEY`,
+`USAGECHECK_DEV_LICENSE`, and `USAGECHECK_FORCE_PRO`, and never seed.
 
 ## Quick UI-only path
 

@@ -104,7 +104,119 @@ fn auth_source_claude_usage_snapshot_round_trips_through_snapshot_reader() {
     assert_eq!(five_hour, Some(source_five_hour));
     assert_eq!(week, Some(source_week));
     assert_eq!(plan, None);
-    assert_eq!(email.as_deref(), Some("id"));
+    assert_eq!(email, None);
+}
+
+#[test]
+fn auth_source_claude_usage_snapshot_uses_email_identity_as_label() {
+    let temp = TempDir::new().expect("create temp directory");
+    let snapshot = temp.path().join("snapshot.json");
+    crate::claude_statusline::write_usage_snapshot_to_path(
+        &snapshot,
+        "User@Example.COM",
+        &ClaudeQuota {
+            five_hour: Some(QuotaUsage {
+                percent: 10.0,
+                resets_at: None,
+                window_seconds: None,
+            }),
+            week: None,
+            breakdown: Vec::new(),
+        },
+    )
+    .expect("write usage snapshot");
+
+    let CliProfileOutcome::Live(FetchOutcome::Live { email, .. }) =
+        read_claude_snapshot_outcome(&snapshot, "User@Example.COM", true)
+    else {
+        panic!("expected live Claude snapshot outcome");
+    };
+    assert_eq!(email.as_deref(), Some("user@example.com"));
+}
+
+#[test]
+fn claude_email_for_display_reads_auth_json_email() {
+    let temp = TempDir::new().expect("create temp directory");
+    std::fs::write(
+        temp.path().join(".claude.json"),
+        r#"{"oauthAccount":{"emailAddress":"User@Example.COM","accountUuid":"acc-1"}}"#,
+    )
+    .expect("write claude json");
+    assert_eq!(
+        claude_email_for_display(temp.path(), "acc-1").as_deref(),
+        Some("user@example.com")
+    );
+}
+
+#[test]
+fn claude_cli_profile_display_name_prefers_stored_email_over_uuid_identity() {
+    let account = usage_core::account::Account {
+        id: "claude-cli".into(),
+        provider: usage_core::account::Provider::Claude,
+        label: "user@example.com".into(),
+        auth_source: usage_core::account::AuthSource::CliProfile {
+            profile_root: std::path::PathBuf::from("/profile"),
+            ownership: usage_core::account::ProfileOwnership::Managed,
+            expected_identity: "d46e0ea9-243d-4806-8b2f-1450cf4a03cc".into(),
+        },
+    };
+    let usage = assemble_cli_profile_usage(
+        &account,
+        CliProfileOutcome::Live(FetchOutcome::Live {
+            five_hour: Some(QuotaUsage {
+                percent: 1.0,
+                resets_at: None,
+                window_seconds: None,
+            }),
+            week: Some(QuotaUsage {
+                percent: 6.0,
+                resets_at: None,
+                window_seconds: None,
+            }),
+            plan: None,
+            email: Some("d46e0ea9-243d-4806-8b2f-1450cf4a03cc".into()),
+            breakdown: Vec::new(),
+        }),
+        LocalUsage::none(usage_core::models::LocalProvenance::NoLocalProfile),
+    );
+    assert_eq!(usage.display_name, "user@example.com");
+    assert_eq!(usage.account.label, "user@example.com");
+}
+
+#[test]
+fn claude_cli_profile_display_name_reads_email_from_auth_json_when_label_is_uuid() {
+    let temp = TempDir::new().expect("create temp directory");
+    std::fs::write(
+        temp.path().join(".claude.json"),
+        r#"{"oauthAccount":{"emailAddress":"User@Example.COM","accountUuid":"acc-1"}}"#,
+    )
+    .expect("write claude json");
+    let account = usage_core::account::Account {
+        id: "claude-cli".into(),
+        provider: usage_core::account::Provider::Claude,
+        label: "acc-1".into(),
+        auth_source: usage_core::account::AuthSource::CliProfile {
+            profile_root: temp.path().to_path_buf(),
+            ownership: usage_core::account::ProfileOwnership::Managed,
+            expected_identity: "acc-1".into(),
+        },
+    };
+    let usage = assemble_cli_profile_usage(
+        &account,
+        CliProfileOutcome::Live(FetchOutcome::Live {
+            five_hour: Some(QuotaUsage {
+                percent: 1.0,
+                resets_at: None,
+                window_seconds: None,
+            }),
+            week: None,
+            plan: None,
+            email: Some("acc-1".into()),
+            breakdown: Vec::new(),
+        }),
+        LocalUsage::none(usage_core::models::LocalProvenance::NoLocalProfile),
+    );
+    assert_eq!(usage.display_name, "user@example.com");
 }
 
 #[tokio::test]
@@ -810,5 +922,232 @@ async fn poll_agy_does_not_evict_last_success_when_no_local_quota() {
     assert!(
         has_cached_last_success(&account.id),
         "no local-quota probe at all must not evict last_success"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Codex browser-OAuth: refresh on empty/expired token and 401, without
+// hitting live OpenAI. Mock token + usage endpoints on localhost.
+// ---------------------------------------------------------------------------
+
+use tiny_http::{Header, Response, Server};
+
+struct CodexMockCapture {
+    url: String,
+    content_type: String,
+}
+
+fn spawn_codex_oauth_mock(
+    responses: Vec<(u16, String)>,
+) -> (String, std::thread::JoinHandle<Vec<CodexMockCapture>>) {
+    let server = Server::http("127.0.0.1:0").expect("bind mock codex server");
+    let port = server.server_addr().to_ip().expect("ipv4 bind").port();
+    let base = format!("http://127.0.0.1:{port}");
+    let handle = std::thread::spawn(move || {
+        let mut captured = Vec::new();
+        for (status, body) in responses {
+            match server.recv_timeout(std::time::Duration::from_secs(5)) {
+                Ok(Some(mut request)) => {
+                    let mut discard = String::new();
+                    let _ = std::io::Read::read_to_string(request.as_reader(), &mut discard);
+                    let content_type = request
+                        .headers()
+                        .iter()
+                        .find(|header| header.field.equiv("Content-Type"))
+                        .map(|header| header.value.as_str().to_string())
+                        .unwrap_or_default();
+                    captured.push(CodexMockCapture {
+                        url: request.url().to_string(),
+                        content_type,
+                    });
+                    let header = Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..])
+                        .expect("static content-type");
+                    let response = Response::from_string(body)
+                        .with_status_code(status)
+                        .with_header(header);
+                    let _ = request.respond(response);
+                }
+                _ => break,
+            }
+        }
+        captured
+    });
+    (base, handle)
+}
+
+fn quota_ok_body() -> String {
+    json!({
+        "plan_type": "plus",
+        "email": "user@example.com",
+        "rate_limit": {
+            "primary_window": {
+                "used_percent": 10.0,
+                "limit_window_seconds": 18000
+            },
+            "secondary_window": {
+                "used_percent": 5.0,
+                "limit_window_seconds": 604800
+            }
+        }
+    })
+    .to_string()
+}
+
+fn token_ok_body() -> String {
+    json!({
+        "access_token": "new-access",
+        "refresh_token": "new-rt",
+        "expires_in": 3600
+    })
+    .to_string()
+}
+
+fn add_codex_browser_account(store: &crate::store::AccountStore, creds: Credentials) -> Account {
+    store
+        .add_with(
+            Provider::Codex,
+            "user@example.com".into(),
+            creds,
+            || true,
+        )
+        .expect("add Codex browser account")
+}
+
+#[tokio::test]
+async fn poll_codex_oauth_refreshes_empty_access_token_then_fetches_quota() {
+    let (base, handle) =
+        spawn_codex_oauth_mock(vec![(200, token_ok_body()), (200, quota_ok_body())]);
+    let token_url = format!("{base}/oauth/token");
+    let usage_url = format!("{base}/backend-api/wham/usage");
+
+    let temp = TempDir::new().expect("temp store");
+    let store = crate::store::AccountStore::new_at(temp.path().join("store"));
+    let account = add_codex_browser_account(
+        &store,
+        Credentials {
+            access_token: String::new(),
+            refresh_token: Some("rt-test".into()),
+            account_id: Some("acct-1".into()),
+            expires_at: None,
+        },
+    );
+    let client = reqwest::Client::new();
+    let outcome =
+        poll_codex_oauth_at(&store, &client, &account, Some(&token_url), &usage_url).await;
+    let captured = handle.join().expect("mock server");
+
+    match outcome {
+        FetchOutcome::Live {
+            five_hour,
+            week,
+            email,
+            ..
+        } => {
+            assert_eq!(five_hour.as_ref().map(|q| q.percent), Some(10.0));
+            assert_eq!(week.as_ref().map(|q| q.percent), Some(5.0));
+            assert_eq!(email.as_deref(), Some("user@example.com"));
+        }
+        other => panic!("expected live quota, got {other:?}"),
+    }
+    assert!(
+        captured
+            .iter()
+            .any(|c| c.url.contains("oauth/token") && c.content_type.contains("application/json")),
+        "empty access token must JSON-refresh before quota fetch"
+    );
+    let persisted = store
+        .credentials(crate::store::AccountStore::credential_key(&account))
+        .expect("persisted");
+    assert_eq!(persisted.access_token, "new-access");
+}
+
+#[tokio::test]
+async fn poll_codex_oauth_retries_quota_after_401_when_refresh_succeeds() {
+    let (base, handle) = spawn_codex_oauth_mock(vec![
+        (401, r#"{"detail":"unauthorized"}"#.into()),
+        (200, token_ok_body()),
+        (200, quota_ok_body()),
+    ]);
+    let token_url = format!("{base}/oauth/token");
+    let usage_url = format!("{base}/backend-api/wham/usage");
+
+    let temp = TempDir::new().expect("temp store");
+    let store = crate::store::AccountStore::new_at(temp.path().join("store"));
+    let account = add_codex_browser_account(
+        &store,
+        Credentials {
+            access_token: "stale-but-unexpired".into(),
+            refresh_token: Some("rt-test".into()),
+            account_id: Some("acct-1".into()),
+            expires_at: Some(Utc::now() + chrono::Duration::hours(2)),
+        },
+    );
+    let client = reqwest::Client::new();
+    let outcome =
+        poll_codex_oauth_at(&store, &client, &account, Some(&token_url), &usage_url).await;
+    let _ = handle.join();
+
+    match outcome {
+        FetchOutcome::Live { five_hour, .. } => {
+            assert_eq!(five_hour.as_ref().map(|q| q.percent), Some(10.0));
+        }
+        other => panic!("401 then refresh must yield live quota, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn poll_codex_oauth_refresh_401_is_needs_login() {
+    let (base, handle) = spawn_codex_oauth_mock(vec![(401, r#"{"error":"invalid_grant"}"#.into())]);
+    let token_url = format!("{base}/oauth/token");
+    let usage_url = format!("{base}/backend-api/wham/usage");
+
+    let temp = TempDir::new().expect("temp store");
+    let store = crate::store::AccountStore::new_at(temp.path().join("store"));
+    let account = add_codex_browser_account(
+        &store,
+        Credentials {
+            access_token: String::new(),
+            refresh_token: Some("rt-revoked".into()),
+            account_id: Some("acct-1".into()),
+            expires_at: None,
+        },
+    );
+    let client = reqwest::Client::new();
+    let outcome =
+        poll_codex_oauth_at(&store, &client, &account, Some(&token_url), &usage_url).await;
+    let _ = handle.join();
+
+    assert!(
+        matches!(outcome, FetchOutcome::Failed { status: Some(401) }),
+        "revoked refresh_token must stay needs_login, got {outcome:?}"
+    );
+}
+
+#[tokio::test]
+async fn poll_codex_oauth_refresh_transport_failure_is_error_not_needs_login() {
+    let temp = TempDir::new().expect("temp store");
+    let store = crate::store::AccountStore::new_at(temp.path().join("store"));
+    let account = add_codex_browser_account(
+        &store,
+        Credentials {
+            access_token: String::new(),
+            refresh_token: Some("rt-test".into()),
+            account_id: Some("acct-1".into()),
+            expires_at: None,
+        },
+    );
+    let client = reqwest::Client::new();
+    let outcome = poll_codex_oauth_at(
+        &store,
+        &client,
+        &account,
+        Some("http://127.0.0.1:1/oauth/token"),
+        "http://127.0.0.1:1/usage",
+    )
+    .await;
+
+    assert!(
+        matches!(outcome, FetchOutcome::Failed { status: None }),
+        "transport failure must not collapse to needs_login when identity is still stored, got {outcome:?}"
     );
 }

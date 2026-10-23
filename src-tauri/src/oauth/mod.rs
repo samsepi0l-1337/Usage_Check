@@ -26,7 +26,7 @@ pub(crate) use google_secret::{extract_google_oauth_pair, resolve_agy_oauth_clie
 #[allow(unused_imports)]
 pub(crate) use identity::{
     account_id_from_token_response, agy_email_from_access_token, agy_identity_from_access_token,
-    chatgpt_account_id_from_id_token, google_sub_from_id_token, TokenResponse,
+    chatgpt_account_id_from_id_token, google_sub_from_id_token, jwt_exp, TokenResponse,
 };
 
 /// Codex CLI registers this exact loopback redirect with OpenAI Hydra.
@@ -280,57 +280,138 @@ pub fn should_refresh(
     }
 }
 
+/// Whether `creds` should be refreshed before a quota fetch.
+///
+/// Empty access tokens with a refresh token always refresh. Otherwise uses
+/// stored `expires_at`, falling back to the JWT `exp` claim (Codex tokens
+/// are JWTs and imports often omit `expires_at`).
+pub fn creds_need_refresh(
+    creds: &Credentials,
+    now: chrono::DateTime<Utc>,
+    threshold: Duration,
+) -> bool {
+    if creds.access_token.is_empty() {
+        return creds
+            .refresh_token
+            .as_deref()
+            .is_some_and(|token| !token.is_empty());
+    }
+    let expires_at = creds.expires_at.or_else(|| jwt_exp(&creds.access_token));
+    should_refresh(expires_at, now, threshold)
+}
+
+/// Failure from [`refresh_access_token`]. Never carries token material.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TokenRefreshError {
+    NoRefreshToken,
+    HttpStatus(u16),
+    Transport,
+    Parse,
+    Config(String),
+}
+
+impl TokenRefreshError {
+    /// True when the authorization server rejected the grant (re-login).
+    /// Network / parse failures are not permanent — identity may still be valid.
+    pub fn is_permanent_auth_failure(&self) -> bool {
+        matches!(
+            self,
+            Self::NoRefreshToken | Self::HttpStatus(400 | 401 | 403)
+        )
+    }
+}
+
+impl std::fmt::Display for TokenRefreshError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoRefreshToken => write!(f, "no refresh_token"),
+            Self::HttpStatus(status) => write!(f, "token refresh failed with status {status}"),
+            Self::Transport => write!(f, "token refresh request failed"),
+            Self::Parse => write!(f, "failed to parse token refresh response"),
+            Self::Config(msg) => write!(f, "{msg}"),
+        }
+    }
+}
+
 /// Proactively refreshes `creds` for `provider` using its stored
 /// `refresh_token`. Requires the provider to have a reproducible OAuth
 /// config (agy's `config` lookup fails, propagating here) and a present
 /// `refresh_token`.
+///
+/// Codex matches the CLI: JSON `{client_id, grant_type, refresh_token}` to
+/// `auth.openai.com/oauth/token`. Claude/agy keep form-urlencoded.
 ///
 /// SECURITY: no verifier/code/token value is ever logged; error strings
 /// carry only status codes / non-secret text.
 pub async fn refresh_access_token(
     provider: Provider,
     creds: &Credentials,
-) -> Result<Credentials, String> {
-    let cfg = config(provider)?;
+) -> Result<Credentials, TokenRefreshError> {
+    let cfg = config(provider).map_err(TokenRefreshError::Config)?;
+    refresh_access_token_at(&cfg.token_url, provider, creds).await
+}
 
+/// Same as [`refresh_access_token`] against an explicit token URL (unit tests).
+pub async fn refresh_access_token_at(
+    token_url: &str,
+    provider: Provider,
+    creds: &Credentials,
+) -> Result<Credentials, TokenRefreshError> {
+    let cfg = config(provider).map_err(TokenRefreshError::Config)?;
     let refresh_token = creds
         .refresh_token
         .as_ref()
-        .ok_or_else(|| "no refresh_token".to_string())?;
+        .filter(|token| !token.is_empty())
+        .ok_or(TokenRefreshError::NoRefreshToken)?;
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(20))
         .build()
-        .map_err(|e| format!("failed to build http client: {e}"))?;
+        .map_err(|_| TokenRefreshError::Transport)?;
 
-    let mut form: Vec<(&str, &str)> = vec![
-        ("grant_type", "refresh_token"),
-        ("refresh_token", refresh_token.as_str()),
-        ("client_id", cfg.client_id.as_str()),
-    ];
-    if let Some(secret) = cfg.client_secret.as_deref() {
-        form.push(("client_secret", secret));
-    }
-    let response = client
-        .post(&cfg.token_url)
-        .form(&form)
-        .send()
-        .await
-        .map_err(|e| format!("token refresh request failed: {e}"))?;
+    let response = if provider == Provider::Codex {
+        // Codex CLI (`codex-rs/login/src/auth/manager.rs`) posts JSON, not form.
+        client
+            .post(token_url)
+            .header("Content-Type", "application/json")
+            .json(&serde_json::json!({
+                "client_id": cfg.client_id,
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token,
+            }))
+            .send()
+            .await
+            .map_err(|_| TokenRefreshError::Transport)?
+    } else {
+        let mut form: Vec<(&str, &str)> = vec![
+            ("grant_type", "refresh_token"),
+            ("refresh_token", refresh_token.as_str()),
+            ("client_id", cfg.client_id.as_str()),
+        ];
+        if let Some(secret) = cfg.client_secret.as_deref() {
+            form.push(("client_secret", secret));
+        }
+        client
+            .post(token_url)
+            .form(&form)
+            .send()
+            .await
+            .map_err(|_| TokenRefreshError::Transport)?
+    };
 
     if !response.status().is_success() {
-        let status = response.status();
-        return Err(format!("token refresh failed with status {status}"));
+        return Err(TokenRefreshError::HttpStatus(response.status().as_u16()));
     }
 
     let body: TokenResponse = response
         .json()
         .await
-        .map_err(|e| format!("failed to parse token refresh response: {e}"))?;
+        .map_err(|_| TokenRefreshError::Parse)?;
 
     let expires_at = body
         .expires_in
-        .map(|secs| Utc::now() + chrono::Duration::seconds(secs));
+        .map(|secs| Utc::now() + chrono::Duration::seconds(secs))
+        .or_else(|| jwt_exp(&body.access_token));
 
     let account_id = account_id_from_token_response(&body).or_else(|| creds.account_id.clone());
 

@@ -61,7 +61,13 @@ pub(crate) use grok::{
     grok_imported_account, import_grok_from_clipboard, load_grok_env_auth,
     validate_grok_management_key,
 };
-pub(crate) use higgsfield::load_higgsfield_cli_auth;
+pub(crate) use higgsfield::{
+    fetch_higgsfield_account_json_from, higgsfield_bin, load_higgsfield_cli_auth,
+};
+#[cfg(test)]
+pub(crate) use higgsfield::{
+    load_higgsfield_cli_auth_from, load_higgsfield_cli_auth_with, write_fake_higgsfield_cli,
+};
 #[allow(unused_imports)]
 pub(crate) use kimi::{load_kimi_cli_auth, parse_kimi_credentials_json};
 #[allow(unused_imports)]

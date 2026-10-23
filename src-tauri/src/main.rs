@@ -150,6 +150,8 @@ fn main() {
                 eprintln!("startup: claude identity migration skipped: {error}");
             }
 
+            license::apply_debug_startup_license();
+
             let initial = tray_menu::build_menu(app.handle(), &[], None)?;
 
             // macOS + Windows: left-click opens the native usage menu

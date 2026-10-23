@@ -1,7 +1,11 @@
 use super::*;
-use base64::{engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD}, Engine as _};
+use base64::{
+    engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
+    Engine as _,
+};
 use ed25519_dalek::{Signer, SigningKey};
 use std::ffi::OsString;
+use std::path::Path;
 
 fn test_signing_key() -> SigningKey {
     SigningKey::from_bytes(&[42u8; 32])
@@ -78,7 +82,14 @@ fn no_record_is_free() {
 fn no_public_key_is_free_even_with_a_valid_record() {
     let signing_key = test_signing_key();
     let now = Utc::now();
-    let r = make_record(&signing_key, "pro", THIS_DEVICE, now - Duration::days(1), now, None);
+    let r = make_record(
+        &signing_key,
+        "pro",
+        THIS_DEVICE,
+        now - Duration::days(1),
+        now,
+        None,
+    );
     assert_eq!(
         decide_status(Some(&r), now, THIS_DEVICE, None, None),
         LicenseStatus::Free
@@ -90,7 +101,14 @@ fn tampered_token_is_free() {
     let signing_key = test_signing_key();
     let pk = signing_key.verifying_key();
     let now = Utc::now();
-    let mut r = make_record(&signing_key, "pro", THIS_DEVICE, now - Duration::days(1), now, None);
+    let mut r = make_record(
+        &signing_key,
+        "pro",
+        THIS_DEVICE,
+        now - Duration::days(1),
+        now,
+        None,
+    );
     r.token = token::tamper_payload(&r.token, |v| {
         v["device"] = serde_json::Value::String(THIS_DEVICE.into());
     });
@@ -105,7 +123,14 @@ fn token_signed_by_wrong_key_is_free() {
     let signing_key = test_signing_key();
     let wrong_pk = other_signing_key().verifying_key();
     let now = Utc::now();
-    let r = make_record(&signing_key, "pro", THIS_DEVICE, now - Duration::days(1), now, None);
+    let r = make_record(
+        &signing_key,
+        "pro",
+        THIS_DEVICE,
+        now - Duration::days(1),
+        now,
+        None,
+    );
     assert_eq!(
         decide_status(Some(&r), now, THIS_DEVICE, None, Some(&wrong_pk)),
         LicenseStatus::Free
@@ -117,7 +142,14 @@ fn malformed_token_string_is_free() {
     let signing_key = test_signing_key();
     let pk = signing_key.verifying_key();
     let now = Utc::now();
-    let mut r = make_record(&signing_key, "pro", THIS_DEVICE, now - Duration::days(1), now, None);
+    let mut r = make_record(
+        &signing_key,
+        "pro",
+        THIS_DEVICE,
+        now - Duration::days(1),
+        now,
+        None,
+    );
     r.token = "not-a-token".into();
     assert_eq!(
         decide_status(Some(&r), now, THIS_DEVICE, None, Some(&pk)),
@@ -178,7 +210,14 @@ fn expired_license_is_expired() {
     let signing_key = test_signing_key();
     let pk = signing_key.verifying_key();
     let now = Utc::now();
-    let r = make_record(&signing_key, "pro", THIS_DEVICE, now - Duration::days(2), now, Some(now - Duration::days(1)));
+    let r = make_record(
+        &signing_key,
+        "pro",
+        THIS_DEVICE,
+        now - Duration::days(2),
+        now,
+        Some(now - Duration::days(1)),
+    );
     assert_eq!(
         decide_status(Some(&r), now, THIS_DEVICE, Some(wm(now)), Some(&pk)),
         LicenseStatus::Expired
@@ -190,7 +229,14 @@ fn expiry_exactly_at_now_is_expired() {
     let signing_key = test_signing_key();
     let pk = signing_key.verifying_key();
     let now = Utc::now();
-    let r = make_record(&signing_key, "pro", THIS_DEVICE, now - Duration::days(1), now, Some(now));
+    let r = make_record(
+        &signing_key,
+        "pro",
+        THIS_DEVICE,
+        now - Duration::days(1),
+        now,
+        Some(now),
+    );
     assert_eq!(
         decide_status(Some(&r), now, THIS_DEVICE, Some(wm(now)), Some(&pk)),
         LicenseStatus::Expired
@@ -240,7 +286,14 @@ fn valid_license_within_grace_is_pro() {
     let signing_key = test_signing_key();
     let pk = signing_key.verifying_key();
     let now = Utc::now();
-    let r = make_record(&signing_key, "pro", THIS_DEVICE, now - Duration::days(1), now - Duration::days(1), None);
+    let r = make_record(
+        &signing_key,
+        "pro",
+        THIS_DEVICE,
+        now - Duration::days(1),
+        now - Duration::days(1),
+        None,
+    );
     assert_eq!(
         decide_status(Some(&r), now, THIS_DEVICE, Some(wm(now)), Some(&pk)),
         LicenseStatus::Pro { expires_at: None }
@@ -269,7 +322,10 @@ fn valid_license_with_future_expiry_is_pro() {
 // contract but is not exercised by this unit test.
 // ---------------------------------------------------------------------
 
-fn encode_dev_server_style_token(payload: &token::TokenPayload, signing_key: &SigningKey) -> String {
+fn encode_dev_server_style_token(
+    payload: &token::TokenPayload,
+    signing_key: &SigningKey,
+) -> String {
     let payload_bytes = serde_json::to_vec(payload).expect("serialize dev-server token payload");
     let signature = signing_key.sign(&payload_bytes);
     format!(
@@ -296,6 +352,158 @@ fn dev_server_style_token_verifies_and_round_trips() {
         token::verify_token(&token, &signing_key.verifying_key()).unwrap(),
         payload
     );
+}
+
+// ---------------------------------------------------------------------
+// Debug-only startup licensing decisions. These tests pass raw values and
+// the build kind directly, so no process environment or I/O is involved.
+// ---------------------------------------------------------------------
+
+#[test]
+fn debug_startup_decision_http_auto_activate_key_for() {
+    assert_eq!(http_auto_activate_key_for(true, Some("abc")), Some("abc"));
+    assert_eq!(
+        http_auto_activate_key_for(true, Some("  abc  ")),
+        Some("abc")
+    );
+    assert_eq!(http_auto_activate_key_for(true, None), None);
+    assert_eq!(http_auto_activate_key_for(true, Some("")), None);
+    assert_eq!(http_auto_activate_key_for(true, Some("   ")), None);
+    assert_eq!(
+        http_auto_activate_key_for(false, Some("abc")),
+        None,
+        "release builds must ignore even a non-empty startup key"
+    );
+}
+
+#[test]
+fn debug_startup_decision_should_seed_local_dev_license_for() {
+    assert!(should_seed_local_dev_license_for(
+        true, None, None, None, false
+    ));
+
+    for raw in ["1", "true", "yes", "on", " TRUE ", "On"] {
+        assert!(
+            should_seed_local_dev_license_for(true, None, None, Some(raw), false),
+            "{raw:?} should explicitly enable the local seed"
+        );
+    }
+
+    for raw in ["0", "false", "no", "off", " FALSE ", "", "   ", "unknown"] {
+        assert!(
+            !should_seed_local_dev_license_for(true, None, None, Some(raw), false),
+            "{raw:?} must not enable the local seed"
+        );
+    }
+
+    assert!(
+        !should_seed_local_dev_license_for(true, Some("dev"), None, None, false),
+        "a non-empty HTTP key owns startup even when local seeding defaults on"
+    );
+    assert!(
+        !should_seed_local_dev_license_for(true, Some(" dev "), None, Some("1"), false),
+        "an explicitly enabled seed must still yield to a trimmed HTTP key"
+    );
+    assert!(
+        !should_seed_local_dev_license_for(true, None, Some("1"), None, false),
+        "FORCE_PRO must suppress a redundant persisted seed"
+    );
+    assert!(
+        !should_seed_local_dev_license_for(true, None, None, None, true),
+        "an existing Pro entitlement must not be overwritten"
+    );
+    assert!(
+        !should_seed_local_dev_license_for(false, None, None, None, false),
+        "release builds must not seed despite the debug default-on value"
+    );
+}
+
+#[test]
+fn debug_startup_decision_dev_license_enabled_for() {
+    for raw in ["1", "true", "yes", "on", " TRUE ", "On"] {
+        assert!(env_flag_is_truthy(Some(raw)));
+        assert!(force_pro_enabled_for(true, Some(raw)));
+        assert!(dev_license_enabled_for(true, Some(raw)));
+    }
+
+    for raw in ["0", "false", "no", "off", " FALSE ", "", "   ", "unknown"] {
+        assert!(!env_flag_is_truthy(Some(raw)));
+        assert!(!force_pro_enabled_for(true, Some(raw)));
+        assert!(!dev_license_enabled_for(true, Some(raw)));
+    }
+
+    assert!(!env_flag_is_truthy(None));
+    assert!(
+        dev_license_enabled_for(true, None),
+        "an absent DEV_LICENSE defaults local seeding on in debug"
+    );
+    assert!(
+        !force_pro_enabled_for(true, None),
+        "an absent FORCE_PRO must remain off"
+    );
+    assert!(!dev_license_enabled_for(false, None));
+    assert!(!dev_license_enabled_for(false, Some("1")));
+}
+
+#[test]
+fn debug_startup_decision_action_for_priority() {
+    assert!(matches!(
+        debug_startup_license_action_for(true, Some("1"), None, None, false),
+        DebugStartupLicenseAction::Skip
+    ));
+
+    assert!(matches!(
+        debug_startup_license_action_for(true, None, None, None, true),
+        DebugStartupLicenseAction::Skip
+    ));
+
+    let action = debug_startup_license_action_for(true, None, Some("  dev-key  "), None, false);
+    let DebugStartupLicenseAction::HttpActivate(key) = action else {
+        panic!("a non-empty startup key must select HTTP activation");
+    };
+    assert_eq!(key, "dev-key");
+
+    let action = debug_startup_license_action_for(true, None, Some("dev-key"), Some("1"), false);
+    let DebugStartupLicenseAction::HttpActivate(key) = action else {
+        panic!("HTTP activation must take priority over an explicitly enabled seed");
+    };
+    assert_eq!(key, "dev-key");
+
+    let action = debug_startup_license_action_for(true, None, Some("dev-key"), None, true);
+    let DebugStartupLicenseAction::HttpActivate(key) = action else {
+        panic!("a startup key must be attempted even when a Pro record already exists");
+    };
+    assert_eq!(key, "dev-key");
+
+    assert!(matches!(
+        debug_startup_license_action_for(true, None, None, None, false),
+        DebugStartupLicenseAction::Seed
+    ));
+
+    assert!(matches!(
+        debug_startup_license_action_for(true, None, None, Some("0"), false),
+        DebugStartupLicenseAction::Skip
+    ));
+}
+
+#[test]
+fn debug_startup_decision_action_for_release_is_always_skip() {
+    assert!(matches!(
+        debug_startup_license_action_for(false, None, None, None, false),
+        DebugStartupLicenseAction::Skip
+    ));
+    assert!(matches!(
+        debug_startup_license_action_for(false, Some("1"), None, None, false),
+        DebugStartupLicenseAction::Skip
+    ));
+    assert!(matches!(
+        debug_startup_license_action_for(false, None, Some("dev"), None, false),
+        DebugStartupLicenseAction::Skip
+    ));
+    assert!(matches!(
+        debug_startup_license_action_for(false, None, Some("dev"), Some("1"), true),
+        DebugStartupLicenseAction::Skip
+    ));
 }
 
 // ---------------------------------------------------------------------
@@ -376,7 +584,14 @@ fn missing_watermark_fails_closed_when_a_record_is_present() {
     let signing_key = test_signing_key();
     let pk = signing_key.verifying_key();
     let now = Utc::now();
-    let r = make_record(&signing_key, "pro", THIS_DEVICE, now - Duration::days(1), now, None);
+    let r = make_record(
+        &signing_key,
+        "pro",
+        THIS_DEVICE,
+        now - Duration::days(1),
+        now,
+        None,
+    );
     assert_eq!(
         decide_status(Some(&r), now, THIS_DEVICE, None, Some(&pk)),
         LicenseStatus::GracePeriodEnded,
@@ -389,7 +604,14 @@ fn future_issued_at_is_not_pro() {
     let signing_key = test_signing_key();
     let pk = signing_key.verifying_key();
     let now = Utc::now();
-    let r = make_record(&signing_key, "pro", THIS_DEVICE, now + Duration::hours(1), now, None);
+    let r = make_record(
+        &signing_key,
+        "pro",
+        THIS_DEVICE,
+        now + Duration::hours(1),
+        now,
+        None,
+    );
     assert_eq!(
         decide_status(Some(&r), now, THIS_DEVICE, None, Some(&pk)),
         LicenseStatus::Free
@@ -403,7 +625,14 @@ fn rollback_beyond_skew_forces_grace_period_ended_even_within_naive_grace() {
     let pk = signing_key.verifying_key();
     let now = Utc::now();
     // verified_at is recent (well within OFFLINE_GRACE by naive comparison).
-    let r = make_record(&signing_key, "pro", THIS_DEVICE, now - Duration::days(1), now - Duration::hours(1), None);
+    let r = make_record(
+        &signing_key,
+        "pro",
+        THIS_DEVICE,
+        now - Duration::days(1),
+        now - Duration::hours(1),
+        None,
+    );
     let watermark = now + Duration::days(10); // clock was rolled back hard.
     assert_eq!(
         decide_status(Some(&r), now, THIS_DEVICE, Some(wm(watermark)), Some(&pk)),
@@ -439,7 +668,14 @@ fn rollback_within_skew_tolerance_does_not_affect_a_valid_license() {
     let signing_key = test_signing_key();
     let pk = signing_key.verifying_key();
     let now = Utc::now();
-    let r = make_record(&signing_key, "pro", THIS_DEVICE, now - Duration::days(1), now - Duration::hours(1), None);
+    let r = make_record(
+        &signing_key,
+        "pro",
+        THIS_DEVICE,
+        now - Duration::days(1),
+        now - Duration::hours(1),
+        None,
+    );
     let watermark = now + Duration::minutes(2); // within ROLLBACK_SKEW.
     assert_eq!(
         decide_status(Some(&r), now, THIS_DEVICE, Some(wm(watermark)), Some(&pk)),
@@ -465,7 +701,13 @@ fn watermark_max_seen_earlier_than_current_token_issued_at_is_tampering() {
         source_issued_at: issued_at - Duration::days(1),
     };
     assert_eq!(
-        decide_status(Some(&r), now, THIS_DEVICE, Some(regressed_watermark), Some(&pk)),
+        decide_status(
+            Some(&r),
+            now,
+            THIS_DEVICE,
+            Some(regressed_watermark),
+            Some(&pk)
+        ),
         LicenseStatus::GracePeriodEnded,
         "a watermark predating the current token's issued_at must be treated as tampering"
     );
@@ -483,7 +725,13 @@ fn watermark_max_seen_exactly_at_current_token_issued_at_is_not_tampering() {
         source_issued_at: issued_at,
     };
     assert_eq!(
-        decide_status(Some(&r), now, THIS_DEVICE, Some(boundary_watermark), Some(&pk)),
+        decide_status(
+            Some(&r),
+            now,
+            THIS_DEVICE,
+            Some(boundary_watermark),
+            Some(&pk)
+        ),
         LicenseStatus::Pro { expires_at: None }
     );
 }
@@ -519,7 +767,14 @@ fn a_token_device_that_is_not_64_hex_never_reaches_pro_even_when_it_matches_exac
 
     // Too short.
     let too_short = "a".repeat(63);
-    let r = make_record(&signing_key, "pro", &too_short, now - Duration::days(1), now, None);
+    let r = make_record(
+        &signing_key,
+        "pro",
+        &too_short,
+        now - Duration::days(1),
+        now,
+        None,
+    );
     assert_eq!(
         decide_status(Some(&r), now, &too_short, Some(wm(now)), Some(&pk)),
         LicenseStatus::Free,
@@ -528,7 +783,14 @@ fn a_token_device_that_is_not_64_hex_never_reaches_pro_even_when_it_matches_exac
 
     // Uppercase hex.
     let uppercase = "A".repeat(64);
-    let r = make_record(&signing_key, "pro", &uppercase, now - Duration::days(1), now, None);
+    let r = make_record(
+        &signing_key,
+        "pro",
+        &uppercase,
+        now - Duration::days(1),
+        now,
+        None,
+    );
     assert_eq!(
         decide_status(Some(&r), now, &uppercase, Some(wm(now)), Some(&pk)),
         LicenseStatus::Free,
@@ -537,7 +799,14 @@ fn a_token_device_that_is_not_64_hex_never_reaches_pro_even_when_it_matches_exac
 
     // Non-hex characters.
     let non_hex = "g".repeat(64);
-    let r = make_record(&signing_key, "pro", &non_hex, now - Duration::days(1), now, None);
+    let r = make_record(
+        &signing_key,
+        "pro",
+        &non_hex,
+        now - Duration::days(1),
+        now,
+        None,
+    );
     assert_eq!(
         decide_status(Some(&r), now, &non_hex, Some(wm(now)), Some(&pk)),
         LicenseStatus::Free,
@@ -550,7 +819,14 @@ fn a_matching_well_formed_64_hex_device_id_still_reaches_pro() {
     let signing_key = test_signing_key();
     let pk = signing_key.verifying_key();
     let now = Utc::now();
-    let r = make_record(&signing_key, "pro", THIS_DEVICE, now - Duration::days(1), now, None);
+    let r = make_record(
+        &signing_key,
+        "pro",
+        THIS_DEVICE,
+        now - Duration::days(1),
+        now,
+        None,
+    );
     assert_eq!(
         decide_status(Some(&r), now, THIS_DEVICE, Some(wm(now)), Some(&pk)),
         LicenseStatus::Pro { expires_at: None },
@@ -571,10 +847,19 @@ const PUBKEY_ENV: &str = "USAGECHECK_LICENSE_PUBKEY";
 struct PubkeyEnvGuard(Option<OsString>);
 
 impl PubkeyEnvGuard {
+    /// Points public-key resolution at `signing_key` until this guard drops.
     fn set(signing_key: &SigningKey) -> Self {
         let previous = std::env::var_os(PUBKEY_ENV);
         let b64 = STANDARD.encode(signing_key.verifying_key().to_bytes());
         std::env::set_var(PUBKEY_ENV, b64);
+        Self(previous)
+    }
+
+    /// Removes the public-key override so debug verification uses the
+    /// embedded placeholder, then restores the prior value on drop.
+    fn unset() -> Self {
+        let previous = std::env::var_os(PUBKEY_ENV);
+        std::env::remove_var(PUBKEY_ENV);
         Self(previous)
     }
 }
@@ -584,6 +869,53 @@ impl Drop for PubkeyEnvGuard {
         match self.0.take() {
             Some(previous) => std::env::set_var(PUBKEY_ENV, previous),
             None => std::env::remove_var(PUBKEY_ENV),
+        }
+    }
+}
+
+struct EnvVarGuard {
+    key: &'static str,
+    previous: Option<OsString>,
+}
+
+impl EnvVarGuard {
+    /// Removes one process-wide environment variable for the test and
+    /// restores its previous value, including absence, when dropped.
+    fn unset(key: &'static str) -> Self {
+        let previous = std::env::var_os(key);
+        std::env::remove_var(key);
+        Self { key, previous }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        match self.previous.take() {
+            Some(previous) => std::env::set_var(self.key, previous),
+            None => std::env::remove_var(self.key),
+        }
+    }
+}
+
+struct AppDataDirGuard {
+    previous: Option<OsString>,
+}
+
+impl AppDataDirGuard {
+    /// Redirects the public app-data resolver to `path` and restores the
+    /// previous process environment when the test ends.
+    fn set(path: &Path) -> Self {
+        let previous = std::env::var_os("USAGECHECK_APP_DATA_DIR");
+        std::env::set_var("USAGECHECK_APP_DATA_DIR", path);
+        Self { previous }
+    }
+}
+
+impl Drop for AppDataDirGuard {
+    fn drop(&mut self) {
+        match self.previous.take() {
+            Some(previous) => std::env::set_var("USAGECHECK_APP_DATA_DIR", previous),
+            None => std::env::remove_var("USAGECHECK_APP_DATA_DIR"),
         }
     }
 }
@@ -636,7 +968,14 @@ fn is_pro_matches_only_the_pro_variant() {
     let device = device::device_id_in(Some(tmp.path()));
     let now = Utc::now();
 
-    let expired = make_record(&signing_key, "pro", &device, now - Duration::days(2), now, Some(now - Duration::days(1)));
+    let expired = make_record(
+        &signing_key,
+        "pro",
+        &device,
+        now - Duration::days(2),
+        now,
+        Some(now - Duration::days(1)),
+    );
     std::fs::write(
         tmp.path().join("license.json"),
         serde_json::to_string_pretty(&expired).unwrap(),
@@ -657,7 +996,10 @@ fn is_pro_matches_only_the_pro_variant() {
         serde_json::to_string_pretty(&grace_ended).unwrap(),
     )
     .unwrap();
-    assert!(!is_pro_in(Some(tmp.path())), "grace-period-ended record is not Pro");
+    assert!(
+        !is_pro_in(Some(tmp.path())),
+        "grace-period-ended record is not Pro"
+    );
 
     let valid_issued_at = now - Duration::days(1);
     let valid = make_record(&signing_key, "pro", &device, valid_issued_at, now, None);
@@ -669,7 +1011,8 @@ fn is_pro_matches_only_the_pro_variant() {
     // F1: a read/status path never creates or repairs the watermark, so — as
     // with a real prior successful activation/refresh — one must already be
     // on disk for a valid record to read as Pro.
-    watermark::repair_watermark_in(Some(tmp.path()), now, valid_issued_at).expect("repair watermark");
+    watermark::repair_watermark_in(Some(tmp.path()), now, valid_issued_at)
+        .expect("repair watermark");
     assert!(is_pro_in(Some(tmp.path())), "valid record is Pro");
 }
 
@@ -695,7 +1038,148 @@ fn status_in_reads_a_valid_record_from_disk_as_pro() {
     // would already have written (F3's `repair_watermark_in`).
     watermark::repair_watermark_in(Some(tmp.path()), now, issued_at).expect("repair watermark");
 
-    assert_eq!(status_in(Some(tmp.path())), LicenseStatus::Pro { expires_at: None });
+    assert_eq!(
+        status_in(Some(tmp.path())),
+        LicenseStatus::Pro { expires_at: None }
+    );
+}
+
+// ---------------------------------------------------------------------
+// Debug startup local-seed effects. These use the real filesystem, device-id
+// persistence, token signing and verification paths; only app-data location
+// and process environment are isolated.
+// ---------------------------------------------------------------------
+
+#[test]
+fn debug_startup_seed_local_dev_license_in_writes_placeholder_signed_pro() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _pubkey = PubkeyEnvGuard::unset();
+    let _force_pro = EnvVarGuard::unset("USAGECHECK_FORCE_PRO");
+    let tmp = tempfile::tempdir().unwrap();
+
+    seed_local_dev_license_in(Some(tmp.path())).expect("seed local debug license");
+
+    assert_eq!(
+        status_in(Some(tmp.path())),
+        LicenseStatus::Pro { expires_at: None }
+    );
+    assert!(tmp.path().join("device-id").exists());
+    assert!(tmp.path().join("clock-watermark").exists());
+
+    let json = std::fs::read_to_string(tmp.path().join("license.json")).unwrap();
+    let record: LicenseRecord = serde_json::from_str(&json).unwrap();
+    assert_eq!(record.key, "dev-local");
+
+    let placeholder_signing_key = SigningKey::from_bytes(&[0u8; 32]);
+    let payload =
+        token::verify_token(&record.token, &placeholder_signing_key.verifying_key()).unwrap();
+    assert_eq!(payload.key_id, "dev-local");
+    assert_eq!(payload.plan, "pro");
+    assert_eq!(payload.expires_at, None);
+}
+
+#[test]
+fn debug_startup_seed_local_dev_license_in_overwrites_a_non_pro_record() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _pubkey = PubkeyEnvGuard::unset();
+    let _force_pro = EnvVarGuard::unset("USAGECHECK_FORCE_PRO");
+    let tmp = tempfile::tempdir().unwrap();
+    let license_path = tmp.path().join("license.json");
+    let sentinel = b"not json";
+
+    std::fs::write(&license_path, sentinel).unwrap();
+    assert_eq!(status_in(Some(tmp.path())), LicenseStatus::Free);
+    assert!(has_stored_license_in(Some(tmp.path())));
+
+    seed_local_dev_license_in(Some(tmp.path())).expect("replace non-Pro record");
+
+    assert_ne!(std::fs::read(&license_path).unwrap(), sentinel);
+    assert_eq!(
+        status_in(Some(tmp.path())),
+        LicenseStatus::Pro { expires_at: None }
+    );
+    assert!(tmp.path().join("clock-watermark").exists());
+}
+
+#[test]
+fn debug_startup_seed_local_dev_license_in_does_not_overwrite_already_pro() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _pubkey = PubkeyEnvGuard::unset();
+    let _force_pro = EnvVarGuard::unset("USAGECHECK_FORCE_PRO");
+    let tmp = tempfile::tempdir().unwrap();
+    let license_path = tmp.path().join("license.json");
+    let watermark_path = tmp.path().join("clock-watermark");
+
+    seed_local_dev_license_in(Some(tmp.path())).expect("initial local seed");
+    let license_before = std::fs::read(&license_path).unwrap();
+    let watermark_before = std::fs::read(&watermark_path).unwrap();
+
+    seed_local_dev_license_in(Some(tmp.path())).expect("idempotent local seed");
+
+    assert_eq!(std::fs::read(&license_path).unwrap(), license_before);
+    assert_eq!(std::fs::read(&watermark_path).unwrap(), watermark_before);
+    assert_eq!(
+        status_in(Some(tmp.path())),
+        LicenseStatus::Pro { expires_at: None }
+    );
+}
+
+#[test]
+fn debug_startup_seed_local_dev_license_in_none_is_err() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _pubkey = PubkeyEnvGuard::unset();
+    let _force_pro = EnvVarGuard::unset("USAGECHECK_FORCE_PRO");
+
+    let seed_error = seed_local_dev_license_in(None).expect_err("missing app-data must fail");
+    let signing_key = SigningKey::from_bytes(&[0u8; 32]);
+    let persist_error = persist_signed_pro_license_in(None, &signing_key, "k", "id")
+        .expect_err("persisting without app-data must fail");
+
+    for error in [&seed_error, &persist_error] {
+        assert!(!error.contains("dev-local"));
+        assert!(!error.contains('k'));
+        assert!(
+            !error.contains('.'),
+            "the fixed error must not contain a dot-separated token"
+        );
+    }
+}
+
+// The env lock intentionally spans the await: it serializes process-wide env mutation.
+#[allow(clippy::await_holding_lock)]
+#[tokio::test(flavor = "current_thread")]
+async fn debug_startup_apply_seeds_when_dev_license_unset() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _pubkey = PubkeyEnvGuard::unset();
+    let _force_pro = EnvVarGuard::unset("USAGECHECK_FORCE_PRO");
+    let tmp = tempfile::tempdir().unwrap();
+
+    apply_debug_startup_license_in(Some(tmp.path()), true, None, None, None).await;
+
+    assert_eq!(
+        status_in(Some(tmp.path())),
+        LicenseStatus::Pro { expires_at: None }
+    );
+    assert!(tmp.path().join("license.json").exists());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn debug_startup_apply_public_wrapper_seeds_pro() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _pubkey = PubkeyEnvGuard::unset();
+    let tmp = tempfile::tempdir().unwrap();
+    let _app_data = AppDataDirGuard::set(tmp.path());
+    let _license_key = EnvVarGuard::unset("USAGECHECK_LICENSE_KEY");
+    let _force_pro = EnvVarGuard::unset("USAGECHECK_FORCE_PRO");
+    let _dev_license = EnvVarGuard::unset("USAGECHECK_DEV_LICENSE");
+
+    apply_debug_startup_license();
+
+    assert_eq!(
+        status_in(Some(tmp.path())),
+        LicenseStatus::Pro { expires_at: None }
+    );
+    assert!(tmp.path().join("license.json").exists());
 }
 
 // ---------------------------------------------------------------------
@@ -717,7 +1201,11 @@ fn persist_valid_pro_record_and_watermark(
     let now = Utc::now();
     let issued_at = now - Duration::days(1);
     let r = make_record(signing_key, "pro", &device, issued_at, now, None);
-    std::fs::write(dir.join("license.json"), serde_json::to_string_pretty(&r).unwrap()).unwrap();
+    std::fs::write(
+        dir.join("license.json"),
+        serde_json::to_string_pretty(&r).unwrap(),
+    )
+    .unwrap();
     watermark::repair_watermark_in(Some(dir), now, issued_at).expect("repair watermark");
     issued_at
 }
@@ -729,7 +1217,10 @@ fn deleting_the_watermark_stays_non_pro_across_repeated_evaluations() {
     let _env = PubkeyEnvGuard::set(&signing_key);
     let tmp = tempfile::tempdir().unwrap();
     persist_valid_pro_record_and_watermark(tmp.path(), &signing_key);
-    assert_eq!(status_in(Some(tmp.path())), LicenseStatus::Pro { expires_at: None });
+    assert_eq!(
+        status_in(Some(tmp.path())),
+        LicenseStatus::Pro { expires_at: None }
+    );
 
     std::fs::remove_file(tmp.path().join("clock-watermark")).unwrap();
 
@@ -888,6 +1379,9 @@ fn status_in_with_no_persisted_device_id_is_free_even_with_a_matching_empty_devi
 
     // Deliberately no `device-id` file on disk: `device_id_read_only_in`
     // returns `None`.
-    assert!(!tmp.path().join("device-id").exists(), "sanity: no device id persisted");
+    assert!(
+        !tmp.path().join("device-id").exists(),
+        "sanity: no device id persisted"
+    );
     assert_eq!(status_in(Some(tmp.path())), LicenseStatus::Free);
 }

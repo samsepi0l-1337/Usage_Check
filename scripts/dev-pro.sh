@@ -54,8 +54,9 @@ fi
 export USAGECHECK_LICENSE_PUBKEY
 export USAGECHECK_LICENSE_API
 export USAGECHECK_APP_DATA_DIR="${USAGECHECK_APP_DATA_DIR:-$DEV_DIR/app-data}"
+export USAGECHECK_LICENSE_KEY="${USAGECHECK_LICENSE_KEY:-dev}"
 
-echo 'Next: copy any key, open the UsageCheck tray menu, then choose Activate from clipboard.'
+echo 'UsageCheck will auto-activate USAGECHECK_LICENSE_KEY against the local server at startup.'
 echo "Using isolated app data at $USAGECHECK_APP_DATA_DIR"
 cd "$ROOT_DIR"
 cargo run -p usage-app
