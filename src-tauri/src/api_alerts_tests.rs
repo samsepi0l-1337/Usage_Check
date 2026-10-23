@@ -1,5 +1,5 @@
 use super::*;
-use crate::api::{AccountUsageDto, PoolDto, QuotaDto, TokenTotalsDto, UsageResponse};
+use crate::api::{AccountUsageDto, BreakdownDto, PoolDto, QuotaDto, TokenTotalsDto, UsageResponse};
 
 fn quota(percent: f64) -> QuotaDto {
     QuotaDto {
@@ -91,4 +91,21 @@ fn pool_windows_are_included() {
     assert_eq!(v["count"], 1);
     assert_eq!(v["alerts"][0]["pool"], "Gemini Models");
     assert_eq!(v["alerts"][0]["window"], "7d");
+}
+
+#[test]
+fn claude_fable_breakdown_is_included() {
+    let mut claude = dto(Provider::Claude, "fix", Some(10.0), Some(6.0));
+    claude.breakdown = vec![BreakdownDto {
+        label: "Fable".into(),
+        usage: quota(95.0),
+    }];
+    let resp = response(vec![claude]);
+    let out = alerts_response(&resp, 90.0);
+    let v = serde_json::to_value(&out).unwrap();
+    assert_eq!(v["count"], 1);
+    assert_eq!(v["alerts"][0]["account"], "fix");
+    assert_eq!(v["alerts"][0]["window"], "Fable");
+    assert_eq!(v["alerts"][0]["used_percent"], 95.0);
+    assert!(v["alerts"][0]["pool"].is_null());
 }

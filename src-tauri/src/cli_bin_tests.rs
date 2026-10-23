@@ -60,3 +60,19 @@ fn executable_names_with_windows_lists_pathext_order() {
     assert_eq!(executable_names_with("mmx.cmd", true), ["mmx.cmd"]);
     assert_eq!(executable_names_with("mmx", false), ["mmx"]);
 }
+
+#[test]
+fn login_executable_prefers_a_resolved_path() {
+    let resolved = PathBuf::from("/opt/homebrew/bin/codex");
+    assert_eq!(login_executable(Some(resolved.clone()), "codex"), resolved);
+}
+
+#[test]
+fn login_executable_falls_back_to_the_bare_name() {
+    let fallback = login_executable(None, "codex");
+    assert_eq!(fallback, PathBuf::from("codex"));
+    assert!(
+        !fallback.exists(),
+        "a relative fallback must not satisfy exists() unless cwd has that file"
+    );
+}

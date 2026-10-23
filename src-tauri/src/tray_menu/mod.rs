@@ -10,7 +10,7 @@
 //!     ● user@…
 //!        5h 12% · resets 2h 16m
 //!        7d 66% · resets 6d 3h
-//!        Fable 28%
+//!        Fable 28% · resets 6d 3h
 //!   ────────
 //!   Antigravity (agy)
 //!     ● user@…

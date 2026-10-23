@@ -1,6 +1,66 @@
 use super::*;
 
 #[test]
+fn looks_like_email_rejects_uuid_and_empty() {
+    assert!(looks_like_email("user@example.com"));
+    assert!(looks_like_email("  User@Example.COM  "));
+    assert!(!looks_like_email("d46e0ea9-243d-4806-8b2f-1450cf4a03cc"));
+    assert!(!looks_like_email(""));
+    assert!(!looks_like_email("   "));
+    assert!(!looks_like_email("Claude"));
+}
+
+#[test]
+fn display_name_ignores_uuid_email_and_keeps_stored_address() {
+    let acct = Account {
+        id: "claude-1".into(),
+        provider: Provider::Claude,
+        label: "fix.aihub01@gmail.com".into(),
+        auth_source: AuthSource::CliProfile {
+            profile_root: "/tmp/profile".into(),
+            ownership: usage_core::account::ProfileOwnership::Managed,
+            expected_identity: "d46e0ea9-243d-4806-8b2f-1450cf4a03cc".into(),
+        },
+    };
+    assert_eq!(
+        display_name_for(&acct, Some("d46e0ea9-243d-4806-8b2f-1450cf4a03cc"), None),
+        "fix.aihub01@gmail.com"
+    );
+}
+
+#[test]
+fn assemble_live_outcome_does_not_overwrite_email_label_with_uuid() {
+    let acct = Account {
+        id: "claude-1".into(),
+        provider: Provider::Claude,
+        label: "user@example.com".into(),
+        auth_source: AuthSource::CliProfile {
+            profile_root: "/tmp/profile".into(),
+            ownership: usage_core::account::ProfileOwnership::Managed,
+            expected_identity: "acc-uuid".into(),
+        },
+    };
+    let outcome = FetchOutcome::Live {
+        five_hour: Some(QuotaUsage {
+            percent: 1.0,
+            resets_at: None,
+            window_seconds: None,
+        }),
+        week: None,
+        plan: None,
+        email: Some("acc-uuid".into()),
+        breakdown: Vec::new(),
+    };
+    let result = assemble_account_usage(
+        &acct,
+        outcome,
+        LocalUsage::none(usage_core::models::LocalProvenance::NoLocalProfile),
+    );
+    assert_eq!(result.display_name, "user@example.com");
+    assert_eq!(result.account.label, "user@example.com");
+}
+
+#[test]
 fn auth_source_codex_identity_mismatch() {
     assert_eq!(
         codex_identity_status("id-a", "id-b"),

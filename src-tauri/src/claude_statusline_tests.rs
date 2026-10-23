@@ -5,7 +5,7 @@ use std::sync::Mutex;
 use tempfile::TempDir;
 use usage_core::account::{Account, ProfileOwnership, Provider};
 use usage_core::fetch::claude::ClaudeQuota;
-use usage_core::models::QuotaUsage;
+use usage_core::models::{QuotaUsage, UsageBreakdownRow};
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 
@@ -85,7 +85,42 @@ fn write_usage_snapshot_emits_exact_round_trip_shape() {
     let parsed = usage_core::fetch::claude::parse_claude_usage(&written["rate_limits"]);
     assert_eq!(parsed.five_hour, quota.five_hour);
     assert_eq!(parsed.week, quota.week);
+    assert!(parsed.breakdown.is_empty());
+    assert!(written["rate_limits"].get("limits").is_none());
     assert_eq!(written["identity"], "user@example.com");
+}
+
+#[test]
+fn write_usage_snapshot_round_trips_fable_breakdown() {
+    let temp = TempDir::new().expect("temp directory");
+    let snapshot_path = temp.path().join("statusline_snapshot.json");
+    let fable = UsageBreakdownRow {
+        label: "Fable".into(),
+        usage: quota_usage(44.0, 1_785_292_800),
+    };
+    let quota = ClaudeQuota {
+        five_hour: Some(quota_usage(10.0, 1_784_774_400)),
+        week: Some(quota_usage(22.5, 1_785_292_800)),
+        breakdown: vec![fable.clone()],
+    };
+
+    write_usage_snapshot_to_path(&snapshot_path, "user@example.com", &quota)
+        .expect("write usage snapshot");
+
+    let written = read_json(&snapshot_path);
+    assert_eq!(
+        written["rate_limits"]["seven_day_overage_included"]["utilization"],
+        44.0
+    );
+    assert_eq!(
+        written["rate_limits"]["limits"][0]["scope"]["model"]["display_name"],
+        "Fable"
+    );
+    let parsed = usage_core::fetch::claude::parse_claude_usage(&written["rate_limits"]);
+    assert_eq!(parsed.breakdown.len(), 1);
+    assert_eq!(parsed.breakdown[0].label, "Fable");
+    assert_eq!(parsed.breakdown[0].usage.percent, 44.0);
+    assert!(parsed.breakdown[0].usage.resets_at.is_some());
 }
 
 #[test]

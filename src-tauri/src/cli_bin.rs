@@ -99,6 +99,12 @@ pub(crate) fn which_bin(name: &str) -> Option<PathBuf> {
     which_bin_in(name, candidate_bin_dirs())
 }
 
+/// Executable for a CLI login command: the resolved absolute path, or a
+/// relative fallback that `exists()` will reject (NeedsSetup) when missing.
+pub(crate) fn login_executable(which: Option<PathBuf>, fallback: &str) -> PathBuf {
+    which.unwrap_or_else(|| PathBuf::from(fallback))
+}
+
 #[cfg(test)]
 #[path = "cli_bin_tests.rs"]
 mod tests;

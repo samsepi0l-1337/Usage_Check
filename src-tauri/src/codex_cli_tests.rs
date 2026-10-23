@@ -139,7 +139,17 @@ fn test_cli_adapter_login_command_clears_env_vars() {
     let adapter = CodexCliAdapter;
     let cmd = adapter.login_command(std::path::Path::new("/tmp/profile"));
 
-    assert_eq!(cmd.executable.to_string_lossy(), "codex");
+    let exe = cmd.executable.to_string_lossy();
+    assert!(
+        exe.ends_with("codex") || exe.ends_with("codex.exe"),
+        "login executable should be codex, got {exe}"
+    );
+    if which_codex().is_some() {
+        assert!(
+            cmd.executable.is_absolute() && cmd.executable.is_file(),
+            "when Codex is installed, login_command must use an existing absolute path (got {exe}); a relative name fails exists() and becomes NeedsSetup"
+        );
+    }
     assert!(cmd.args.contains(&OsString::from("login")));
 
     let env_remove_strs: Vec<String> = cmd

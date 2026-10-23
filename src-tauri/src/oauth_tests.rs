@@ -1,4 +1,5 @@
 use super::*;
+use usage_core::account::Credentials;
 
 #[test]
 fn pkce_challenge_is_url_safe_no_padding() {
@@ -307,4 +308,167 @@ fn should_refresh_true_at_exact_threshold_boundary() {
     let now = Utc::now();
     let expires_at = Some(now + chrono::Duration::seconds(60));
     assert!(should_refresh(expires_at, now, Duration::from_secs(60)));
+}
+
+fn jwt_with_exp(exp: i64) -> String {
+    let payload = URL_SAFE_NO_PAD.encode(format!(r#"{{"exp":{exp}}}"#).as_bytes());
+    format!("e30.{payload}.sig")
+}
+
+fn refresh_fixture_creds(access_token: &str) -> Credentials {
+    Credentials {
+        access_token: access_token.to_string(),
+        refresh_token: Some("rt-test".into()),
+        account_id: Some("acct-1".into()),
+        expires_at: None,
+    }
+}
+
+#[test]
+fn jwt_exp_reads_numeric_claim() {
+    let exp = 1_900_000_000;
+    assert_eq!(
+        jwt_exp(&jwt_with_exp(exp)).map(|t| t.timestamp()),
+        Some(exp)
+    );
+}
+
+#[test]
+fn creds_need_refresh_when_access_token_empty_and_refresh_present() {
+    let now = Utc::now();
+    let creds = refresh_fixture_creds("");
+    assert!(creds_need_refresh(&creds, now, Duration::from_secs(60)));
+}
+
+#[test]
+fn creds_need_refresh_uses_jwt_exp_when_expires_at_missing() {
+    let now = Utc::now();
+    let jwt = jwt_with_exp((now - chrono::Duration::seconds(5)).timestamp());
+    let creds = refresh_fixture_creds(&jwt);
+    assert!(creds_need_refresh(&creds, now, Duration::from_secs(60)));
+}
+
+#[test]
+fn creds_need_refresh_false_when_jwt_exp_comfortably_in_future() {
+    let now = Utc::now();
+    let jwt = jwt_with_exp((now + chrono::Duration::seconds(300)).timestamp());
+    let creds = refresh_fixture_creds(&jwt);
+    assert!(!creds_need_refresh(&creds, now, Duration::from_secs(60)));
+}
+
+#[test]
+fn token_refresh_error_classifies_permanent_vs_transient() {
+    assert!(TokenRefreshError::HttpStatus(401).is_permanent_auth_failure());
+    assert!(TokenRefreshError::HttpStatus(400).is_permanent_auth_failure());
+    assert!(TokenRefreshError::NoRefreshToken.is_permanent_auth_failure());
+    assert!(!TokenRefreshError::Transport.is_permanent_auth_failure());
+    assert!(!TokenRefreshError::Parse.is_permanent_auth_failure());
+    assert!(!TokenRefreshError::HttpStatus(500).is_permanent_auth_failure());
+}
+
+struct CapturedRequest {
+    content_type: String,
+    body: String,
+}
+
+fn spawn_scripted_token_server(
+    responses: Vec<(u16, String)>,
+) -> (String, std::thread::JoinHandle<Vec<CapturedRequest>>) {
+    use tiny_http::{Header, Response, Server};
+
+    let server = Server::http("127.0.0.1:0").expect("bind mock token server");
+    let port = server.server_addr().to_ip().expect("ipv4 bind").port();
+    let url = format!("http://127.0.0.1:{port}/oauth/token");
+    let handle = std::thread::spawn(move || {
+        let mut captured = Vec::new();
+        for (status, body) in responses {
+            match server.recv_timeout(Duration::from_secs(5)) {
+                Ok(Some(mut request)) => {
+                    let mut req_body = String::new();
+                    let _ = std::io::Read::read_to_string(request.as_reader(), &mut req_body);
+                    let content_type = request
+                        .headers()
+                        .iter()
+                        .find(|header| header.field.equiv("Content-Type"))
+                        .map(|header| header.value.as_str().to_string())
+                        .unwrap_or_default();
+                    captured.push(CapturedRequest {
+                        content_type,
+                        body: req_body,
+                    });
+                    let header = Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..])
+                        .expect("static content-type");
+                    let response = Response::from_string(body)
+                        .with_status_code(status)
+                        .with_header(header);
+                    let _ = request.respond(response);
+                }
+                _ => break,
+            }
+        }
+        captured
+    });
+    (url, handle)
+}
+
+fn join_scripted(handle: std::thread::JoinHandle<Vec<CapturedRequest>>) -> Vec<CapturedRequest> {
+    handle.join().expect("mock token server thread")
+}
+
+#[tokio::test]
+async fn refresh_access_token_at_codex_posts_json_and_returns_tokens() {
+    let body = serde_json::json!({
+        "access_token": "new-access",
+        "refresh_token": "new-rt",
+        "expires_in": 3600,
+    })
+    .to_string();
+    let (url, handle) = spawn_scripted_token_server(vec![(200, body)]);
+    let refreshed = refresh_access_token_at(&url, Provider::Codex, &refresh_fixture_creds("stale"))
+        .await
+        .expect("refresh should succeed against mock");
+    let captured = join_scripted(handle);
+
+    assert_eq!(refreshed.access_token, "new-access");
+    assert_eq!(refreshed.refresh_token.as_deref(), Some("new-rt"));
+    assert!(refreshed.expires_at.is_some());
+    assert_eq!(captured.len(), 1);
+    assert!(
+        captured[0].content_type.contains("application/json"),
+        "Codex refresh must be JSON (CLI contract), got {}",
+        captured[0].content_type
+    );
+    assert!(captured[0]
+        .body
+        .contains("\"grant_type\":\"refresh_token\""));
+    assert!(captured[0].body.contains("app_EMoamEEZ73f0CkXaXp7hrann"));
+    assert!(
+        !captured[0].content_type.contains("x-www-form-urlencoded"),
+        "form-urlencoded refresh is rejected by OpenAI Hydra for this client"
+    );
+}
+
+#[tokio::test]
+async fn refresh_access_token_at_http_error_is_status() {
+    let (url, handle) =
+        spawn_scripted_token_server(vec![(401, r#"{"error":"invalid_grant"}"#.into())]);
+    let err = refresh_access_token_at(&url, Provider::Codex, &refresh_fixture_creds("stale"))
+        .await
+        .expect_err("401 must not succeed");
+    let _ = join_scripted(handle);
+    assert_eq!(err, TokenRefreshError::HttpStatus(401));
+    assert!(err.is_permanent_auth_failure());
+}
+
+#[tokio::test]
+async fn refresh_access_token_at_transport_error_is_not_auth_failure() {
+    let err = refresh_access_token_at(
+        "http://127.0.0.1:1/oauth/token",
+        Provider::Codex,
+        &refresh_fixture_creds("stale"),
+    )
+    .await
+    .expect_err("closed port must fail");
+    assert_eq!(err, TokenRefreshError::Transport);
+    assert!(!err.is_permanent_auth_failure());
 }

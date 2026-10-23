@@ -90,20 +90,49 @@ pub(crate) fn write_usage_snapshot_to_path(
     // may hold a possibly-unverified live-ride account's numbers under
     // `identity`. `read_claude_snapshot_outcome` gates on this field for
     // multi-account Claude CliProfile accounts.
+    let mut rate_limits = serde_json::Map::new();
+    rate_limits.insert(
+        "five_hour".to_string(),
+        quota_window_snapshot(quota.five_hour.as_ref()),
+    );
+    rate_limits.insert(
+        "seven_day".to_string(),
+        quota_window_snapshot(quota.week.as_ref()),
+    );
+    if let Some(fable) = quota
+        .breakdown
+        .iter()
+        .find(|row| row.label.eq_ignore_ascii_case("Fable"))
+    {
+        rate_limits.insert(
+            "seven_day_overage_included".to_string(),
+            quota_window_snapshot(Some(&fable.usage)),
+        );
+        let mut limit = serde_json::Map::new();
+        limit.insert("kind".to_string(), json!("weekly_scoped"));
+        limit.insert("group".to_string(), json!("weekly"));
+        limit.insert("percent".to_string(), json!(fable.usage.percent));
+        if let Some(resets_at) = fable.usage.resets_at {
+            limit.insert("resets_at".to_string(), json!(resets_at.to_rfc3339()));
+        }
+        limit.insert(
+            "scope".to_string(),
+            json!({ "model": { "id": null, "display_name": "Fable" }, "surface": null }),
+        );
+        rate_limits.insert("limits".to_string(), json!([Value::Object(limit)]));
+    }
     let snapshot = json!({
         "identity": identity,
         "source": "live-ride",
-        "rate_limits": {
-            "five_hour": quota_window_snapshot(quota.five_hour.as_ref()),
-            "seven_day": quota_window_snapshot(quota.week.as_ref()),
-        }
+        "rate_limits": Value::Object(rate_limits),
     });
     write_snapshot(snapshot_path, &snapshot)
 }
 
 /// Persist a freshly-fetched Claude usage reading into the account's statusline
 /// snapshot so a later throttle (429) can fall back to the last-known-good
-/// windows. Writes only percentages, reset timestamps, and identity.
+/// windows (5h, 7d, and Fable when present). Writes only percentages, reset
+/// timestamps, identity, and the Fable weekly cap.
 pub fn write_usage_snapshot(
     account_id: &str,
     identity: &str,

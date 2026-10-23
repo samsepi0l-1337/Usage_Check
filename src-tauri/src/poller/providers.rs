@@ -12,27 +12,29 @@ use crate::claude_statusline;
 use crate::import;
 use crate::store::AccountStore;
 
-use super::http::{fetch_agy_quota_remote, fetch_claude_quota, fetch_codex_quota};
+use super::http::{
+    fetch_agy_quota_remote, fetch_claude_quota, fetch_codex_quota_at, CODEX_USAGE_URL,
+};
 use super::usage_model::{
     account_usage_from_agy, assemble_account_usage, claude_fetch_outcome, claude_identity_status,
-    codex_fetch_outcome, codex_identity_status, status_for_failure, AccountUsage, FetchOutcome,
+    codex_fetch_outcome, codex_identity_status, looks_like_email, status_for_failure, AccountUsage,
+    FetchOutcome,
 };
 
 /// Refresh proactively when the access token expires within this window.
 const REFRESH_THRESHOLD: Duration = Duration::from_secs(60);
-/// If `creds.expires_at` is within `REFRESH_THRESHOLD` of now (or already
-/// past), attempts a proactive refresh via `oauth::refresh_access_token` and
-/// persists the result via `store.update_credentials`. On any failure
-/// (no refresh_token, network error, non-200), the original `creds` are
-/// returned unchanged — the existing 401/403 fallback in `poll_all` still
-/// applies to a stale token that couldn't be refreshed.
+/// If the token is expired or empty (see `creds_need_refresh`), attempts a
+/// refresh via `oauth::refresh_access_token` and persists the result.
+/// On any failure the original `creds` are returned unchanged. Codex OAuth
+/// inspects refresh errors itself so a still-valid identity is not
+/// collapsed into a silent 401 `needs_login`.
 pub(crate) async fn maybe_refresh(
     store: &AccountStore,
     credential_id: &str,
     provider: Provider,
     creds: Credentials,
 ) -> Credentials {
-    if !crate::oauth::should_refresh(creds.expires_at, Utc::now(), REFRESH_THRESHOLD) {
+    if !crate::oauth::creds_need_refresh(&creds, Utc::now(), REFRESH_THRESHOLD) {
         return creds;
     }
 
@@ -42,6 +44,17 @@ pub(crate) async fn maybe_refresh(
             refreshed
         }
         Err(_) => creds,
+    }
+}
+
+async fn refresh_now(
+    provider: Provider,
+    creds: &Credentials,
+    token_url: Option<&str>,
+) -> Result<Credentials, crate::oauth::TokenRefreshError> {
+    match token_url {
+        Some(url) => crate::oauth::refresh_access_token_at(url, provider, creds).await,
+        None => crate::oauth::refresh_access_token(provider, creds).await,
     }
 }
 
@@ -266,9 +279,82 @@ pub(super) fn read_claude_snapshot_outcome(
         five_hour: quota.five_hour,
         week: quota.week,
         plan: None,
-        email: (!identity.is_empty()).then(|| identity.to_string()),
+        // Snapshot identity is often the accountUuid anchor, not an email.
+        email: looks_like_email(identity).then(|| identity.trim().to_lowercase()),
         breakdown: quota.breakdown,
     })
+}
+
+/// Email label for a Claude CLI account: stored email, else `.claude.json`
+/// `oauthAccount.emailAddress` when that file's identity matches `expected`.
+fn claude_email_for_display(profile_root: &Path, expected_identity: &str) -> Option<String> {
+    let from_root = |root: &Path| -> Option<String> {
+        let (email, account_uuid, org_uuid) = import::claude_oauth_identity_set_in(root);
+        let email = email.filter(|s| looks_like_email(s))?;
+        let email = email.trim().to_lowercase();
+        let expected = expected_identity.trim();
+        if expected.is_empty()
+            || expected.eq_ignore_ascii_case(&email)
+            || account_uuid.as_deref() == Some(expected)
+            || org_uuid.as_deref() == Some(expected)
+        {
+            Some(email)
+        } else {
+            None
+        }
+    };
+    if let Some(email) = from_root(profile_root) {
+        return Some(email);
+    }
+    let expected = expected_identity.trim();
+    if expected.is_empty() {
+        return None;
+    }
+    crate::paths::claude_config_roots()
+        .into_iter()
+        .find_map(|root| from_root(&root))
+        .or_else(|| looks_like_email(expected).then(|| expected.to_lowercase()))
+}
+
+fn claude_email_for_account(account: &Account) -> Option<String> {
+    if looks_like_email(&account.label) {
+        return Some(account.label.trim().to_lowercase());
+    }
+    match &account.auth_source {
+        AuthSource::CliProfile {
+            profile_root,
+            expected_identity,
+            ..
+        } => claude_email_for_display(profile_root, expected_identity),
+        _ => None,
+    }
+}
+
+fn apply_claude_display_email(
+    outcome: CliProfileOutcome,
+    email: Option<&str>,
+) -> CliProfileOutcome {
+    match outcome {
+        CliProfileOutcome::Live(FetchOutcome::Live {
+            five_hour,
+            week,
+            plan,
+            email: existing,
+            breakdown,
+        }) => {
+            let email = existing
+                .filter(|s| looks_like_email(s))
+                .or_else(|| email.map(str::to_string));
+            CliProfileOutcome::Live(FetchOutcome::Live {
+                five_hour,
+                week,
+                plan,
+                email,
+                breakdown,
+            })
+        }
+        other => other,
+    }
 }
 
 /// Identity-checked keychain read, bounded so a stalled auth prompt degrades
@@ -325,7 +411,7 @@ async fn refresh_and_fetch_claude(
     force_refresh: bool,
 ) -> Result<CliProfileOutcome, Option<u16>> {
     if (force_refresh && creds.refresh_token.is_some())
-        || crate::oauth::should_refresh(creds.expires_at, Utc::now(), REFRESH_THRESHOLD)
+        || crate::oauth::creds_need_refresh(&creds, Utc::now(), REFRESH_THRESHOLD)
     {
         if let Ok(refreshed) = crate::oauth::refresh_access_token(Provider::Claude, &creds).await {
             match store.set_cli_profile_credentials(account_id, &refreshed) {
@@ -344,7 +430,7 @@ async fn refresh_and_fetch_claude(
             {
                 eprintln!("failed to persist Claude usage snapshot for {account_id}: {error}");
             }
-            let email = (!expected_identity.is_empty()).then_some(expected_identity);
+            let email = looks_like_email(expected_identity).then_some(expected_identity);
             Ok(CliProfileOutcome::Live(claude_fetch_outcome(quota, email)))
         }
         Err(status) => Err(status),
@@ -405,15 +491,16 @@ pub(super) async fn poll_claude_cli_profile(
         })
         .count()
         <= 1;
+    if let Some(email) = claude_email_for_display(profile_root, expected_identity) {
+        store.update_label(account_id, &email);
+    }
     let live_creds =
         load_live_claude_creds_from_keychain(expected_identity, sole_claude_cli_profile).await;
     let mut live_fetch_status = None;
-    if let Some(live) = live_creds.as_ref().filter(|credentials| {
-        credentials
-            .expires_at
-            .as_ref()
-            .is_none_or(|expires_at| expires_at > &Utc::now())
-    }) {
+    // Ride even when `expires_at` is past: the usage API is the source of
+    // truth, and a still-accepted token is how Fable's weekly cap is read.
+    // 401/403 fall through to the app-owned cache / snapshot paths below.
+    if let Some(live) = live_creds.as_ref() {
         // Cache the live token WITHOUT its refresh_token so the app-owned path can never rotate a
         // grant Claude Code CLI owns (read-only-ride invariant, structural).
         let cached_live = Credentials {
@@ -433,7 +520,7 @@ pub(super) async fn poll_claude_cli_profile(
                 {
                     eprintln!("failed to persist Claude usage snapshot for {account_id}: {error}");
                 }
-                let email = (!expected_identity.is_empty()).then_some(expected_identity);
+                let email = looks_like_email(expected_identity).then_some(expected_identity);
                 return CliProfileOutcome::Live(claude_fetch_outcome(quota, email));
             }
             Err(status) => live_fetch_status = Some(status),
@@ -547,7 +634,15 @@ pub(super) fn assemble_cli_profile_usage(
     outcome: CliProfileOutcome,
     local: LocalUsage,
 ) -> AccountUsage {
-    match outcome {
+    let email = (account.provider == Provider::Claude)
+        .then(|| claude_email_for_account(account))
+        .flatten();
+    let outcome = if account.provider == Provider::Claude {
+        apply_claude_display_email(outcome, email.as_deref())
+    } else {
+        outcome
+    };
+    let mut usage = match outcome {
         CliProfileOutcome::Live(fetch) => assemble_account_usage(account, fetch, local),
         CliProfileOutcome::WaitingForUsage => {
             let mut usage =
@@ -561,7 +656,12 @@ pub(super) fn assemble_cli_profile_usage(
             usage.status = "identity_changed".to_string();
             usage
         }
+    };
+    if let Some(email) = email {
+        usage.display_name = email.clone();
+        usage.account.label = email;
     }
+    usage
 }
 
 pub(super) async fn poll_codex_cli_profile(
@@ -593,27 +693,93 @@ pub(super) async fn poll_codex_oauth(
     client: &reqwest::Client,
     account: &Account,
 ) -> FetchOutcome {
-    match store.credentials(AccountStore::credential_key(account)) {
-        Some(creds) if !creds.access_token.is_empty() => {
-            let creds = maybe_refresh(
-                store,
-                AccountStore::credential_key(account),
-                Provider::Codex,
-                creds,
-            )
-            .await;
-            match fetch_codex_quota(client, &creds).await {
-                Ok(quota) => {
-                    if let Some(email) = quota.email.as_deref() {
-                        store.update_label(&account.id, email);
-                    }
-                    codex_fetch_outcome(quota)
+    poll_codex_oauth_at(store, client, account, None, CODEX_USAGE_URL).await
+}
+
+/// Codex browser-OAuth poll with injectable token/usage URLs (unit tests).
+///
+/// A stored account with a `refresh_token` is refreshed when the access
+/// token is empty, expired, or rejected with 401/403. Permanent auth
+/// failures (no/invalid grant) stay `needs_login`; transport/parse
+/// failures on refresh surface as `error` so a still-valid identity is
+/// not collapsed into a silent re-login prompt.
+async fn poll_codex_oauth_at(
+    store: &AccountStore,
+    client: &reqwest::Client,
+    account: &Account,
+    token_url: Option<&str>,
+    usage_url: &str,
+) -> FetchOutcome {
+    let Some(creds) = store.credentials(AccountStore::credential_key(account)) else {
+        return FetchOutcome::Failed { status: Some(401) };
+    };
+    let has_refresh = creds
+        .refresh_token
+        .as_deref()
+        .is_some_and(|token| !token.is_empty());
+    if creds.access_token.is_empty() && !has_refresh {
+        return FetchOutcome::Failed { status: Some(401) };
+    }
+
+    let credential_id = AccountStore::credential_key(account);
+    let creds = if creds.access_token.is_empty()
+        || crate::oauth::creds_need_refresh(&creds, Utc::now(), REFRESH_THRESHOLD)
+    {
+        match persist_codex_refresh(store, credential_id, &creds, token_url).await {
+            Ok(refreshed) => refreshed,
+            Err(error) if creds.access_token.is_empty() => {
+                return if error.is_permanent_auth_failure() {
+                    FetchOutcome::Failed { status: Some(401) }
+                } else {
+                    FetchOutcome::Failed { status: None }
+                };
+            }
+            Err(_) => creds,
+        }
+    } else {
+        creds
+    };
+
+    match fetch_codex_quota_at(client, &creds, usage_url).await {
+        Ok(quota) => live_codex_quota(store, account, quota),
+        Err(status) if matches!(status, Some(401) | Some(403)) && has_refresh => {
+            match persist_codex_refresh(store, credential_id, &creds, token_url).await {
+                Ok(refreshed) => match fetch_codex_quota_at(client, &refreshed, usage_url).await {
+                    Ok(quota) => live_codex_quota(store, account, quota),
+                    Err(retry_status) => FetchOutcome::Failed {
+                        status: retry_status,
+                    },
+                },
+                Err(error) if error.is_permanent_auth_failure() => {
+                    FetchOutcome::Failed { status: Some(401) }
                 }
-                Err(status) => FetchOutcome::Failed { status },
+                Err(_) => FetchOutcome::Failed { status: None },
             }
         }
-        _ => FetchOutcome::Failed { status: Some(401) },
+        Err(status) => FetchOutcome::Failed { status },
     }
+}
+
+async fn persist_codex_refresh(
+    store: &AccountStore,
+    credential_id: &str,
+    creds: &Credentials,
+    token_url: Option<&str>,
+) -> Result<Credentials, crate::oauth::TokenRefreshError> {
+    let refreshed = refresh_now(Provider::Codex, creds, token_url).await?;
+    let _ = store.update_credentials(credential_id, &refreshed);
+    Ok(refreshed)
+}
+
+fn live_codex_quota(
+    store: &AccountStore,
+    account: &Account,
+    quota: usage_core::fetch::codex::CodexQuota,
+) -> FetchOutcome {
+    if let Some(email) = quota.email.as_deref() {
+        store.update_label(&account.id, email);
+    }
+    codex_fetch_outcome(quota)
 }
 
 pub(super) async fn poll_claude_oauth(

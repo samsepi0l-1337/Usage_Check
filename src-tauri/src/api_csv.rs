@@ -63,7 +63,7 @@ fn push_row(
 }
 
 /// Renders the usage snapshot as CSV: a header row plus one row per
-/// account/window (and per agy pool/window).
+/// account/window (agy pool/window, and per-model breakdown such as Fable).
 pub fn csv_body(resp: &UsageResponse) -> String {
     let mut out = String::from(CSV_HEADER);
     for a in &resp.accounts {
@@ -72,18 +72,66 @@ pub fn csv_body(resp: &UsageResponse) -> String {
         let account = a.display_name.as_str();
         let status = a.status.as_str();
         if let Some(q) = &a.five_hour {
-            push_row(&mut out, provider, account, plan, status, "5h", "", q.used_percent);
+            push_row(
+                &mut out,
+                provider,
+                account,
+                plan,
+                status,
+                "5h",
+                "",
+                q.used_percent,
+            );
         }
         if let Some(q) = &a.week {
-            push_row(&mut out, provider, account, plan, status, "7d", "", q.used_percent);
+            push_row(
+                &mut out,
+                provider,
+                account,
+                plan,
+                status,
+                "7d",
+                "",
+                q.used_percent,
+            );
         }
         for pool in &a.pools {
             if let Some(q) = &pool.five_hour {
-                push_row(&mut out, provider, account, plan, status, "5h", &pool.name, q.used_percent);
+                push_row(
+                    &mut out,
+                    provider,
+                    account,
+                    plan,
+                    status,
+                    "5h",
+                    &pool.name,
+                    q.used_percent,
+                );
             }
             if let Some(q) = &pool.week {
-                push_row(&mut out, provider, account, plan, status, "7d", &pool.name, q.used_percent);
+                push_row(
+                    &mut out,
+                    provider,
+                    account,
+                    plan,
+                    status,
+                    "7d",
+                    &pool.name,
+                    q.used_percent,
+                );
             }
+        }
+        for row in &a.breakdown {
+            push_row(
+                &mut out,
+                provider,
+                account,
+                plan,
+                status,
+                &row.label,
+                "",
+                row.usage.used_percent,
+            );
         }
     }
     out

@@ -1,6 +1,24 @@
 use std::time::Duration;
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use chrono::{TimeZone, Utc};
+
+/// Decodes a JWT payload object without verifying the signature. Pure — never
+/// logs the token. Used only to read non-secret identity claims (`sub`, email,
+/// ChatGPT account id) and the `exp` timestamp.
+fn jwt_payload_json(jwt: &str) -> Option<serde_json::Value> {
+    let payload_b64 = jwt.split('.').nth(1)?;
+    let bytes = URL_SAFE_NO_PAD.decode(payload_b64).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+/// Reads the JWT `exp` claim as UTC. Codex access tokens are JWTs; stored
+/// `expires_at` is often missing after import, so callers fall back to this
+/// rather than skipping refresh. Pure — never logs the token.
+pub fn jwt_exp(access_token: &str) -> Option<chrono::DateTime<Utc>> {
+    let exp = jwt_payload_json(access_token)?.get("exp")?.as_i64()?;
+    Utc.timestamp_opt(exp, 0).single()
+}
 
 /// Token-endpoint response shape (Codex/Claude both return this standard
 /// OAuth2 token response body).
@@ -14,15 +32,6 @@ pub(crate) struct TokenResponse {
     pub(crate) expires_in: Option<i64>,
     #[serde(default)]
     pub(crate) account_id: Option<String>,
-}
-
-/// Decodes a JWT payload object without verifying the signature. Pure — never
-/// logs the token. Used only to read non-secret identity claims (`sub`, email,
-/// ChatGPT account id).
-fn jwt_payload_json(jwt: &str) -> Option<serde_json::Value> {
-    let payload_b64 = jwt.split('.').nth(1)?;
-    let bytes = URL_SAFE_NO_PAD.decode(payload_b64).ok()?;
-    serde_json::from_slice(&bytes).ok()
 }
 
 /// Extracts `chatgpt_account_id` from a ChatGPT id_token JWT payload
