@@ -45,7 +45,11 @@ fn render_macos_script(command: &TerminalCommand, script_path: &Path) -> String 
     // Executable and args must share ONE command line — a trailing `\n` after
     // each token would make bash run them as separate commands (dropping the
     // args, and invoking the system `login` binary for `codex login`).
-    let exe_str = command.executable.display().to_string().replace("'", "'\\''");
+    let exe_str = command
+        .executable
+        .display()
+        .to_string()
+        .replace("'", "'\\''");
     let mut command_line = format!("'{}'", exe_str);
     for arg in &command.args {
         let arg_str = arg.to_string_lossy().replace("'", "'\\''");
@@ -69,8 +73,7 @@ impl TerminalLauncher for MacosTerminalLauncher {
         use std::os::unix::fs::OpenOptionsExt;
         use std::process::Command;
 
-        let script_dir = login_script_dir()
-            .map_err(|e| TerminalError::IoError(e.to_string()))?;
+        let script_dir = login_script_dir().map_err(|e| TerminalError::IoError(e.to_string()))?;
         let script_path = script_dir.join(format!("login_{}.sh", Uuid::new_v4()));
 
         let script = render_macos_script(command, &script_path);
@@ -131,8 +134,7 @@ fn render_windows_script(command: &TerminalCommand, script_path: &Path) -> Strin
         let value_str = value.to_string_lossy().replace("'", "''");
         script.push_str(&format!(
             "[Environment]::SetEnvironmentVariable('{}', '{}', 'Process')\n",
-            key_str,
-            value_str
+            key_str, value_str
         ));
     }
 
@@ -159,8 +161,7 @@ impl TerminalLauncher for WindowsTerminalLauncher {
         use std::os::windows::process::CommandExt;
         use std::process::{Command, Stdio};
 
-        let script_dir = login_script_dir()
-            .map_err(|e| TerminalError::IoError(e.to_string()))?;
+        let script_dir = login_script_dir().map_err(|e| TerminalError::IoError(e.to_string()))?;
         let script_path = script_dir.join(format!("login_{}.ps1", Uuid::new_v4()));
 
         let script = render_windows_script(command, &script_path);
@@ -186,7 +187,9 @@ impl TerminalLauncher for WindowsTerminalLauncher {
             .map_err(|e| TerminalError::LaunchFailed(e.to_string()))?;
 
         if !output.status.success() {
-            return Err(TerminalError::LaunchFailed("PowerShell script failed".into()));
+            return Err(TerminalError::LaunchFailed(
+                "PowerShell script failed".into(),
+            ));
         }
 
         Ok(())

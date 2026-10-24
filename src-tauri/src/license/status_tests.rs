@@ -1142,7 +1142,8 @@ fn debug_startup_seed_local_dev_license_in_leaves_symlinked_license_paths_untouc
     std::os::unix::fs::symlink(dangling_dir.path().join("missing.json"), &dangling_license)
         .unwrap();
 
-    seed_local_dev_license_in(Some(dangling_dir.path())).expect("skip seeding over a dangling symlink");
+    seed_local_dev_license_in(Some(dangling_dir.path()))
+        .expect("skip seeding over a dangling symlink");
 
     assert!(dangling_license.symlink_metadata().is_ok());
     assert!(!dangling_dir.path().join("missing.json").exists());

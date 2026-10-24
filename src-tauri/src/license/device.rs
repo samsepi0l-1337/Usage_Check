@@ -73,7 +73,9 @@ fn try_persist(app_data_dir: Option<&Path>, raw_uuid: &str) -> bool {
 /// durability (F5) must see this case as NOT persisted too.
 fn resolve_raw_device_id(app_data_dir: Option<&Path>) -> (String, bool) {
     let key = app_data_dir.map(Path::to_path_buf);
-    let mut registry = registry().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut registry = registry()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
 
     if let Some(cached) = registry.get(&key).cloned() {
         if cached.persisted {

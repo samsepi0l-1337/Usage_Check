@@ -37,7 +37,7 @@ fn test_macos_render_escapes_space_and_apostrophe() {
     };
     let script_path = PathBuf::from("/tmp/test_script.sh");
     let script = render_macos_script(&cmd, &script_path);
-    assert!(script.contains("'\\''")); 
+    assert!(script.contains("'\\''"));
     assert!(!script.contains("'''"));
 }
 
@@ -96,10 +96,7 @@ fn test_macos_script_uses_app_private_path() {
     };
     let script_path = PathBuf::from("/var/folders/test/app/tmp/login_abc123.sh");
     let script = render_macos_script(&cmd, &script_path);
-    assert!(script.contains(&format!(
-        "__usagecheck_script='{}'",
-        script_path.display()
-    )));
+    assert!(script.contains(&format!("__usagecheck_script='{}'", script_path.display())));
     assert!(script.contains("trap 'rm -f \"$__usagecheck_script\"' EXIT"));
     let bare_cleanup = format!("rm -f '{}'", script_path.display());
     assert!(!script.lines().any(|line| line == bare_cleanup));
@@ -114,11 +111,13 @@ fn test_windows_render_escapes_quotes() {
         env: vec![(OsString::from("KEY'NAME"), OsString::from("value's"))],
         env_remove: vec![OsString::from("OLD'KEY")],
     };
-    let script_path = PathBuf::from("C:\\Users\\user\\AppData\\Local\\UsageCheck\\tmp\\login_abc123.ps1");
+    let script_path =
+        PathBuf::from("C:\\Users\\user\\AppData\\Local\\UsageCheck\\tmp\\login_abc123.ps1");
     let script = render_windows_script(&cmd, &script_path);
     assert!(script.contains("''"));
     assert!(script.contains("[Environment]::SetEnvironmentVariable"));
-    assert!(script.contains("[Environment]::SetEnvironmentVariable('KEY''NAME', 'value''s', 'Process')"));
+    assert!(script
+        .contains("[Environment]::SetEnvironmentVariable('KEY''NAME', 'value''s', 'Process')"));
     assert!(script.contains("[Environment]::SetEnvironmentVariable('OLD''KEY', $null, 'Process')"));
 }
 
@@ -131,7 +130,8 @@ fn test_windows_script_uses_app_private_path() {
         env: vec![],
         env_remove: vec![],
     };
-    let script_path = PathBuf::from("C:\\Users\\user\\AppData\\Local\\UsageCheck\\tmp\\login_xyz.ps1");
+    let script_path =
+        PathBuf::from("C:\\Users\\user\\AppData\\Local\\UsageCheck\\tmp\\login_xyz.ps1");
     let script = render_windows_script(&cmd, &script_path);
     assert!(script.contains(&format!("Remove-Item '{}' -Force", script_path.display())));
 }
@@ -173,10 +173,10 @@ fn test_render_script_signature_accepts_path() {
     };
     let path1 = PathBuf::from("/path/to/script1.sh");
     let path2 = PathBuf::from("/path/to/script2.sh");
-    
+
     let script1 = render_macos_script(&cmd, &path1);
     let script2 = render_macos_script(&cmd, &path2);
-    
+
     assert_ne!(script1, script2);
     assert!(script1.contains("script1"));
     assert!(script2.contains("script2"));

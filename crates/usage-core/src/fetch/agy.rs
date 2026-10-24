@@ -40,21 +40,22 @@ fn parse_reset_time(v: &Value) -> Option<DateTime<Utc>> {
     }
     // google.protobuf.Timestamp JSON: { "seconds": "...", "nanos": ... }
     if let Some(obj) = v.as_object() {
-        if let Some(secs) = obj
-            .get("seconds")
-            .and_then(|x| x.as_i64().or_else(|| x.as_str().and_then(|s| s.parse().ok())))
-        {
-            let nanos = obj
-                .get("nanos")
-                .and_then(|x| x.as_u64())
-                .unwrap_or(0) as u32;
+        if let Some(secs) = obj.get("seconds").and_then(|x| {
+            x.as_i64()
+                .or_else(|| x.as_str().and_then(|s| s.parse().ok()))
+        }) {
+            let nanos = obj.get("nanos").and_then(|x| x.as_u64()).unwrap_or(0) as u32;
             return Utc.timestamp_opt(secs, nanos).single();
         }
     }
     None
 }
 
-fn window_seconds_for(bucket_id: Option<&str>, window: Option<&str>, display: Option<&str>) -> Option<i64> {
+fn window_seconds_for(
+    bucket_id: Option<&str>,
+    window: Option<&str>,
+    display: Option<&str>,
+) -> Option<i64> {
     let blob = format!(
         "{} {} {}",
         bucket_id.unwrap_or(""),
@@ -76,9 +77,10 @@ fn remaining_to_quota(bucket: &Value) -> Option<(bool /*is_week*/, QuotaUsage)> 
         .get("remainingFraction")
         .or_else(|| bucket.get("remaining_fraction"))
         .or_else(|| {
-            bucket
-                .get("remaining")
-                .and_then(|r| r.get("remainingFraction").or_else(|| r.get("remaining_fraction")))
+            bucket.get("remaining").and_then(|r| {
+                r.get("remainingFraction")
+                    .or_else(|| r.get("remaining_fraction"))
+            })
         })
         .and_then(|x| x.as_f64())?;
 
@@ -104,7 +106,9 @@ fn remaining_to_quota(bucket: &Value) -> Option<(bool /*is_week*/, QuotaUsage)> 
         .and_then(parse_reset_time);
     let window_seconds = window_seconds_for(bucket_id, window, display);
     let is_week = matches!(window_seconds, Some(s) if s >= 24 * 3600)
-        || window.map(|w| w.to_ascii_lowercase().contains("week")).unwrap_or(false)
+        || window
+            .map(|w| w.to_ascii_lowercase().contains("week"))
+            .unwrap_or(false)
         || bucket_id
             .map(|id| id.to_ascii_lowercase().contains("week"))
             .unwrap_or(false);

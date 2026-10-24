@@ -8,5 +8,5 @@ pub mod scanners;
 
 pub use capabilities::{auth_capability, AuthCapability, AuthMethod};
 
-pub mod paid;
 pub mod attribution;
+pub mod paid;

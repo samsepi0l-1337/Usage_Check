@@ -80,7 +80,10 @@ impl std::fmt::Display for ActivationError {
                 write!(f, "server returned a non-advancing token (possible replay)")
             }
             ActivationError::NotEntitled(status) => {
-                write!(f, "verified token does not currently grant Pro ({status:?})")
+                write!(
+                    f,
+                    "verified token does not currently grant Pro ({status:?})"
+                )
             }
             ActivationError::DeviceNotPersisted => {
                 write!(f, "device id could not be durably saved; try again")

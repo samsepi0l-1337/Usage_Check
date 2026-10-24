@@ -1,13 +1,19 @@
+use crate::models::ModelTokenEvent;
 use chrono::{DateTime, TimeZone, Utc};
 use serde_json::Value;
-use crate::models::ModelTokenEvent;
 
 fn parse_ts(v: &Value) -> Option<DateTime<Utc>> {
     match v.get("timestamp")? {
-        Value::String(s) => DateTime::parse_from_rfc3339(s).ok().map(|d| d.with_timezone(&Utc)),
+        Value::String(s) => DateTime::parse_from_rfc3339(s)
+            .ok()
+            .map(|d| d.with_timezone(&Utc)),
         Value::Number(n) => {
             let ms = n.as_f64()?;
-            let secs = if ms > 10_000_000_000.0 { ms / 1000.0 } else { ms };
+            let secs = if ms > 10_000_000_000.0 {
+                ms / 1000.0
+            } else {
+                ms
+            };
             Utc.timestamp_opt(secs as i64, 0).single()
         }
         _ => None,
@@ -18,8 +24,14 @@ pub fn parse_gemini_line(line: &str) -> Option<ModelTokenEvent> {
     let v: Value = serde_json::from_str(line).ok()?;
     let ts = parse_ts(&v)?;
     let tokens = v.pointer("/usageMetadata/totalTokenCount")?.as_i64()?;
-    if tokens <= 0 { return None; }
-    let model = v.get("model").and_then(|m| m.as_str()).unwrap_or("gemini").to_string();
+    if tokens <= 0 {
+        return None;
+    }
+    let model = v
+        .get("model")
+        .and_then(|m| m.as_str())
+        .unwrap_or("gemini")
+        .to_string();
     let dedupe_key = Some(format!("gemini:{line}"));
     Some(ModelTokenEvent {
         timestamp: ts,
@@ -63,7 +75,8 @@ mod tests {
 
     #[test]
     fn defaults_model_to_gemini_when_absent() {
-        let line = r#"{"timestamp":"2026-07-08T10:00:00Z","usageMetadata":{"totalTokenCount":300}}"#;
+        let line =
+            r#"{"timestamp":"2026-07-08T10:00:00Z","usageMetadata":{"totalTokenCount":300}}"#;
         let e = parse_gemini_line(line).unwrap();
         assert_eq!(e.model, "gemini");
         assert_eq!(e.tokens, 300);

@@ -40,7 +40,12 @@ fn parse_plan_usage(plan: &Value) -> Option<(f64, Option<String>)> {
 /// Builds a "First Party"/"API" breakdown row when the corresponding
 /// `planUsage` field is present. A missing field yields no row; a
 /// present-and-zero percent DOES yield a row.
-fn breakdown_row(label: &str, plan_usage: &Value, key: &str, resets_at: Option<DateTime<Utc>>) -> Option<UsageBreakdownRow> {
+fn breakdown_row(
+    label: &str,
+    plan_usage: &Value,
+    key: &str,
+    resets_at: Option<DateTime<Utc>>,
+) -> Option<UsageBreakdownRow> {
     let percent = plan_usage.get(key).and_then(|v| v.as_f64())?;
     Some(UsageBreakdownRow {
         label: label.to_string(),

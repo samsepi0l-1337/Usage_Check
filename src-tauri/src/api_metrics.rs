@@ -11,7 +11,9 @@ pub const METRICS_CONTENT_TYPE: &str = "text/plain; version=0.0.4; charset=utf-8
 
 /// Escapes a Prometheus label value: backslash, double-quote, and newline.
 fn escape_label(v: &str) -> String {
-    v.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n")
+    v.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
 }
 
 /// Appends one `usagecheck_used_percent` gauge line. Non-finite values (NaN /
@@ -63,10 +65,24 @@ pub fn metrics_body(resp: &UsageResponse) -> String {
         }
         for pool in &a.pools {
             if let Some(q) = &pool.five_hour {
-                push_metric(&mut out, provider, account, Some(&pool.name), "5h", q.used_percent);
+                push_metric(
+                    &mut out,
+                    provider,
+                    account,
+                    Some(&pool.name),
+                    "5h",
+                    q.used_percent,
+                );
             }
             if let Some(q) = &pool.week {
-                push_metric(&mut out, provider, account, Some(&pool.name), "7d", q.used_percent);
+                push_metric(
+                    &mut out,
+                    provider,
+                    account,
+                    Some(&pool.name),
+                    "7d",
+                    q.used_percent,
+                );
             }
         }
     }

@@ -108,7 +108,12 @@ pub(crate) async fn refresh_tray<R: Runtime>(app: &AppHandle<R>) {
     // for accounts the runtime is no longer entitled to show. Dropping the stale
     // snapshot is correct on both counts: the newer refresh has already
     // published, or is about to.
-    if app.state::<RefreshState>().generation.load(Ordering::SeqCst) != generation {
+    if app
+        .state::<RefreshState>()
+        .generation
+        .load(Ordering::SeqCst)
+        != generation
+    {
         return;
     }
 
@@ -122,7 +127,12 @@ pub(crate) async fn refresh_tray<R: Runtime>(app: &AppHandle<R>) {
         // scheduling gap separates the check above from `apply_menu` below; a
         // newer refresh can win that gap. Re-checking costs one atomic load and
         // removes the larger of the two remaining windows (K12).
-        if app2.state::<RefreshState>().generation.load(Ordering::SeqCst) != generation {
+        if app2
+            .state::<RefreshState>()
+            .generation
+            .load(Ordering::SeqCst)
+            != generation
+        {
             return;
         }
         if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

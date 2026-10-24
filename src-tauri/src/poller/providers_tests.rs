@@ -1004,12 +1004,7 @@ fn token_ok_body() -> String {
 
 fn add_codex_browser_account(store: &crate::store::AccountStore, creds: Credentials) -> Account {
     store
-        .add_with(
-            Provider::Codex,
-            "user@example.com".into(),
-            creds,
-            || true,
-        )
+        .add_with(Provider::Codex, "user@example.com".into(), creds, || true)
         .expect("add Codex browser account")
 }
 

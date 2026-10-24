@@ -14,7 +14,8 @@ fn device_id_is_64_char_lowercase_hex() {
     let id = device_id_in(Some(tmp.path()));
     assert_eq!(id.len(), 64, "expected 64 hex chars, got: {id}");
     assert!(
-        id.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+        id.chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
         "expected lowercase hex, got: {id}"
     );
 }
@@ -95,7 +96,10 @@ fn device_id_persists_the_cached_value_once_the_path_becomes_writable() {
 fn device_id_checked_in_reports_persisted_true_on_a_writable_dir() {
     let tmp = tempfile::tempdir().unwrap();
     let (id, persisted) = device_id_checked_in(Some(tmp.path()));
-    assert!(persisted, "a normal writable tempdir should persist the freshly-minted id");
+    assert!(
+        persisted,
+        "a normal writable tempdir should persist the freshly-minted id"
+    );
     assert_eq!(id, device_id_in(Some(tmp.path())));
 }
 
@@ -108,7 +112,10 @@ fn device_id_checked_in_reports_persisted_false_when_the_path_is_unwritable() {
     symlink("/nonexistent-target", tmp.path().join(DEVICE_ID_FILE)).unwrap();
 
     let (_, persisted) = device_id_checked_in(Some(tmp.path()));
-    assert!(!persisted, "an unwritable device-id path must report persisted=false");
+    assert!(
+        !persisted,
+        "an unwritable device-id path must report persisted=false"
+    );
 }
 
 #[test]

@@ -159,7 +159,6 @@ pub async fn scan_local_events(
         })
 }
 
-
 fn scan_local_events_blocking(provider: Provider, roots: &[PathBuf]) -> ScanResult {
     let started = Instant::now();
     let mut result = ScanResult {

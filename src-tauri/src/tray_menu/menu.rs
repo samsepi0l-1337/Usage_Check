@@ -1,3 +1,11 @@
+use super::format::{
+    account_name_line, account_usage_lines, activation_result_line, format_breakdown_row,
+    format_pool_detail, format_usage_detail, license_status_line, vendor_title,
+};
+use super::TRAY_ID;
+use crate::edition;
+use crate::license::{ActivationErrorClass, LicenseStatus};
+use crate::poller::AccountUsage;
 use chrono::{DateTime, Local, Utc};
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem, Submenu},
@@ -5,11 +13,6 @@ use tauri::{
 };
 use tauri_plugin_autostart::ManagerExt;
 use usage_core::account::Provider;
-use crate::edition;
-use crate::license::{ActivationErrorClass, LicenseStatus};
-use crate::poller::AccountUsage;
-use super::format::{account_name_line, account_usage_lines, activation_result_line, format_breakdown_row, format_pool_detail, format_usage_detail, license_status_line, vendor_title};
-use super::TRAY_ID;
 
 // Generic over `R: Runtime` (rather than hardcoded `Wry`) so
 // `menu_actions::refresh_tray` — itself generic for the B0.4 dispatch-gate
@@ -197,7 +200,10 @@ pub(crate) fn license_rows(
 
 /// Formats a poll timestamp as a local `Updated HH:MM:SS` label.
 pub(crate) fn updated_label(updated_at: DateTime<Utc>) -> String {
-    format!("Updated {}", updated_at.with_timezone(&Local).format("%H:%M:%S"))
+    format!(
+        "Updated {}",
+        updated_at.with_timezone(&Local).format("%H:%M:%S")
+    )
 }
 
 /// Builds the full tray menu from the latest usage snapshot. `updated_at` is the
@@ -325,7 +331,13 @@ pub fn build_menu<R: Runtime>(
         crate::menu_actions::last_license_attempt().as_ref(),
         crate::license::has_stored_license(),
     ) {
-        menu.append(&MenuItem::with_id(app, row.id, row.label, row.enabled, None::<&str>)?)?;
+        menu.append(&MenuItem::with_id(
+            app,
+            row.id,
+            row.label,
+            row.enabled,
+            None::<&str>,
+        )?)?;
     }
 
     menu.append(&MenuItem::with_id(
@@ -387,7 +399,11 @@ pub fn build_menu<R: Runtime>(
     Ok(menu)
 }
 
-pub fn apply_menu<R: Runtime>(app: &AppHandle<R>, usages: &[AccountUsage], updated_at: Option<DateTime<Utc>>) {
+pub fn apply_menu<R: Runtime>(
+    app: &AppHandle<R>,
+    usages: &[AccountUsage],
+    updated_at: Option<DateTime<Utc>>,
+) {
     let Some(tray) = app.tray_by_id(TRAY_ID) else {
         eprintln!("tray: icon '{TRAY_ID}' not found");
         return;

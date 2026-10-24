@@ -162,6 +162,7 @@ fn unknown_extra_fields_are_ignored() {
         URL_SAFE_NO_PAD.encode(signature.to_bytes())
     );
 
-    let verified = verify_token(&token, &public_key).expect("unknown fields must not break parsing");
+    let verified =
+        verify_token(&token, &public_key).expect("unknown fields must not break parsing");
     assert_eq!(verified.plan, "pro");
 }

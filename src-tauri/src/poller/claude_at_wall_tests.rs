@@ -80,7 +80,11 @@ async fn an_empty_retry_is_recorded_and_the_next_poll_skips_the_fetch() {
     })
     .await;
     assert!(second.breakdown.is_empty());
-    assert_eq!(calls.get(), 1, "a suppressed account must not issue the at_wall request");
+    assert_eq!(
+        calls.get(),
+        1,
+        "a suppressed account must not issue the at_wall request"
+    );
 }
 
 #[tokio::test]

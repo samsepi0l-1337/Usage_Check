@@ -48,7 +48,10 @@ fn csrf_from_cmdline(cmd: &str) -> Option<String> {
 }
 
 fn discover_servers() -> Vec<LocalServer> {
-    let Ok(output) = Command::new("ps").args(["-ax", "-o", "pid=,command="]).output() else {
+    let Ok(output) = Command::new("ps")
+        .args(["-ax", "-o", "pid=,command="])
+        .output()
+    else {
         return Vec::new();
     };
     if !output.status.success() {
@@ -117,9 +120,8 @@ fn local_client() -> Result<reqwest::Client, ()> {
 }
 
 async fn post_rpc(client: &reqwest::Client, port: u16, csrf: &str, method: &str) -> Option<Value> {
-    let url = format!(
-        "https://127.0.0.1:{port}/exa.language_server_pb.LanguageServerService/{method}"
-    );
+    let url =
+        format!("https://127.0.0.1:{port}/exa.language_server_pb.LanguageServerService/{method}");
     let resp = client
         .post(url)
         .header("Content-Type", "application/json")
