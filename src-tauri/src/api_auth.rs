@@ -42,9 +42,7 @@ pub(crate) fn authorized(token: Option<&str>, auth_header: Option<&str>) -> bool
 /// trimmed of surrounding whitespace.
 fn bearer_value(header: &str) -> Option<&str> {
     let (scheme, rest) = header.split_once(' ')?;
-    scheme
-        .eq_ignore_ascii_case("bearer")
-        .then(|| rest.trim())
+    scheme.eq_ignore_ascii_case("bearer").then(|| rest.trim())
 }
 
 /// Length-checked constant-time byte comparison. Not perfectly constant-time

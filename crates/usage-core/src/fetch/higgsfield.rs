@@ -150,9 +150,7 @@ pub fn parse_higgsfield_account(root: &Value) -> HiggsfieldCredits {
         ],
     )
     .filter(|total| total.is_finite() && *total > 0.0)
-    .filter(|total| {
-        remaining.is_none_or(|remaining| remaining.is_finite() && *total >= remaining)
-    });
+    .filter(|total| remaining.is_none_or(|remaining| remaining.is_finite() && *total >= remaining));
 
     let renews_at = first_datetime(
         root,
@@ -209,7 +207,10 @@ mod tests {
         let h = parse_higgsfield_account(&v);
         assert_eq!(h.credits_remaining, Some(12.75));
         assert_eq!(h.plan, Some("Creator".to_string()));
-        assert_eq!(h.detail_suffix(), Some("12.75 credits remaining".to_string()));
+        assert_eq!(
+            h.detail_suffix(),
+            Some("12.75 credits remaining".to_string())
+        );
         assert!(h.to_quota().is_none());
     }
 

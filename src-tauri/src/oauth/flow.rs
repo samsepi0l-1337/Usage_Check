@@ -31,7 +31,12 @@ pub fn make_state() -> String {
 /// Assembles the provider authorize URL with OAuth query parameters (plus any
 /// provider-specific extras). When `cfg.use_pkce` is true, includes S256
 /// `code_challenge`. Pure function — no I/O.
-pub fn build_authorize_url(cfg: &ProviderOAuth, challenge: &str, redirect: &str, state: &str) -> String {
+pub fn build_authorize_url(
+    cfg: &ProviderOAuth,
+    challenge: &str,
+    redirect: &str,
+    state: &str,
+) -> String {
     let mut url = String::with_capacity(512);
     url.push_str(&cfg.auth_url);
     url.push('?');

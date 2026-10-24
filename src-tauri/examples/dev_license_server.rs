@@ -185,7 +185,8 @@ mod tests {
 }
 
 fn encode_token(payload: &TokenPayload, signing_key: &SigningKey) -> Result<String, String> {
-    let payload_bytes = serde_json::to_vec(payload).map_err(|error| format!("serialize token: {error}"))?;
+    let payload_bytes =
+        serde_json::to_vec(payload).map_err(|error| format!("serialize token: {error}"))?;
     let signature = signing_key.sign(&payload_bytes);
     Ok(format!(
         "{}.{}",
@@ -240,7 +241,8 @@ fn main() {
         writeln!(
             stdout,
             "USAGECHECK_LICENSE_PUBKEY={}",
-            base64::engine::general_purpose::STANDARD.encode(signing_key.verifying_key().to_bytes())
+            base64::engine::general_purpose::STANDARD
+                .encode(signing_key.verifying_key().to_bytes())
         )
         .expect("write dev public key");
         writeln!(stdout, "USAGECHECK_LICENSE_API={endpoint}").expect("write dev endpoint");
@@ -256,20 +258,35 @@ fn main() {
 
         let mut body = String::new();
         if request.as_reader().read_to_string(&mut body).is_err() {
-            error_response(request, 400, "invalid_request", "could not read request body");
+            error_response(
+                request,
+                400,
+                "invalid_request",
+                "could not read request body",
+            );
             continue;
         }
         let request_body: LicenseRequest = match serde_json::from_str(&body) {
             Ok(request_body) => request_body,
             Err(_) => {
-                error_response(request, 400, "invalid_request", "request must be valid JSON");
+                error_response(
+                    request,
+                    400,
+                    "invalid_request",
+                    "request must be valid JSON",
+                );
                 continue;
             }
         };
 
         match request_body.key.as_str() {
             "invalid" => {
-                error_response(request, 400, "invalid_key", "the development key is invalid");
+                error_response(
+                    request,
+                    400,
+                    "invalid_key",
+                    "the development key is invalid",
+                );
                 continue;
             }
             "revoked" => {
@@ -277,7 +294,12 @@ fn main() {
                 continue;
             }
             "device_limit" => {
-                error_response(request, 403, "device_limit", "the development key reached its device limit");
+                error_response(
+                    request,
+                    403,
+                    "device_limit",
+                    "the development key reached its device limit",
+                );
                 continue;
             }
             _ => {}
@@ -299,7 +321,12 @@ fn main() {
         };
         match encode_token(&payload, &signing_key) {
             Ok(token) => json_response(request, 200, serde_json::json!({ "token": token })),
-            Err(_) => error_response(request, 500, "server_error", "could not mint development token"),
+            Err(_) => error_response(
+                request,
+                500,
+                "server_error",
+                "could not mint development token",
+            ),
         }
     }
 }

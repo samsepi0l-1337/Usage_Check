@@ -57,7 +57,12 @@ fn emits_help_type_and_account_count() {
 
 #[test]
 fn emits_one_line_per_window() {
-    let body = metrics_body(&response(vec![dto(Provider::Codex, "alice", Some(42.5), Some(18.0))]));
+    let body = metrics_body(&response(vec![dto(
+        Provider::Codex,
+        "alice",
+        Some(42.5),
+        Some(18.0),
+    )]));
     assert!(body.contains(
         "usagecheck_used_percent{provider=\"codex\",account=\"alice\",window=\"5h\"} 42.5"
     ));

@@ -68,7 +68,9 @@ impl Drop for PubkeyEnvGuard {
 }
 
 fn refresh_generation<R: Runtime>(app: &AppHandle<R>) -> u64 {
-    app.state::<RefreshState>().generation.load(Ordering::SeqCst)
+    app.state::<RefreshState>()
+        .generation
+        .load(Ordering::SeqCst)
 }
 
 /// A headless mock Tauri app with `AccountStore` managed against an isolated
@@ -84,7 +86,11 @@ fn build_mock_app(store_root: std::path::PathBuf) -> tauri::App<tauri::test::Moc
         .expect("build mock tauri app")
 }
 
-const PAID_PROVIDER_EVENTS: &[&str] = &["add-cursor-local", "add-grok-clipboard", "add-higgsfield-cli"];
+const PAID_PROVIDER_EVENTS: &[&str] = &[
+    "add-cursor-local",
+    "add-grok-clipboard",
+    "add-higgsfield-cli",
+];
 
 fn credentials() -> Credentials {
     Credentials {
@@ -121,7 +127,10 @@ fn dispatch_gate_refuses_all_three_paid_providers_when_unlicensed() {
     // No license.json exists at this fresh, isolated app-data dir, so
     // `crate::license::is_pro()` is deterministically false — independent of
     // whatever the machine actually running this test has cached for real.
-    assert!(!crate::license::is_pro(), "sanity: fresh app-data dir must be unlicensed");
+    assert!(
+        !crate::license::is_pro(),
+        "sanity: fresh app-data dir must be unlicensed"
+    );
 
     let app = build_mock_app(tmp.path().join("store"));
     for event_id in PAID_PROVIDER_EVENTS.iter().copied() {
@@ -224,10 +233,8 @@ async fn refusal_rerenders_without_starting_a_poll_refresh() {
     let tmp = tempfile::tempdir().expect("create isolated app-data directory");
     let _app_data_env = AppDataDirGuard::set(tmp.path());
     let app = build_mock_app(tmp.path().join("store"));
-    let retained_usage = crate::poller::account_usage_pro_required(&account(
-        "retained-claude",
-        Provider::Claude,
-    ));
+    let retained_usage =
+        crate::poller::account_usage_pro_required(&account("retained-claude", Provider::Claude));
     let retained_at = chrono::Utc::now();
     retain_last_snapshot(app.handle(), &[retained_usage], Some(retained_at));
     let generation_before = refresh_generation(app.handle());
@@ -259,10 +266,8 @@ async fn a_refresh_finishing_on_another_app_does_not_disturb_refusal_bookkeeping
     let _app_data_env = AppDataDirGuard::set(tmp.path());
     let app = build_mock_app(tmp.path().join("store"));
     let other = build_mock_app(tmp.path().join("other-store"));
-    let retained_usage = crate::poller::account_usage_pro_required(&account(
-        "retained-claude",
-        Provider::Claude,
-    ));
+    let retained_usage =
+        crate::poller::account_usage_pro_required(&account("retained-claude", Provider::Claude));
     let retained_at = chrono::Utc::now();
     retain_last_snapshot(app.handle(), &[retained_usage], Some(retained_at));
     let generation_before = refresh_generation(app.handle());
@@ -325,8 +330,16 @@ fn a_superseded_refresh_does_not_publish() {
     let _env_lock = LICENSE_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let tmp = tempfile::tempdir().expect("create isolated store directory");
     let app = build_mock_app(tmp.path().join("store"));
-    let generation = app.state::<RefreshState>().generation.fetch_add(1, Ordering::SeqCst) + 1;
-    let _newer_generation = app.state::<RefreshState>().generation.fetch_add(1, Ordering::SeqCst) + 1;
+    let generation = app
+        .state::<RefreshState>()
+        .generation
+        .fetch_add(1, Ordering::SeqCst)
+        + 1;
+    let _newer_generation = app
+        .state::<RefreshState>()
+        .generation
+        .fetch_add(1, Ordering::SeqCst)
+        + 1;
 
     // This exercises the stamp COMPARISON, not the publish path it guards.
     // `build_mock_app` intentionally manages no `ApiState`; optional API
@@ -354,7 +367,10 @@ fn unrecognized_event_id_is_not_an_auth_dispatch() {
         handle_menu_event(app.handle(), "not-a-real-event-id"),
         DispatchOutcome::Other
     );
-    assert_eq!(handle_menu_event(app.handle(), "about"), DispatchOutcome::Other);
+    assert_eq!(
+        handle_menu_event(app.handle(), "about"),
+        DispatchOutcome::Other
+    );
 }
 
 // --- Stage C: license tray section -----------------------------------

@@ -1,13 +1,15 @@
-use std::collections::HashSet;
-use chrono::{DateTime, Utc};
 use crate::models::{ModelTokenEvent, WindowTotals};
+use chrono::{DateTime, Utc};
+use std::collections::HashSet;
 
 pub fn aggregate(events: &[ModelTokenEvent], now: DateTime<Utc>) -> WindowTotals {
     let mut totals = WindowTotals::default();
     let mut seen: HashSet<&str> = HashSet::new();
     for e in events {
         if let Some(key) = e.dedupe_key.as_deref() {
-            if !seen.insert(key) { continue; }
+            if !seen.insert(key) {
+                continue;
+            }
         }
         totals.add(e.tokens, e.timestamp, now);
     }

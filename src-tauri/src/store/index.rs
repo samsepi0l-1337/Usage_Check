@@ -72,10 +72,7 @@ impl AccountStore {
         self.ensure_root()?;
         let path = self.index_path();
         reject_symlink(&path, "account index")?;
-        write_private_file(
-            &path,
-            &super::serialize_index_preserving(accounts, unknown),
-        )
+        write_private_file(&path, &super::serialize_index_preserving(accounts, unknown))
     }
 
     /// Reads the index, partitioning entries into deserializable `Account`s and raw JSON values that this
