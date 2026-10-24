@@ -500,8 +500,8 @@ const COPILOT_USER_URL: &str = "https://api.github.com/copilot_internal/user";
 const COPILOT_EDITOR_VERSION: &str = "vscode/1.98.1";
 const COPILOT_PLUGIN_VERSION: &str = "copilot-chat/0.26.7";
 
-fn copilot_request<'a>(
-    client: &'a reqwest::Client,
+fn copilot_request(
+    client: &reqwest::Client,
     authorization: &str,
 ) -> reqwest::RequestBuilder {
     client
