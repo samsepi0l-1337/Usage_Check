@@ -423,7 +423,7 @@ async fn refresh_and_fetch_claude(
             creds = refreshed;
         }
     }
-    match fetch_claude_quota(client, &creds).await {
+    match fetch_claude_quota(client, &creds, account_id).await {
         Ok(quota) => {
             if let Err(error) =
                 claude_statusline::write_usage_snapshot(account_id, expected_identity, &quota)
@@ -513,7 +513,7 @@ pub(super) async fn poll_claude_cli_profile(
                 eprintln!("failed to persist cli-token-cache/{account_id}.json: {error}")
             }
         }
-        match fetch_claude_quota(client, live).await {
+        match fetch_claude_quota(client, live, account_id).await {
             Ok(quota) => {
                 if let Err(error) =
                     claude_statusline::write_usage_snapshot(account_id, expected_identity, &quota)
@@ -798,7 +798,7 @@ pub(super) async fn poll_claude_oauth(
                 creds,
             )
             .await;
-            match fetch_claude_quota(client, &creds).await {
+            match fetch_claude_quota(client, &creds, &account.id).await {
                 Ok(quota) => {
                     let email = if account.label.contains('@') {
                         Some(account.label.as_str())
