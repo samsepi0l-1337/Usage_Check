@@ -67,6 +67,10 @@ impl Drop for PubkeyEnvGuard {
     }
 }
 
+fn refresh_generation<R: Runtime>(app: &AppHandle<R>) -> u64 {
+    app.state::<RefreshState>().generation.load(Ordering::SeqCst)
+}
+
 /// A headless mock Tauri app with `AccountStore` managed against an isolated
 /// tempdir. Deliberately does NOT register the real `tauri_plugin_autostart`
 /// plugin — none of the three paid-provider dispatch paths under test reach
@@ -75,6 +79,7 @@ impl Drop for PubkeyEnvGuard {
 fn build_mock_app(store_root: std::path::PathBuf) -> tauri::App<tauri::test::MockRuntime> {
     tauri::test::mock_builder()
         .manage(AccountStore::new_at(store_root))
+        .manage(RefreshState::default())
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
         .expect("build mock tauri app")
 }
@@ -224,8 +229,8 @@ async fn refusal_rerenders_without_starting_a_poll_refresh() {
         Provider::Claude,
     ));
     let retained_at = chrono::Utc::now();
-    retain_last_snapshot(&[retained_usage], Some(retained_at));
-    let generation_before = REFRESH_GENERATION.load(Ordering::SeqCst);
+    retain_last_snapshot(app.handle(), &[retained_usage], Some(retained_at));
+    let generation_before = refresh_generation(app.handle());
 
     assert_eq!(
         handle_menu_event(app.handle(), "add-grok-clipboard"),
@@ -236,11 +241,46 @@ async fn refusal_rerenders_without_starting_a_poll_refresh() {
     // generation before asserting that refusal is render-only.
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     assert_eq!(
-        REFRESH_GENERATION.load(Ordering::SeqCst),
+        refresh_generation(app.handle()),
         generation_before,
         "a refused Add action must not start a provider poll"
     );
-    let retained = last_snapshot();
+    let retained = last_snapshot(app.handle());
+    assert_eq!(retained.usages.len(), 1);
+    assert_eq!(retained.usages[0].account.id, "retained-claude");
+    assert_eq!(retained.updated_at, Some(retained_at));
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)] // Process-wide app-data env mutation must remain serialized.
+async fn a_refresh_finishing_on_another_app_does_not_disturb_refusal_bookkeeping() {
+    let _env_lock = LICENSE_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let tmp = tempfile::tempdir().expect("create isolated app-data directory");
+    let _app_data_env = AppDataDirGuard::set(tmp.path());
+    let app = build_mock_app(tmp.path().join("store"));
+    let other = build_mock_app(tmp.path().join("other-store"));
+    let retained_usage = crate::poller::account_usage_pro_required(&account(
+        "retained-claude",
+        Provider::Claude,
+    ));
+    let retained_at = chrono::Utc::now();
+    retain_last_snapshot(app.handle(), &[retained_usage], Some(retained_at));
+    let generation_before = refresh_generation(app.handle());
+
+    // A refresh that completes on a different app (as a fire-and-forget task
+    // leaked by another test does) must not touch this app's bookkeeping.
+    refresh_tray(other.handle()).await;
+
+    assert_eq!(
+        handle_menu_event(app.handle(), "add-grok-clipboard"),
+        DispatchOutcome::Refused
+    );
+    assert_eq!(
+        refresh_generation(app.handle()),
+        generation_before,
+        "a refresh on another app must not change this app's refresh generation"
+    );
+    let retained = last_snapshot(app.handle());
     assert_eq!(retained.usages.len(), 1);
     assert_eq!(retained.usages[0].account.id, "retained-claude");
     assert_eq!(retained.updated_at, Some(retained_at));
@@ -283,14 +323,16 @@ fn the_cap_gate_keys_off_is_pro_not_has_stored_license() {
 #[test]
 fn a_superseded_refresh_does_not_publish() {
     let _env_lock = LICENSE_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    let generation = REFRESH_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
-    let _newer_generation = REFRESH_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+    let tmp = tempfile::tempdir().expect("create isolated store directory");
+    let app = build_mock_app(tmp.path().join("store"));
+    let generation = app.state::<RefreshState>().generation.fetch_add(1, Ordering::SeqCst) + 1;
+    let _newer_generation = app.state::<RefreshState>().generation.fetch_add(1, Ordering::SeqCst) + 1;
 
     // This exercises the stamp COMPARISON, not the publish path it guards.
     // `build_mock_app` intentionally manages no `ApiState`; optional API
     // publication is covered separately above, without pretending this test
     // drives the generation-guarded refresh publication path.
-    assert_ne!(REFRESH_GENERATION.load(Ordering::SeqCst), generation);
+    assert_ne!(refresh_generation(app.handle()), generation);
 }
 
 #[test]
