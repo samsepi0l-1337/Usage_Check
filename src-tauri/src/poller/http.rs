@@ -1,5 +1,8 @@
 //! HTTP quota fetchers for the per-account usage poller.
 
+use std::time::Instant;
+
+use super::claude_at_wall::with_at_wall_retry;
 use usage_core::account::Credentials;
 use usage_core::fetch::agy::{parse_agy_quota_summary, AgyQuota};
 use usage_core::fetch::amp::{parse_amp_balance, AmpBalance};
@@ -89,21 +92,19 @@ async fn fetch_claude_usage_body(
 /// success/error shape as `fetch_codex_quota`. When the default usage
 /// payload has no Fable row, retries Claude Code's `at_wall` usage URL
 /// (per-model weekly caps live there on some plans) and merges Fable.
+/// An account whose retry comes back empty is negatively cached for
+/// `AT_WALL_EMPTY_TTL`, so later polls skip the second request.
 pub(super) async fn fetch_claude_quota(
     client: &reqwest::Client,
     creds: &Credentials,
+    account_key: &str,
 ) -> Result<ClaudeQuota, Option<u16>> {
     let body = fetch_claude_usage_body(client, creds, CLAUDE_USAGE_URL).await?;
-    let mut quota = parse_claude_usage(&body);
-    if quota.breakdown.is_empty() {
-        if let Ok(at_wall) = fetch_claude_usage_body(client, creds, CLAUDE_USAGE_AT_WALL_URL).await
-        {
-            let extra = parse_claude_usage(&at_wall);
-            if !extra.breakdown.is_empty() {
-                quota.breakdown = extra.breakdown;
-            }
-        }
-    }
+    let quota = parse_claude_usage(&body);
+    let quota = with_at_wall_retry(quota, account_key, Instant::now(), || {
+        fetch_claude_usage_body(client, creds, CLAUDE_USAGE_AT_WALL_URL)
+    })
+    .await;
     Ok(quota)
 }
 

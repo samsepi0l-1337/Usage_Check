@@ -16,6 +16,7 @@ use usage_core::models::{LocalProvenance, LocalUsage};
 use crate::paths;
 use crate::store::AccountStore;
 
+mod claude_at_wall;
 mod http;
 
 mod local_scan;
