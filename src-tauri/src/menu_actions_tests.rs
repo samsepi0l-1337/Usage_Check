@@ -67,15 +67,15 @@ impl Drop for PubkeyEnvGuard {
     }
 }
 
+fn refresh_generation<R: Runtime>(app: &AppHandle<R>) -> u64 {
+    app.state::<RefreshState>().generation.load(Ordering::SeqCst)
+}
+
 /// A headless mock Tauri app with `AccountStore` managed against an isolated
 /// tempdir. Deliberately does NOT register the real `tauri_plugin_autostart`
 /// plugin — none of the three paid-provider dispatch paths under test reach
 /// `toggle-autostart`, and registering it for real would risk mutating an
 /// actual macOS LaunchAgent, which a test must never do.
-fn refresh_generation<R: Runtime>(app: &AppHandle<R>) -> u64 {
-    app.state::<RefreshState>().generation.load(Ordering::SeqCst)
-}
-
 fn build_mock_app(store_root: std::path::PathBuf) -> tauri::App<tauri::test::MockRuntime> {
     tauri::test::mock_builder()
         .manage(AccountStore::new_at(store_root))
