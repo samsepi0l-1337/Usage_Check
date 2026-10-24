@@ -4,32 +4,37 @@ use crate::{
 };
 use tauri::Runtime;
 
-/// Monotonic refresh generation. Every `refresh_tray` claims the next value
-/// before polling and re-reads it immediately before publishing; a refresh
-/// whose stamp is no longer the newest discards its snapshot instead of
-/// publishing it.
-static REFRESH_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Per-app refresh bookkeeping, managed as Tauri state so every app instance
+/// owns its own counter and retained snapshot. Production registers one; each
+/// headless test app registers its own, so a refresh finishing on one app can
+/// never change what another app's refusal or rerender observes.
+#[derive(Default)]
+pub(crate) struct RefreshState {
+    /// Monotonic refresh generation. Every `refresh_tray` claims the next value
+    /// before polling and re-reads it immediately before publishing; a refresh
+    /// whose stamp is no longer the newest discards its snapshot instead of
+    /// publishing it.
+    generation: std::sync::atomic::AtomicU64,
+    /// Most recently published poll snapshot, retained so render-only events
+    /// can rebuild the tray without polling providers again.
+    last_snapshot: std::sync::Mutex<RetainedSnapshot>,
+}
 
-/// Most recently published poll snapshot, retained so render-only events can
-/// rebuild the tray without polling providers again. The initial empty value
-/// matches the pre-first-poll menu built at startup.
-#[derive(Clone)]
+/// The initial empty value matches the pre-first-poll menu built at startup.
+#[derive(Clone, Default)]
 struct RetainedSnapshot {
     usages: Vec<crate::poller::AccountUsage>,
     updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-static LAST_SNAPSHOT: std::sync::Mutex<RetainedSnapshot> =
-    std::sync::Mutex::new(RetainedSnapshot {
-        usages: Vec::new(),
-        updated_at: None,
-    });
-
-fn retain_last_snapshot(
+fn retain_last_snapshot<R: Runtime>(
+    app: &AppHandle<R>,
     snapshot: &[crate::poller::AccountUsage],
     updated_at: Option<chrono::DateTime<chrono::Utc>>,
 ) {
-    *LAST_SNAPSHOT
+    let state = app.state::<RefreshState>();
+    *state
+        .last_snapshot
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner()) = RetainedSnapshot {
         usages: snapshot.to_vec(),
@@ -37,18 +42,21 @@ fn retain_last_snapshot(
     };
 }
 
-fn last_snapshot() -> RetainedSnapshot {
-    LAST_SNAPSHOT
+fn last_snapshot<R: Runtime>(app: &AppHandle<R>) -> RetainedSnapshot {
+    let state = app.state::<RefreshState>();
+    let retained = state
+        .last_snapshot
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .clone()
+        .clone();
+    retained
 }
 
 /// Rebuilds only the tray UI from the retained poll result. In particular,
 /// this does not construct an `AccountStore`, poll a provider, or require the
 /// local HTTP API state.
 fn rerender_last_snapshot<R: Runtime>(app: &AppHandle<R>) {
-    let retained = last_snapshot();
+    let retained = last_snapshot(app);
     let app2 = app.clone();
     let _ = app.run_on_main_thread(move || {
         if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -85,7 +93,11 @@ fn publish_api_snapshot<R: Runtime>(app: &AppHandle<R>, snapshot: &[crate::polle
 pub(crate) async fn refresh_tray<R: Runtime>(app: &AppHandle<R>) {
     use std::sync::atomic::Ordering;
 
-    let generation = REFRESH_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+    let generation = app
+        .state::<RefreshState>()
+        .generation
+        .fetch_add(1, Ordering::SeqCst)
+        + 1;
     let store = AccountStore::new();
     let snapshot = crate::poller::poll_all(&store).await;
 
@@ -96,12 +108,12 @@ pub(crate) async fn refresh_tray<R: Runtime>(app: &AppHandle<R>) {
     // for accounts the runtime is no longer entitled to show. Dropping the stale
     // snapshot is correct on both counts: the newer refresh has already
     // published, or is about to.
-    if REFRESH_GENERATION.load(Ordering::SeqCst) != generation {
+    if app.state::<RefreshState>().generation.load(Ordering::SeqCst) != generation {
         return;
     }
 
     let updated_at = Some(chrono::Utc::now());
-    retain_last_snapshot(&snapshot, updated_at);
+    retain_last_snapshot(app, &snapshot, updated_at);
     publish_api_snapshot(app, &snapshot);
     let app2 = app.clone();
     let _ = app.run_on_main_thread(move || {
@@ -110,7 +122,7 @@ pub(crate) async fn refresh_tray<R: Runtime>(app: &AppHandle<R>) {
         // scheduling gap separates the check above from `apply_menu` below; a
         // newer refresh can win that gap. Re-checking costs one atomic load and
         // removes the larger of the two remaining windows (K12).
-        if REFRESH_GENERATION.load(Ordering::SeqCst) != generation {
+        if app2.state::<RefreshState>().generation.load(Ordering::SeqCst) != generation {
             return;
         }
         if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

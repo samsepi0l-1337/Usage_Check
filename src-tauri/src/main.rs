@@ -125,6 +125,7 @@ fn main() {
     tauri::Builder::default()
         .manage(AccountStore::new())
         .manage(api::ApiState::new())
+        .manage(menu_actions::RefreshState::default())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
