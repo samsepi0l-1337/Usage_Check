@@ -51,7 +51,9 @@ pub(crate) use claude::{
 pub(crate) use codex::{load_codex_cli_auth, parse_codex_auth_json};
 #[allow(unused_imports)]
 pub(crate) use copilot::{load_copilot_cli_auth, parse_copilot_oauth_token, parse_gh_hosts_yml};
-pub(crate) use deepseek::{load_deepseek_cli_auth, parse_deepseek_api_key};
+pub(crate) use deepseek::load_deepseek_cli_auth;
+#[cfg(test)]
+pub(crate) use deepseek::parse_deepseek_api_key;
 #[allow(unused_imports)]
 pub(crate) use factory::{load_factory_cli_auth, parse_factory_auth_json};
 #[allow(unused_imports)]
