@@ -471,9 +471,10 @@ fn has_stored_license_in(app_data_dir: Option<&Path>) -> bool {
 }
 
 /// Persists a placeholder-signed perpetual Pro license for local debug use
-/// unless current status is already Pro or FORCE_PRO is active. Existing
-/// non-Pro records are replaced. Persistence errors are returned unchanged;
-/// neither the dummy key nor the signed token is logged.
+/// unless a license record already exists (any content, valid or not, or a
+/// symlink) or FORCE_PRO is active. An existing record, including a non-Pro
+/// or foreign one, is never overwritten. Persistence errors are returned
+/// unchanged; neither the dummy key nor the signed token is logged.
 #[cfg(any(test, debug_assertions))]
 fn seed_local_dev_license_in(app_data_dir: Option<&Path>) -> Result<(), String> {
     if matches!(
@@ -481,6 +482,11 @@ fn seed_local_dev_license_in(app_data_dir: Option<&Path>) -> Result<(), String> 
         LicenseStatus::Pro { .. } | LicenseStatus::ProDevOverride
     ) {
         return Ok(());
+    }
+    if let Some(dir) = app_data_dir {
+        if dir.join(LICENSE_FILE).symlink_metadata().is_ok() {
+            return Ok(());
+        }
     }
 
     let signing_key = ed25519_dalek::SigningKey::from_bytes(&[0u8; 32]);

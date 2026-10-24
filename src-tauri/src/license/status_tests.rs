@@ -1079,7 +1079,7 @@ fn debug_startup_seed_local_dev_license_in_writes_placeholder_signed_pro() {
 }
 
 #[test]
-fn debug_startup_seed_local_dev_license_in_overwrites_a_non_pro_record() {
+fn debug_startup_seed_local_dev_license_in_preserves_an_existing_non_pro_record() {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let _pubkey = PubkeyEnvGuard::unset();
     let _force_pro = EnvVarGuard::unset("USAGECHECK_FORCE_PRO");
@@ -1091,14 +1091,62 @@ fn debug_startup_seed_local_dev_license_in_overwrites_a_non_pro_record() {
     assert_eq!(status_in(Some(tmp.path())), LicenseStatus::Free);
     assert!(has_stored_license_in(Some(tmp.path())));
 
-    seed_local_dev_license_in(Some(tmp.path())).expect("replace non-Pro record");
+    seed_local_dev_license_in(Some(tmp.path())).expect("skip seeding over a stored record");
 
-    assert_ne!(std::fs::read(&license_path).unwrap(), sentinel);
-    assert_eq!(
-        status_in(Some(tmp.path())),
-        LicenseStatus::Pro { expires_at: None }
-    );
-    assert!(tmp.path().join("clock-watermark").exists());
+    assert_eq!(std::fs::read(&license_path).unwrap(), sentinel);
+    assert!(!tmp.path().join("clock-watermark").exists());
+    assert_eq!(status_in(Some(tmp.path())), LicenseStatus::Free);
+}
+
+#[test]
+fn debug_startup_seed_local_dev_license_in_preserves_a_foreign_valid_record() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _pubkey = PubkeyEnvGuard::unset();
+    let _force_pro = EnvVarGuard::unset("USAGECHECK_FORCE_PRO");
+    let tmp = tempfile::tempdir().unwrap();
+    let license_path = tmp.path().join("license.json");
+    let foreign = LicenseRecord {
+        token: "header.payload.signature".into(),
+        key: "FOREIGN-KEY".into(),
+        verified_at: Utc::now(),
+    };
+    std::fs::write(&license_path, serde_json::to_string(&foreign).unwrap()).unwrap();
+    let before = std::fs::read(&license_path).unwrap();
+
+    seed_local_dev_license_in(Some(tmp.path())).expect("skip seeding over a stored record");
+
+    assert_eq!(std::fs::read(&license_path).unwrap(), before);
+    assert!(!tmp.path().join("clock-watermark").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn debug_startup_seed_local_dev_license_in_leaves_symlinked_license_paths_untouched() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _pubkey = PubkeyEnvGuard::unset();
+    let _force_pro = EnvVarGuard::unset("USAGECHECK_FORCE_PRO");
+    let tmp = tempfile::tempdir().unwrap();
+    let license_path = tmp.path().join("license.json");
+    let target = tmp.path().join("elsewhere.json");
+    let sentinel = b"symlink target content";
+    std::fs::write(&target, sentinel).unwrap();
+    std::os::unix::fs::symlink(&target, &license_path).unwrap();
+
+    seed_local_dev_license_in(Some(tmp.path())).expect("skip seeding over a symlink");
+
+    assert_eq!(std::fs::read(&target).unwrap(), sentinel);
+    assert!(!tmp.path().join("clock-watermark").exists());
+
+    let dangling_dir = tempfile::tempdir().unwrap();
+    let dangling_license = dangling_dir.path().join("license.json");
+    std::os::unix::fs::symlink(dangling_dir.path().join("missing.json"), &dangling_license)
+        .unwrap();
+
+    seed_local_dev_license_in(Some(dangling_dir.path())).expect("skip seeding over a dangling symlink");
+
+    assert!(dangling_license.symlink_metadata().is_ok());
+    assert!(!dangling_dir.path().join("missing.json").exists());
+    assert!(!dangling_dir.path().join("clock-watermark").exists());
 }
 
 #[test]
