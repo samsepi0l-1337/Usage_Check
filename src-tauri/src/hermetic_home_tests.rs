@@ -117,7 +117,7 @@ fn claude_config_dir_outside_the_temp_dir_is_ignored() {
     std::env::set_var("CLAUDE_CONFIG_DIR", &outside);
 
     let roots = crate::paths::claude_config_roots();
-    let default = crate::paths::default_claude_config_dir_checked();
+    let default = crate::paths::ProfileRoots::default().default_claude_config_dir_checked();
 
     assert!(
         roots.iter().all(|root| is_in_temp_dir(root)),

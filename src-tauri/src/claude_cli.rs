@@ -74,14 +74,23 @@ fn read_claude_identity_from_json(profile_dir: &Path) -> Option<(String, String,
     Some((anchor, label, "unknown".to_string()))
 }
 
-/// Claude CLI adapter
-#[derive(Debug, Clone)]
-pub struct ClaudeCliAdapter;
+/// Claude CLI adapter. `roots` decides which home the profile probe and the
+/// managed profile live in; the default resolves through the process `HOME`.
+#[derive(Debug, Clone, Default)]
+pub struct ClaudeCliAdapter {
+    roots: crate::paths::ProfileRoots,
+}
+
+impl ClaudeCliAdapter {
+    pub fn with_roots(roots: crate::paths::ProfileRoots) -> Self {
+        Self { roots }
+    }
+}
 
 impl ProviderAdapter for ClaudeCliAdapter {
     fn probe(&self) -> Result<Option<Account>, String> {
         // Try default CLAUDE_CONFIG_DIR first
-        if let Some(default_dir) = crate::paths::default_claude_config_dir_checked() {
+        if let Some(default_dir) = self.roots.default_claude_config_dir_checked() {
             if let Ok((anchor, label, _plan)) = probe_claude_dir(&default_dir) {
                 return Ok(Some(Account {
                     id: format!("claude-{anchor}"),
@@ -97,7 +106,7 @@ impl ProviderAdapter for ClaudeCliAdapter {
         }
 
         // Try managed root
-        if let Ok(managed_dir) = crate::paths::claude_managed_root("default") {
+        if let Ok(managed_dir) = self.roots.claude_managed_root("default") {
             if let Ok((anchor, label, _plan)) = probe_claude_dir(&managed_dir) {
                 return Ok(Some(Account {
                     id: format!("claude-{anchor}"),
@@ -161,7 +170,9 @@ impl ProviderAdapter for ClaudeCliAdapter {
     }
 
     fn managed_profile_root(&self) -> Result<std::path::PathBuf, String> {
-        crate::paths::claude_managed_root("default").map_err(|e| e.to_string())
+        self.roots
+            .claude_managed_root("default")
+            .map_err(|e| e.to_string())
     }
 }
 
