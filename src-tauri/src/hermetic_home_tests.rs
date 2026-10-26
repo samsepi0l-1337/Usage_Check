@@ -65,12 +65,7 @@ impl Drop for HomeGuard {
     }
 }
 
-fn is_in_temp_dir(path: &Path) -> bool {
-    let temp = std::env::temp_dir();
-    let canonical_temp = temp.canonicalize().unwrap_or_else(|_| temp.clone());
-    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    path.starts_with(&temp) || canonical.starts_with(&canonical_temp)
-}
+use crate::paths::paths_confine::is_in_temp_dir;
 
 /// A directory that exists and is outside the OS temp dir regardless of where
 /// the checkout lives: the filesystem root. Nothing writes to it; the tests
@@ -127,4 +122,19 @@ fn claude_config_dir_outside_the_temp_dir_is_ignored() {
         default.as_deref().is_none_or(is_in_temp_dir),
         "default_claude_config_dir_checked leaked {default:?}"
     );
+}
+
+#[test]
+fn dotdot_and_symlink_escapes_from_the_temp_dir_are_outside() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    assert!(is_in_temp_dir(&temp.path().join("not-created-yet/home")));
+    assert!(!is_in_temp_dir(&temp.path().join("..").join("escape")));
+    assert!(!is_in_temp_dir(&non_temp_dir()));
+    #[cfg(unix)]
+    {
+        let link = temp.path().join("link-to-root");
+        std::os::unix::fs::symlink(non_temp_dir(), &link).expect("symlink");
+        assert!(!is_in_temp_dir(&link));
+        assert!(!is_in_temp_dir(&link.join("child")));
+    }
 }

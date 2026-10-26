@@ -593,3 +593,26 @@ fn injected_profile_root_receives_the_bridge_and_the_process_home_does_not() {
     assert!(!sentinel.path().join(".claude/settings.json").exists());
     assert!(!sentinel.path().join(".usagecheck").exists());
 }
+
+/// `CliSetupDeps.launcher` is what the coordinator launches through: the
+/// delegating wrapper must forward to the injected recorder, not to Terminal.
+#[test]
+fn injected_launcher_receives_the_launch_through_the_shared_wrapper() {
+    use crate::terminal::TerminalLauncher;
+    let recorder = std::sync::Arc::new(RecordingLauncher::default());
+    let deps = CliSetupDeps {
+        launcher: Some(recorder.clone()),
+        ..CliSetupDeps::default()
+    };
+    let wrapper = SharedLauncher(deps.launcher.clone().expect("injected launcher"));
+    let command = crate::terminal::TerminalCommand {
+        executable: std::path::PathBuf::from("claude"),
+        args: Vec::new(),
+        env: Vec::new(),
+        env_remove: Vec::new(),
+    };
+
+    wrapper.launch(&command).expect("recorded launch");
+
+    assert_eq!(recorder.launches.load(Ordering::SeqCst), 1);
+}

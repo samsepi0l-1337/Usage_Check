@@ -18,7 +18,7 @@ pub use paths_roots::ProfileRoots;
 
 #[cfg(test)]
 #[path = "paths_confine.rs"]
-mod paths_confine;
+pub(crate) mod paths_confine;
 
 /// User home directory. Prefers `HOME` (Unix) then `USERPROFILE` (Windows).
 pub fn home_dir() -> Option<PathBuf> {
