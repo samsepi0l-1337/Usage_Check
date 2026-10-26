@@ -454,9 +454,6 @@ fn last_license_attempt_reflects_the_most_recent_recorded_attempt() {
 #[test]
 fn default_claude_profile_menu_action_never_writes_settings_into_home() {
     let _env_lock = LICENSE_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    let _home_lock = crate::hermetic_home_tests::HOME_ENV_LOCK
-        .lock()
-        .unwrap_or_else(|p| p.into_inner());
     let sentinel = tempfile::tempdir().unwrap();
     let profile = sentinel.path().join(".claude");
     std::fs::create_dir_all(&profile).unwrap();
@@ -474,14 +471,25 @@ fn default_claude_profile_menu_action_never_writes_settings_into_home() {
         handle_menu_event(app.handle(), "add-claude-cli"),
         DispatchOutcome::Dispatched
     );
+    // `refresh_tray` is the last step of the dispatched action, after the
+    // account is saved and the bridge install was (or was not) attempted.
     let settings = profile.join("settings.json");
-    for _ in 0..40 {
-        if settings.exists() {
+    for _ in 0..200 {
+        if refresh_generation(app.handle()) > 0 {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
 
+    assert!(
+        refresh_generation(app.handle()) > 0,
+        "dispatched action never completed"
+    );
+    assert_eq!(
+        app.state::<AccountStore>().list().len(),
+        1,
+        "the sentinel Claude profile was not resolved"
+    );
     assert!(
         !settings.exists(),
         "menu action wrote {}: {}",

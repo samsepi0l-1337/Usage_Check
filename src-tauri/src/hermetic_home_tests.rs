@@ -9,23 +9,36 @@
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 
-/// Serialises every test that mutates `HOME` / `CLAUDE_CONFIG_DIR`.
-/// Lock order: `LICENSE_ENV_LOCK` first, then this one.
-pub(crate) static HOME_ENV_LOCK: Mutex<()> = Mutex::new(());
+/// Serialises every test that mutates `HOME`.
+static HOME_ENV_LOCK: Mutex<()> = Mutex::new(());
 
-/// Sets `HOME` to `path` and clears `CLAUDE_CONFIG_DIR` until dropped.
+/// Sets `HOME` to `path` and clears `CLAUDE_CONFIG_DIR` until dropped. It holds
+/// `HOME_ENV_LOCK` and `CLAUDE_CONFIG_DIR_ENV_LOCK` (the lock the import tests
+/// use for the same variable) for its whole lifetime. Lock order:
+/// `LICENSE_ENV_LOCK`, then the guard.
 pub(crate) struct HomeGuard {
     home: Option<OsString>,
     config_dir: Option<OsString>,
+    home_lock: Option<MutexGuard<'static, ()>>,
+    config_lock: Option<MutexGuard<'static, ()>>,
+    config_lock_was_clean: bool,
 }
 
 impl HomeGuard {
     pub(crate) fn set(path: &Path) -> Self {
+        let home_lock = HOME_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let config_lock_was_clean = !crate::import::CLAUDE_CONFIG_DIR_ENV_LOCK.is_poisoned();
+        let config_lock = crate::import::CLAUDE_CONFIG_DIR_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
         let guard = Self {
             home: std::env::var_os("HOME"),
             config_dir: std::env::var_os("CLAUDE_CONFIG_DIR"),
+            home_lock: Some(home_lock),
+            config_lock: Some(config_lock),
+            config_lock_was_clean,
         };
         std::env::set_var("HOME", path);
         std::env::remove_var("CLAUDE_CONFIG_DIR");
@@ -43,6 +56,12 @@ impl Drop for HomeGuard {
             Some(previous) => std::env::set_var("CLAUDE_CONFIG_DIR", previous),
             None => std::env::remove_var("CLAUDE_CONFIG_DIR"),
         }
+        drop(self.config_lock.take());
+        drop(self.home_lock.take());
+        // A failing test must not poison the import tests' shared lock.
+        if self.config_lock_was_clean {
+            crate::import::CLAUDE_CONFIG_DIR_ENV_LOCK.clear_poison();
+        }
     }
 }
 
@@ -53,17 +72,24 @@ fn is_in_temp_dir(path: &Path) -> bool {
     path.starts_with(&temp) || canonical.starts_with(&canonical_temp)
 }
 
-/// A directory that exists, is outside the OS temp dir, and is safe to point
-/// `HOME` at because nothing writes into the source tree: the crate manifest dir.
+/// A directory that exists and is outside the OS temp dir regardless of where
+/// the checkout lives: the filesystem root. Nothing writes to it; the tests
+/// only check how it is resolved.
 fn non_temp_dir() -> PathBuf {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    assert!(!is_in_temp_dir(&dir), "manifest dir must not be a temp dir");
-    dir
+    let root = std::env::temp_dir()
+        .ancestors()
+        .last()
+        .map(Path::to_path_buf)
+        .expect("temp dir has a root");
+    assert!(
+        root.exists() && !is_in_temp_dir(&root),
+        "filesystem root must be outside the temp dir"
+    );
+    root
 }
 
 #[test]
 fn home_dir_refuses_a_home_outside_the_temp_dir() {
-    let _lock = HOME_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let _home = HomeGuard::set(&non_temp_dir());
 
     let resolved = crate::paths::home_dir().expect("test home");
@@ -77,7 +103,6 @@ fn home_dir_refuses_a_home_outside_the_temp_dir() {
 
 #[test]
 fn home_dir_keeps_a_temp_home_unchanged() {
-    let _lock = HOME_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let temp = tempfile::tempdir().expect("temp home");
     let _home = HomeGuard::set(temp.path());
 
@@ -86,7 +111,6 @@ fn home_dir_keeps_a_temp_home_unchanged() {
 
 #[test]
 fn claude_config_dir_outside_the_temp_dir_is_ignored() {
-    let _lock = HOME_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let temp = tempfile::tempdir().expect("temp home");
     let _home = HomeGuard::set(temp.path());
     let outside = non_temp_dir();
