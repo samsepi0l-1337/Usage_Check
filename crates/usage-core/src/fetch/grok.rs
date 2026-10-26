@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 use crate::models::QuotaUsage;
@@ -51,7 +52,31 @@ pub fn parse_grok_paste(text: &str) -> (String, Option<String>) {
     }
 }
 
-/// Parsed xAI prepaid credit balance (Management API).
+/// True when `token` looks like a compact JWT (three non-empty segments).
+/// Management keys are opaque and must not be treated as OIDC access tokens.
+pub fn is_jwt(_token: &str) -> bool {
+    false
+}
+
+/// OIDC session credentials carry a JWT access token, a refresh token, or an
+/// expiry; Management keys carry none of those.
+pub fn credentials_are_oidc(
+    _access_token: &str,
+    _refresh_token: Option<&str>,
+    _has_expiry: bool,
+) -> bool {
+    false
+}
+
+/// Parses Grok CLI consumer billing JSON (`GET …/v1/billing`).
+pub fn parse_grok_consumer_credits(_root: &Value) -> GrokPrepaid {
+    GrokPrepaid {
+        period: None,
+        detail_suffix: None,
+    }
+}
+
+/// Parsed xAI prepaid credit balance (Management API) or Grok CLI consumer quota.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GrokPrepaid {
     /// Used % since the most recent top-up (0–100), when computable.
@@ -212,5 +237,81 @@ mod tests {
         let (key, team) = parse_grok_paste("key-line\nteam-uuid\n");
         assert_eq!(key, "key-line");
         assert_eq!(team.as_deref(), Some("team-uuid"));
+    }
+
+    #[test]
+    fn jwt_detection_rejects_management_keys() {
+        assert!(is_jwt("aaa.bbb.ccc"));
+        assert!(!is_jwt("xai-mgmt-key-abc"));
+        assert!(!is_jwt("aaa.bbb"));
+        assert!(!is_jwt("aaa..ccc"));
+        assert!(!is_jwt("a.b.c.d"));
+        assert!(!is_jwt(""));
+        assert!(credentials_are_oidc("opaque", Some("refresh"), false));
+        assert!(!credentials_are_oidc("opaque", Some("  "), false));
+        assert!(credentials_are_oidc("opaque", None, true));
+        assert!(credentials_are_oidc("aaa.bbb.ccc", None, false));
+        assert!(!credentials_are_oidc("xai-mgmt-key-abc", None, false));
+    }
+
+    #[test]
+    fn parses_consumer_credit_usage_percent() {
+        let v = json!({
+            "config": {
+                "currentPeriod": {
+                    "start": "2026-07-30T09:46:16Z",
+                    "end": "2026-08-06T09:46:16Z"
+                },
+                "creditUsagePercent": 42.5
+            }
+        });
+        let q = parse_grok_consumer_credits(&v);
+        let period = q.period.as_ref().unwrap();
+        assert!((period.percent - 42.5).abs() < 0.01);
+        assert_eq!(
+            period.resets_at.unwrap().to_rfc3339(),
+            "2026-08-06T09:46:16+00:00"
+        );
+        assert!(q.detail_suffix.is_none());
+    }
+
+    #[test]
+    fn consumer_period_without_percent_is_zero_used() {
+        let v = json!({ "config": { "currentPeriod": { "end": "2026-08-06T09:46:16Z" } } });
+        let q = parse_grok_consumer_credits(&v);
+        assert_eq!(q.period.as_ref().unwrap().percent, 0.0);
+    }
+
+    #[test]
+    fn consumer_monthly_used_over_limit_and_clamped() {
+        let v = json!({
+            "config": {
+                "monthlyLimit": { "val": "16500" },
+                "used": { "val": "5092" },
+                "billingPeriodEnd": "2026-08-01T00:00:00Z"
+            }
+        });
+        let q = parse_grok_consumer_credits(&v);
+        assert!((q.period.unwrap().percent - (5092.0 / 16500.0 * 100.0)).abs() < 0.01);
+        let over = json!({ "config": { "creditUsagePercent": 250 } });
+        assert_eq!(parse_grok_consumer_credits(&over).period.unwrap().percent, 100.0);
+        let neg = json!({ "config": { "creditUsagePercent": -5 } });
+        assert_eq!(parse_grok_consumer_credits(&neg).period.unwrap().percent, 0.0);
+    }
+
+    #[test]
+    fn consumer_unparseable_bodies_leave_period_empty_without_panic() {
+        for body in [
+            json!({ "error": "Access denied" }),
+            json!(null),
+            json!([1, 2]),
+            json!("text"),
+            json!({ "config": { "creditUsagePercent": "NaN" } }),
+            json!({ "config": { "monthlyLimit": { "val": "0" }, "used": { "val": "5" } } }),
+        ] {
+            let q = parse_grok_consumer_credits(&body);
+            assert!(q.period.is_none(), "{body}");
+            assert_eq!(q.detail_suffix.as_deref(), Some("Grok quota unavailable"));
+        }
     }
 }

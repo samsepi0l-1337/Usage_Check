@@ -1805,3 +1805,97 @@ fn bare_add_reads_real_license_state() {
         usage_core::edition::free_limit_reason(Provider::Codex)
     );
 }
+
+fn grok_oidc_credentials(identity: &str) -> Credentials {
+    Credentials {
+        access_token: "aaa.bbb.ccc".into(),
+        refresh_token: Some("refresh-example".into()),
+        account_id: Some(identity.into()),
+        expires_at: None,
+    }
+}
+
+#[test]
+fn grok_cli_session_is_stored_as_a_reference_without_copying_tokens() {
+    let sandbox = TestSandbox::new();
+    let store = sandbox.store();
+    let account = store
+        .add_with(
+            Provider::Grok,
+            "user@example.com".into(),
+            grok_oidc_credentials("user-1"),
+            || true,
+        )
+        .unwrap();
+
+    let AuthSource::GrokCli { expected_identity } = &account.auth_source else {
+        panic!("OIDC credentials must register a GrokCli reference")
+    };
+    assert_eq!(expected_identity, "user-1");
+    assert!(store.credentials(AccountStore::credential_key(&account)).is_none());
+    for entry in walk_files(&sandbox.root) {
+        let text = fs::read_to_string(&entry).unwrap_or_default();
+        assert!(!text.contains("refresh-example"), "{}", entry.display());
+        assert!(!text.contains("aaa.bbb.ccc"), "{}", entry.display());
+    }
+}
+
+fn walk_files(root: &std::path::Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in fs::read_dir(&dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else {
+                out.push(path);
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn grok_management_key_still_wins_over_oidc_heuristics_when_opaque() {
+    let sandbox = TestSandbox::new();
+    let store = sandbox.store();
+    let account = store
+        .add_with(Provider::Grok, "Grok · team t".into(), credentials("t"), || true)
+        .unwrap();
+    assert!(matches!(
+        account.auth_source,
+        AuthSource::XaiManagement { .. }
+    ));
+}
+
+#[test]
+fn grok_cli_duplicate_identity_and_free_tier_are_rejected() {
+    let sandbox = TestSandbox::new();
+    let store = sandbox.store();
+    store
+        .add_with(
+            Provider::Grok,
+            "user@example.com".into(),
+            grok_oidc_credentials("user-1"),
+            || true,
+        )
+        .unwrap();
+    assert!(store
+        .add_with(
+            Provider::Grok,
+            "again".into(),
+            grok_oidc_credentials("user-1"),
+            || true,
+        )
+        .is_err());
+    // Grok stays Pro-gated: a second identity is fine in Pro...
+    assert!(store
+        .add_with(
+            Provider::Grok,
+            "other@example.com".into(),
+            grok_oidc_credentials("user-2"),
+            || true,
+        )
+        .is_ok());
+}

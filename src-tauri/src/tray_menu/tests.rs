@@ -163,6 +163,18 @@ fn add_entry_label_explains_the_cap_when_disabled() {
 }
 
 #[test]
+fn grok_cli_login_sits_next_to_the_management_key_actions() {
+    let cli = spec_for_event("add-grok-cli").expect("Grok CLI is registered");
+    assert_eq!(cli.provider, Provider::Grok);
+    assert_eq!(cli.method, AuthMethod::Cli);
+    assert_eq!(cli.label, "Add Grok (CLI)");
+    assert!(spec_for_event("add-grok-clipboard").is_some());
+    assert!(spec_for_event("add-grok-env").is_some());
+    assert!(!is_dispatch_allowed(&cli, false), "Grok CLI stays Pro-gated");
+    assert!(is_dispatch_allowed(&cli, true));
+}
+
+#[test]
 fn spec_for_event_resolves_pro_registry_actions() {
     let spec = spec_for_event("add-grok-clipboard").expect("Grok clipboard is registered");
     assert_eq!(spec.provider, Provider::Grok);
@@ -422,7 +434,6 @@ fn test_auth_specs_no_forbidden_substrings() {
         "Gemini (CLI)",
         "Antigravity (CLI)",
         "Cursor (CLI)",
-        "Grok (CLI)",
         "SuperGrok",
         "Higgsfield (browser)",
     ];

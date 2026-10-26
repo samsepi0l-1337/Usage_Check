@@ -228,6 +228,16 @@ pub fn hermes_auth_file() -> Option<PathBuf> {
     home_dir().map(|h| h.join(".hermes").join("auth.json"))
 }
 
+/// Grok CLI config root: `GROK_HOME` if set and non-empty, otherwise `~/.grok`.
+pub fn grok_home() -> Option<PathBuf> {
+    None
+}
+
+/// Grok CLI `auth.json` path.
+pub fn grok_auth_file() -> Option<PathBuf> {
+    grok_home().map(|home| home.join("auth.json"))
+}
+
 /// Claude config roots: `CLAUDE_CONFIG_DIR` (comma-separated) or the default
 /// `~/.claude` and `~/.config/claude`.
 pub fn claude_config_roots() -> Vec<PathBuf> {

@@ -433,6 +433,7 @@ pub(crate) enum AuthAction {
     CliCoordinator,
     Import,
     GrokClipboard,
+    GrokCli,
 }
 
 pub(crate) fn classify_auth_action(provider: Provider, method: AuthMethod) -> AuthAction {
@@ -457,6 +458,7 @@ pub(crate) fn dispatch_auth_action<R: Runtime>(
         AuthAction::CliCoordinator => cli_coordinator_setup(app, provider),
         AuthAction::Import => import_provider(app, provider),
         AuthAction::GrokClipboard => import_grok_clipboard(app),
+        AuthAction::GrokCli => import_provider(app, Provider::Grok),
     }
 }
 

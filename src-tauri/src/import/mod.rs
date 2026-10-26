@@ -23,6 +23,7 @@ mod deepseek;
 mod factory;
 mod fireworks;
 mod grok;
+mod grok_cli;
 mod higgsfield;
 mod kimi;
 mod kiro;
@@ -62,6 +63,10 @@ pub(crate) use fireworks::{load_fireworks_cli_auth, parse_fireworks_auth_ini};
 pub(crate) use grok::{
     grok_imported_account, import_grok_from_clipboard, load_grok_env_auth,
     validate_grok_management_key,
+};
+pub(crate) use grok_cli::{
+    load_grok_auth_from, load_grok_cli_auth, load_grok_cli_auth_from, read_grok_cli_credentials,
+    GrokCliReadError,
 };
 pub(crate) use higgsfield::{
     fetch_higgsfield_account_json_from, higgsfield_bin, load_higgsfield_cli_auth,
