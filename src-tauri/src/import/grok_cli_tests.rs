@@ -221,3 +221,32 @@ fn cli_session_is_the_fallback_without_management_key() {
         "{err}"
     );
 }
+
+#[test]
+fn ambiguous_opaque_entries_are_rejected_so_they_can_never_become_secrets() {
+    // No JWT, no refresh_token, no expiry: indistinguishable from a Management
+    // Key, so AccountStore::add would store it as a secret. Fail closed.
+    let root = json!({
+        "slot": { "access_token": "opaque-session", "user_id": "user-1" }
+    });
+    assert!(parse_grok_cli_auth_json(&root, now()).is_empty());
+}
+
+#[test]
+fn every_parsed_entry_is_recognised_as_oidc_by_the_store_discriminator() {
+    let root = json!({
+        "jwt": { "key": future_jwt() },
+        "refresh": { "key": "opaque", "refresh_token": "r" },
+        "expiring": { "key": "opaque", "expires_at": now().timestamp() + 3600 }
+    });
+    let entries = parse_grok_cli_auth_json(&root, now());
+    assert_eq!(entries.len(), 3);
+    for e in entries {
+        let c = &e.credentials;
+        assert!(usage_core::fetch::grok::credentials_are_oidc(
+            &c.access_token,
+            c.refresh_token.as_deref(),
+            c.expires_at.is_some()
+        ));
+    }
+}

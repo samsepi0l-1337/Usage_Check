@@ -72,6 +72,16 @@ pub fn parse_grok_cli_auth_json(root: &serde_json::Value, now: DateTime<Utc>) ->
         if expires_at.is_some_and(|exp| exp <= now) && refresh_token.is_none() {
             continue;
         }
+        // Fail closed: `AccountStore::add` treats credentials without a JWT,
+        // refresh token or expiry as a Management Key and would persist the
+        // token as an app-owned secret. Never let a CLI entry take that path.
+        if !usage_core::fetch::grok::credentials_are_oidc(
+            &access,
+            refresh_token.as_deref(),
+            expires_at.is_some(),
+        ) {
+            continue;
+        }
         let email = nonempty_str(value, "email");
         let identity = nonempty_str(value, "user_id")
             .or_else(|| email.clone())
