@@ -127,6 +127,15 @@ async fn a_successful_retry_after_the_backoff_clears_the_error_state() {
 
     assert_eq!(quota.breakdown.len(), 1);
     assert!(!at_wall_retry_suppressed(key, t1));
+
+    // The streak was reset: the next failure backs off for the base delay again
+    // (30s), not the doubled one (60s) it would get if the streak had survived.
+    let _ = with_at_wall_retry(empty_quota(), key, t1, || async {
+        Err::<serde_json::Value, _>(None)
+    })
+    .await;
+    assert!(at_wall_retry_suppressed(key, t1));
+    assert!(!at_wall_retry_suppressed(key, t1 + AT_WALL_ERROR_BASE));
 }
 
 #[tokio::test]
