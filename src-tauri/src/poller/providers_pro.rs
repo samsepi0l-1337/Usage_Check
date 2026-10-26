@@ -17,7 +17,7 @@ use super::usage_model::{
     account_usage_from_windsurf, account_usage_from_zai, status_for_failure, AccountUsage,
 };
 use crate::store::AccountStore;
-use usage_core::account::{Account, Provider};
+use usage_core::account::{Account, AuthSource, Provider};
 use usage_core::fetch::amp::AmpBalance;
 use usage_core::fetch::augment::{parse_augment_account, AugmentCredits};
 use usage_core::fetch::bailian::{parse_bailian_token_plan, BailianQuota};
@@ -165,6 +165,9 @@ pub(super) async fn poll_grok(
     client: &reqwest::Client,
     account: &Account,
 ) -> AccountUsage {
+    if matches!(account.auth_source, AuthSource::GrokCli { .. }) {
+        return super::grok_cli::poll_grok_cli(client, account).await;
+    }
     let Some(creds) = store.credentials(AccountStore::credential_key(account)) else {
         return account_usage_from_grok(
             account,

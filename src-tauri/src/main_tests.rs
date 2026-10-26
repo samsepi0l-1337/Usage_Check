@@ -59,6 +59,18 @@ fn clipboard_routes_to_grok_clipboard() {
 }
 
 #[test]
+fn grok_cli_routes_to_its_own_action_and_other_clis_stay_on_import() {
+    assert_eq!(
+        classify_auth_action(Provider::Grok, AuthMethod::Cli),
+        AuthAction::GrokCli
+    );
+    assert_eq!(
+        classify_auth_action(Provider::Kimi, AuthMethod::Cli),
+        AuthAction::Import
+    );
+}
+
+#[test]
 fn pro_providers_route_per_capability() {
     assert_eq!(
         classify_auth_action(Provider::Cursor, AuthMethod::LocalDatabase),
@@ -142,6 +154,7 @@ fn registry_specs_classify_as_expected() {
             AuthMethod::BrowserOAuth => AuthAction::Oauth,
             AuthMethod::Cli => match spec.provider {
                 Provider::Codex | Provider::Claude => AuthAction::CliCoordinator,
+                Provider::Grok => AuthAction::GrokCli,
                 _ => AuthAction::Import,
             },
             AuthMethod::LocalDatabase | AuthMethod::ManagementKeyEnvironment => AuthAction::Import,

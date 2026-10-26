@@ -45,6 +45,10 @@ fn pro_auth_kind_labels_avoid_leak_denylist() {
     };
     // Must NOT be "xai_management" — "management" is on the leak denylist.
     assert_eq!(auth_kind(&xai), "xai_key");
+    let grok_cli = AuthSource::GrokCli {
+        expected_identity: "id".into(),
+    };
+    assert_eq!(auth_kind(&grok_cli), "grok_cli");
     let cursor = AuthSource::CursorDatabase {
         database_path: "/db".into(),
         expected_identity: "id".into(),

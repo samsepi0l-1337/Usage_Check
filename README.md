@@ -15,8 +15,8 @@ rows, Add/Remove account actions, Refresh, and Quit.
   menu, fetched from each provider's usage API.
 - **agy**: Antigravity Model Quota (Gemini / Claude+GPT pools) as used % in
   the tray menu.
-- **Cursor** (local, Experimental), **Grok** (xAI API management-key credits,
-  not consumer SuperGrok), **Higgsfield** (credits via CLI), **Kimi Code**,
+- **Cursor** (local, Experimental), **Grok** (xAI Management Key credits, or
+  the Grok CLI session's consumer quota), **Higgsfield** (credits via CLI), **Kimi Code**,
   **OpenCode Go**, **DeepSeek**, **OpenRouter**, **GitHub Copilot** (local,
   Experimental), **Windsurf** (local, Experimental), **MiniMax** (CLI Token
   Plan), **Augment** (Auggie CLI credits), **Poe** (CLI points), **Fireworks**
@@ -79,8 +79,14 @@ active — so **not visible in this release**), exact menu labels from
 - **Import xAI API credits (clipboard)** — copy an xAI **Management Key** to
   the clipboard, then import (validates via xAI API; team ID resolved
   automatically). Fallback: **Import xAI API credits (env vars)** with
-  `XAI_MGMT_KEY` + `XAI_TEAM_ID`. This is xAI API management-key credit
-  usage, not consumer SuperGrok quota.
+  `XAI_MGMT_KEY` + `XAI_TEAM_ID`. This shows xAI API management-key credit usage.
+- **Add Grok (CLI)** — after `grok login`, registers each session in
+  `~/.grok/auth.json` (or `$GROK_HOME`) as a read-only reference; credits used %
+  comes from the Grok CLI's unofficial consumer billing endpoint. UsageCheck never
+  writes or refreshes that file and keeps no copy of its tokens; when the CLI
+  token has expired the account shows `needs_login` until the CLI renews it.
+  A configured Management Key (`XAI_MGMT_KEY`) takes precedence over the CLI
+  session wherever the generic Grok import runs.
 - **Add Higgsfield (CLI)** — pure CLI reference via `higgsfield account status --json`
   (no credential file read). Status is `needs_setup` when the CLI or its JSON
   output is unavailable.
@@ -143,7 +149,7 @@ Free — Pro cannot be unlocked. Artifacts: `UsageCheck-macos` (.dmg + .app),
 - `src-tauri` (`usage-app`) — Tauri v2 tray shell: native menu bar menu,
   PKCE OAuth, file-backed account store under Application Support /
   `%APPDATA%`, background poller, CLI credential import (including Claude
-  Keychain on macOS; Pro: Cursor `state.vscdb`, Grok clipboard/env, Higgsfield
+  Keychain on macOS; Pro: Cursor `state.vscdb`, Grok clipboard/env or CLI session, Higgsfield
   / MiniMax / Augment / Bailian pure CLI references).
 - `ui/` — legacy Vite frontend (unused by the tray-menu shell; kept for
   optional future UI work).

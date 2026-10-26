@@ -158,6 +158,11 @@ pub enum AuthSource {
         credential_id: String,
         team_id: String,
     },
+    /// Read-only reference to a Grok CLI OIDC session in `auth.json`; tokens
+    /// are re-read at poll time and never copied into UsageCheck's store.
+    GrokCli {
+        expected_identity: String,
+    },
     HiggsfieldCli {
         expected_identity: String,
     },
@@ -230,6 +235,7 @@ mod tests {
             &[
                 AuthMethod::ManagementKeyClipboard,
                 AuthMethod::ManagementKeyEnvironment,
+                AuthMethod::Cli,
             ]
         );
         assert_eq!(
@@ -362,6 +368,21 @@ mod tests {
         })
         .unwrap();
         assert_eq!(json["kind"], "trae_database");
+    }
+
+    #[test]
+    fn grok_cli_account_round_trips_json() {
+        assert_account_json_round_trip(
+            Provider::Grok,
+            AuthSource::GrokCli {
+                expected_identity: "user@example.com".into(),
+            },
+        );
+        let json = serde_json::to_value(AuthSource::GrokCli {
+            expected_identity: "user@example.com".into(),
+        })
+        .unwrap();
+        assert_eq!(json["kind"], "grok_cli");
     }
 
     #[test]

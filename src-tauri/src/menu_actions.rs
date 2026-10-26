@@ -167,6 +167,27 @@ pub(crate) fn import_provider<R: Runtime>(app: &AppHandle<R>, provider: Provider
     });
 }
 
+/// Imports every Grok CLI OIDC session (`~/.grok/auth.json`) as read-only
+/// references. Blocking file read runs off the menu callback like its siblings.
+pub(crate) fn import_grok_cli<R: Runtime>(app: &AppHandle<R>) {
+    let app2 = app.clone();
+    tauri::async_runtime::spawn(async move {
+        match crate::import::load_grok_cli_auth() {
+            Ok(accounts) => {
+                let store = app2.state::<AccountStore>();
+                for account in accounts {
+                    record_add_outcome(
+                        "import grok cli",
+                        store.add(Provider::Grok, account.label, account.credentials),
+                    );
+                }
+                refresh_tray(&app2).await;
+            }
+            Err(e) => eprintln!("import grok cli: {e}"),
+        }
+    });
+}
+
 pub(crate) fn cli_coordinator_setup<R: Runtime>(app: &AppHandle<R>, provider: Provider) {
     use crate::cli_auth::{CliAuthCoordinator, ProviderAdapter, RetrySchedule};
     use crate::terminal::TerminalLauncher;
@@ -433,6 +454,7 @@ pub(crate) enum AuthAction {
     CliCoordinator,
     Import,
     GrokClipboard,
+    GrokCli,
 }
 
 pub(crate) fn classify_auth_action(provider: Provider, method: AuthMethod) -> AuthAction {
@@ -440,6 +462,7 @@ pub(crate) fn classify_auth_action(provider: Provider, method: AuthMethod) -> Au
         AuthMethod::BrowserOAuth => AuthAction::Oauth,
         AuthMethod::Cli => match provider {
             Provider::Codex | Provider::Claude => AuthAction::CliCoordinator,
+            Provider::Grok => AuthAction::GrokCli,
             _ => AuthAction::Import,
         },
         AuthMethod::LocalDatabase | AuthMethod::ManagementKeyEnvironment => AuthAction::Import,
@@ -457,6 +480,7 @@ pub(crate) fn dispatch_auth_action<R: Runtime>(
         AuthAction::CliCoordinator => cli_coordinator_setup(app, provider),
         AuthAction::Import => import_provider(app, provider),
         AuthAction::GrokClipboard => import_grok_clipboard(app),
+        AuthAction::GrokCli => import_grok_cli(app),
     }
 }
 

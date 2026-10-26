@@ -28,6 +28,7 @@ use providers::{
     assemble_cli_profile_usage, poll_agy, poll_claude_cli_profile, poll_claude_oauth,
     poll_codex_cli_profile, poll_codex_oauth,
 };
+mod grok_cli;
 mod providers_pro;
 use providers_pro::{
     poll_amp, poll_augment, poll_bailian, poll_copilot, poll_cursor, poll_deepseek, poll_factory,

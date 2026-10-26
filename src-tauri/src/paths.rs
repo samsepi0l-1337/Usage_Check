@@ -228,6 +228,23 @@ pub fn hermes_auth_file() -> Option<PathBuf> {
     home_dir().map(|h| h.join(".hermes").join("auth.json"))
 }
 
+/// Grok CLI config root: `GROK_HOME` if set and non-empty, otherwise `~/.grok`.
+pub fn grok_home() -> Option<PathBuf> {
+    grok_home_from(std::env::var_os("GROK_HOME"), home_dir())
+}
+
+fn grok_home_from(grok_home: Option<std::ffi::OsString>, home: Option<PathBuf>) -> Option<PathBuf> {
+    grok_home
+        .filter(|raw| !raw.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| home.map(|h| h.join(".grok")))
+}
+
+/// Grok CLI `auth.json` path.
+pub fn grok_auth_file() -> Option<PathBuf> {
+    grok_home().map(|home| home.join("auth.json"))
+}
+
 /// Claude config roots: `CLAUDE_CONFIG_DIR` (comma-separated) or the default
 /// `~/.claude` and `~/.config/claude`.
 pub fn claude_config_roots() -> Vec<PathBuf> {
@@ -649,6 +666,29 @@ fn normalize_lexically(path: &Path) -> PathBuf {
         }
     }
     normalized
+}
+
+#[cfg(test)]
+mod tests_grok_paths {
+    use super::*;
+
+    #[test]
+    fn grok_home_prefers_non_empty_env_then_dot_grok() {
+        let home = Some(PathBuf::from("/home/u"));
+        assert_eq!(
+            grok_home_from(Some("/custom/grok".into()), home.clone()),
+            Some(PathBuf::from("/custom/grok"))
+        );
+        assert_eq!(
+            grok_home_from(Some("".into()), home.clone()),
+            Some(PathBuf::from("/home/u/.grok"))
+        );
+        assert_eq!(
+            grok_home_from(None, home),
+            Some(PathBuf::from("/home/u/.grok"))
+        );
+        assert_eq!(grok_home_from(None, None), None);
+    }
 }
 
 #[cfg(test)]

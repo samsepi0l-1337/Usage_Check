@@ -24,6 +24,7 @@ pub fn auth_capability(provider: Provider) -> AuthCapability {
         Provider::Grok => &[
             AuthMethod::ManagementKeyClipboard,
             AuthMethod::ManagementKeyEnvironment,
+            AuthMethod::Cli,
         ],
         Provider::Higgsfield
         | Provider::Kimi

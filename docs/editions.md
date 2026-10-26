@@ -73,7 +73,7 @@ clock-rollback handling: [`docs/LICENSE_API.md`](LICENSE_API.md).
 | **Claude** | No | **Login Claude (browser)** (OAuth) or **Add Claude (CLI)** (isolated CLI profile) | Browser: Anthropic OAuth usage API + local logs. CLI: status-line bridge installed into the managed profile (`waiting_for_usage` until first sample) | 5h / 7d used % |
 | **Gemini (agy)** | No | **Login Antigravity (browser)** — no CLI import | Antigravity Model Quota (`RetrieveUserQuotaSummary`) | Gemini + Claude+GPT pools as used % |
 | **Cursor** | Yes | **Import Cursor (local, Experimental)** — reads `state.vscdb` | Undocumented Connect RPC `GetCurrentPeriodUsage` on `api2.cursor.sh` | Billing-period used % + optional `$ left` |
-| **Grok (xAI)** | Yes | **Import xAI API credits (clipboard)** — paste Management Key; optional **Import xAI API credits (env vars)** | xAI Management API prepaid balance (not consumer SuperGrok) | Spend-since-top-up used % + `$ left` |
+| **Grok (xAI)** | Yes | **Import xAI API credits (clipboard)** — paste Management Key; optional **Import xAI API credits (env vars)**; or **Add Grok (CLI)** (`~/.grok/auth.json`) | xAI Management API prepaid balance, or Grok CLI consumer billing (unofficial) | Management Key: spend-since-top-up used % + `$ left`; CLI: credits used % |
 | **Higgsfield** | Yes | **Add Higgsfield (CLI)** | `higgsfield account status --json` subprocess | Credits used % + `N credits left` |
 | **Kimi Code** | Yes | **Add Kimi (CLI)** — `~/.kimi-code/credentials` (or `$KIMI_CODE_HOME`) | `GET https://api.kimi.com/coding/v1/usages` (fallback `api.kimi.ai`) | 5h / 7d used % |
 | **OpenCode Go** | Yes | **Add OpenCode Go (CLI)** — `auth.json` `opencode-go` key | `GET https://opencode.ai/zen/go/v1/usage` | rolling / weekly used % + monthly row |
@@ -139,10 +139,21 @@ notice. It is read-only and never writes to Cursor's database.
 6. Local tokens are re-synced from `state.vscdb` on each poll when the
    identity matches.
 
-#### Grok (xAI API management-key credits)
+#### Grok (xAI Management Key or Grok CLI session)
 
-This is xAI **API** management-key credit usage — not consumer SuperGrok
-subscription quota. There is no SuperGrok integration.
+Two login modes sit side by side:
+
+- **Management Key** (xAI API prepaid credits): clipboard or env vars, below.
+  This is the default and wins when `XAI_MGMT_KEY` is set.
+- **Grok CLI session** (**Add Grok (CLI)**): run `grok login`, then the tray reads
+  `~/.grok/auth.json` (or `$GROK_HOME/auth.json`) and registers each session as a
+  read-only reference. Polling re-reads the file and calls the Grok CLI consumer
+  billing endpoint (`cli-chat-proxy.grok.com`, unofficial, may change). The file is
+  never written or refreshed and no token is copied into UsageCheck's store.
+  Missing, malformed, other-identity or expired sessions show `needs_login`;
+  run the Grok CLI again to renew it. Both modes stay Pro-gated.
+
+Management Key steps:
 
 1. Obtain an xAI **Management API key** from xAI Console → Settings → Management Keys.
 2. Copy the key to your clipboard.
@@ -460,7 +471,7 @@ src-tauri/
   src/cursor_local.rs     # read-only state.vscdb import
   src/windsurf_local.rs   # read-only Windsurf state.vscdb import
   src/trae_local.rs       # read-only Trae state.vscdb import (fail closed on tc)
-  src/import/             # load_grok_env_auth(), import_grok_from_clipboard(),
+  src/import/             # load_grok_env_auth(), import_grok_from_clipboard(), load_grok_cli_auth(),
                           # load_higgsfield_cli_auth(), load_kimi_cli_auth(),
                           # load_opencode_cli_auth(), load_deepseek_cli_auth(),
                           # load_openrouter_cli_auth(), load_copilot_cli_auth(),
@@ -472,7 +483,7 @@ src-tauri/
   src/poller/             # poll_* for paid providers; requires_pro()-gated dispatch
   src/tray_menu/          # auth_action_specs() (is_pro()-filtered); license tray section
   src/menu_actions.rs     # handle_menu_event(): add-cursor-local / add-grok-clipboard /
-                          # add-grok-env / add-higgsfield-cli / add-kimi-cli /
+                          # add-grok-env / add-grok-cli / add-higgsfield-cli / add-kimi-cli /
                           # add-opencode-cli / add-deepseek-cli / add-openrouter-cli /
                           # add-copilot-local / add-windsurf-local /
                           # add-minimax-cli / add-augment-cli /
@@ -494,7 +505,7 @@ mode), on by default. There is no edition feature and no
 | Area | Limitation |
 | --- | --- |
 | **Cursor** | **Experimental.** Uses an **undocumented** private RPC (`GetCurrentPeriodUsage`). Cursor may change or break it without notice. No official public quota API. |
-| **Grok** | Shows **xAI API management-key prepaid credit** balance and spend-since-top-up %. This is **not** consumer SuperGrok — there is no SuperGrok weekly quota % and that subscription tier is not modeled. |
+| **Grok** | Management Key: **xAI API prepaid credit** balance and spend-since-top-up %. CLI session (read-only `auth.json` reference): consumer credits used % from an **unofficial** Grok CLI billing endpoint that may change without notice; no tier is modeled. |
 | **Higgsfield** | **Pure CLI reference** via `higgsfield account status --json` (no credential file read). Login happens via the CLI, not in-app. Unrecognized JSON → `needs_setup`. |
 | **Kimi Code** | CLI file import only (no in-app browser login). Empty/404 usage payload → `needs_setup`. |
 | **OpenCode Go** | Imports only `opencode-go` from `auth.json`. A Zen key returns HTTP 403 (`needs_setup`). |

@@ -89,6 +89,7 @@ fn build_mock_app(store_root: std::path::PathBuf) -> tauri::App<tauri::test::Moc
 const PAID_PROVIDER_EVENTS: &[&str] = &[
     "add-cursor-local",
     "add-grok-clipboard",
+    "add-grok-cli",
     "add-higgsfield-cli",
 ];
 

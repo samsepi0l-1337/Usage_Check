@@ -310,7 +310,7 @@ components:
           example: 0
     AuthKind:
       type: string
-      enum: [cli_profile, browser_oauth, cursor_database, windsurf_database, trae_database, xai_key, higgsfield_cli, minimax_cli, augment_cli, bailian_cli]
+      enum: [cli_profile, browser_oauth, cursor_database, windsurf_database, trae_database, xai_key, grok_cli, higgsfield_cli, minimax_cli, augment_cli, bailian_cli]
       description: Non-secret label for how an account authenticates.
     Account:
       type: object

@@ -61,6 +61,12 @@ const ALL_AUTH_ACTION_SPECS: &[AuthActionSpec] = &[
         label: "Import xAI API credits (env vars)",
     },
     AuthActionSpec {
+        provider: Provider::Grok,
+        method: AuthMethod::Cli,
+        event_id: "add-grok-cli",
+        label: "Add Grok (CLI)",
+    },
+    AuthActionSpec {
         provider: Provider::Higgsfield,
         method: AuthMethod::Cli,
         event_id: "add-higgsfield-cli",
