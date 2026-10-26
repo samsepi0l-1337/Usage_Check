@@ -444,3 +444,56 @@ fn last_license_attempt_reflects_the_most_recent_recorded_attempt() {
         Some(Err(ActivationErrorClass::Network))
     );
 }
+
+/// Regression for the incident that overwrote the developer's real
+/// `~/.claude/settings.json` `statusLine` with a cargo test binary path.
+/// `HOME` points at a sentinel tempdir that stands in for the real home and
+/// holds a signed-in default Claude profile, so the add-account probe finds it
+/// immediately. Driving the menu action from the test binary must never
+/// install the status-line bridge there.
+#[test]
+fn default_claude_profile_menu_action_never_writes_settings_into_home() {
+    let _env_lock = LICENSE_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let sentinel = tempfile::tempdir().unwrap();
+    let profile = sentinel.path().join(".claude");
+    std::fs::create_dir_all(&profile).unwrap();
+    std::fs::write(
+        profile.join(".claude.json"),
+        r#"{"oauthAccount":{"emailAddress":"sentinel@example.invalid","accountUuid":"sentinel-uuid"}}"#,
+    )
+    .unwrap();
+    let _home = crate::hermetic_home_tests::HomeGuard::set(sentinel.path());
+    let scratch = tempfile::tempdir().unwrap();
+    let _app_data_env = AppDataDirGuard::set(scratch.path());
+    let app = build_mock_app(scratch.path().join("store"));
+
+    assert_eq!(
+        handle_menu_event(app.handle(), "add-claude-cli"),
+        DispatchOutcome::Dispatched
+    );
+    // `refresh_tray` is the last step of the dispatched action, after the
+    // account is saved and the bridge install was (or was not) attempted.
+    let settings = profile.join("settings.json");
+    for _ in 0..200 {
+        if refresh_generation(app.handle()) > 0 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    assert!(
+        refresh_generation(app.handle()) > 0,
+        "dispatched action never completed"
+    );
+    assert_eq!(
+        app.state::<AccountStore>().list().len(),
+        1,
+        "the sentinel Claude profile was not resolved"
+    );
+    assert!(
+        !settings.exists(),
+        "menu action wrote {}: {}",
+        settings.display(),
+        std::fs::read_to_string(&settings).unwrap_or_default()
+    );
+}

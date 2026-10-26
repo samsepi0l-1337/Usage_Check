@@ -35,6 +35,8 @@ mod cli_bin;
 mod codex_cli;
 mod cursor_local;
 mod edition;
+#[cfg(test)]
+mod hermetic_home_tests;
 mod import;
 mod license;
 mod menu_actions;

@@ -1,32 +1,11 @@
 use super::*;
 use chrono::{TimeZone, Utc};
-use std::ffi::OsString;
-use std::sync::Mutex;
 use tempfile::TempDir;
 use usage_core::account::{Account, ProfileOwnership, Provider};
 use usage_core::fetch::claude::ClaudeQuota;
 use usage_core::models::{QuotaUsage, UsageBreakdownRow};
 
-static ENV_LOCK: Mutex<()> = Mutex::new(());
-
-struct HomeGuard(Option<OsString>);
-
-impl HomeGuard {
-    fn set(path: &Path) -> Self {
-        let previous = std::env::var_os("HOME");
-        std::env::set_var("HOME", path);
-        Self(previous)
-    }
-}
-
-impl Drop for HomeGuard {
-    fn drop(&mut self) {
-        match self.0.take() {
-            Some(previous) => std::env::set_var("HOME", previous),
-            None => std::env::remove_var("HOME"),
-        }
-    }
-}
+use crate::hermetic_home_tests::HomeGuard;
 
 fn read_json(path: &Path) -> Value {
     let body = fs::read_to_string(path).expect("test JSON should be readable");
@@ -261,7 +240,6 @@ fn account_id_rejection_blocks_shell_metacharacters() {
 
 #[test]
 fn runtime_bridge_preserves_bytes_and_writes_minimal_snapshot() {
-    let _lock = ENV_LOCK.lock().expect("environment lock");
     let temp = TempDir::new().expect("temp directory");
     let _home = HomeGuard::set(temp.path());
     let account_id = "runtime-test";
@@ -299,7 +277,6 @@ fn runtime_bridge_preserves_bytes_and_writes_minimal_snapshot() {
 
 #[test]
 fn runtime_bridge_emits_fallback_without_prior_command() {
-    let _lock = ENV_LOCK.lock().expect("environment lock");
     let temp = TempDir::new().expect("temp directory");
     let _home = HomeGuard::set(temp.path());
     let account_id = "fallback-test";
@@ -325,7 +302,6 @@ fn runtime_bridge_emits_fallback_without_prior_command() {
 
 #[test]
 fn runtime_bridge_writes_empty_snapshot_without_rate_limits() {
-    let _lock = ENV_LOCK.lock().expect("environment lock");
     let temp = TempDir::new().expect("temp directory");
     let _home = HomeGuard::set(temp.path());
     let account_id = "norates";
@@ -358,7 +334,6 @@ fn install_rejects_non_object_root() {
 
 #[test]
 fn remove_bridge_tears_down_sidecar_and_snapshot_on_non_bridge_statusline() {
-    let _lock = ENV_LOCK.lock().expect("environment lock");
     let temp = TempDir::new().expect("temp directory");
     let _home = HomeGuard::set(temp.path());
     let account_id = "teardown-test";
@@ -391,4 +366,22 @@ fn remove_bridge_tears_down_sidecar_and_snapshot_on_non_bridge_statusline() {
         read_json(&settings_path)["statusLine"]["command"],
         "user-edit"
     );
+}
+
+#[test]
+fn install_refuses_the_cargo_test_binary_as_bridge_executable() {
+    let temp = TempDir::new().expect("temp directory");
+    let settings_path = temp.path().join("settings.json");
+    let before = json!({"statusLine": "~/.claude/statusline.sh"}).to_string();
+    fs::write(&settings_path, &before).expect("write settings");
+
+    let result = install_statusline_bridge(&settings_path, "test-account");
+
+    // This process IS a cargo test binary under target/<profile>/deps/.
+    assert!(result.is_err(), "installed a test binary as the bridge");
+    assert_eq!(
+        fs::read(&settings_path).expect("read settings"),
+        before.as_bytes()
+    );
+    assert!(!temp.path().join(".statusline_prior.json").exists());
 }
