@@ -230,6 +230,11 @@ pub fn hermes_auth_file() -> Option<PathBuf> {
 
 /// Grok CLI config root: `GROK_HOME` if set and non-empty, otherwise `~/.grok`.
 pub fn grok_home() -> Option<PathBuf> {
+    grok_home_from(std::env::var_os("GROK_HOME"), home_dir())
+}
+
+fn grok_home_from(grok_home: Option<std::ffi::OsString>, home: Option<PathBuf>) -> Option<PathBuf> {
+    let _ = (grok_home, home);
     None
 }
 
@@ -659,6 +664,29 @@ fn normalize_lexically(path: &Path) -> PathBuf {
         }
     }
     normalized
+}
+
+#[cfg(test)]
+mod tests_grok_paths {
+    use super::*;
+
+    #[test]
+    fn grok_home_prefers_non_empty_env_then_dot_grok() {
+        let home = Some(PathBuf::from("/home/u"));
+        assert_eq!(
+            grok_home_from(Some("/custom/grok".into()), home.clone()),
+            Some(PathBuf::from("/custom/grok"))
+        );
+        assert_eq!(
+            grok_home_from(Some("".into()), home.clone()),
+            Some(PathBuf::from("/home/u/.grok"))
+        );
+        assert_eq!(
+            grok_home_from(None, home),
+            Some(PathBuf::from("/home/u/.grok"))
+        );
+        assert_eq!(grok_home_from(None, None), None);
+    }
 }
 
 #[cfg(test)]
