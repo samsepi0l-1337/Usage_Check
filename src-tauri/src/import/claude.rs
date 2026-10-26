@@ -374,3 +374,18 @@ pub(crate) fn parse_expires_at(v: &serde_json::Value) -> Option<chrono::DateTime
     }
     None
 }
+
+#[cfg(test)]
+mod keychain_tests {
+    use super::*;
+
+    /// Characterization guard for the `keyring` fallback path: a service that
+    /// does not exist must yield `None` (never panic) whether the default
+    /// credential store is available or `Entry::new` reports `NoDefaultStore`.
+    #[test]
+    fn missing_keychain_service_yields_none() {
+        let service = format!("usagecheck-test-missing-{}", uuid::Uuid::new_v4());
+        assert!(read_claude_from_keyring_crate(&service, "usagecheck-test").is_none());
+        assert!(read_claude_from_keychain_service(&service).is_none());
+    }
+}
