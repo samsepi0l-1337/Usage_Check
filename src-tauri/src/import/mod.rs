@@ -64,10 +64,7 @@ pub(crate) use grok::{
     grok_imported_account, import_grok_from_clipboard, load_grok_env_auth,
     validate_grok_management_key,
 };
-pub(crate) use grok_cli::{
-    load_grok_auth_from, load_grok_cli_auth, load_grok_cli_auth_from, read_grok_cli_credentials,
-    GrokCliReadError,
-};
+pub(crate) use grok_cli::{load_grok_auth, load_grok_cli_auth, read_grok_cli_credentials};
 pub(crate) use higgsfield::{
     fetch_higgsfield_account_json_from, higgsfield_bin, load_higgsfield_cli_auth,
 };
@@ -133,7 +130,7 @@ pub fn import_from_cli(provider: Provider) -> Result<ImportedAccount, String> {
         Provider::Codex => load_codex_cli_auth(),
         Provider::Claude => load_claude_cli_auth(),
         Provider::Cursor => crate::cursor_local::load_cursor_local_auth(),
-        Provider::Grok => load_grok_env_auth(),
+        Provider::Grok => load_grok_auth(),
         Provider::Higgsfield => load_higgsfield_cli_auth(),
         Provider::MiniMax => load_minimax_cli_auth(),
         Provider::Augment => load_augment_cli_auth(),

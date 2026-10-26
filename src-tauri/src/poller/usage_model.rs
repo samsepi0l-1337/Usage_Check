@@ -142,9 +142,14 @@ pub(super) fn account_usage_from_grok(
     prepaid: &GrokPrepaid,
     status: &str,
 ) -> AccountUsage {
+    let plan = if matches!(account.auth_source, AuthSource::GrokCli { .. }) {
+        "Grok"
+    } else {
+        "API credits"
+    };
     AccountUsage {
-        display_name: display_name_for(account, None, Some("API credits")),
-        plan: Some("API credits".into()),
+        display_name: display_name_for(account, None, Some(plan)),
+        plan: Some(plan.into()),
         account: account.clone(),
         five_hour: None,
         week: prepaid.period.clone(),

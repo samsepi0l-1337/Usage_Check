@@ -251,6 +251,21 @@ impl AccountStore {
                     is_pro,
                 )
             }
+            Provider::Grok if grok_credentials_are_oidc(&credentials) => {
+                // CLI/OIDC session: keep only a read-only reference. The token
+                // stays in the CLI's own auth.json and is re-read at poll time.
+                let expected_identity = credentials
+                    .account_id
+                    .clone()
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| label.clone());
+                self.add_reference_with(
+                    provider,
+                    label,
+                    AuthSource::GrokCli { expected_identity },
+                    is_pro,
+                )
+            }
             Provider::Grok => self.add_secret_with(
                 provider,
                 label,
@@ -314,4 +329,12 @@ impl AccountStore {
             let _ = self.save_index_preserving(&accounts, &unknown);
         }
     }
+}
+
+fn grok_credentials_are_oidc(credentials: &Credentials) -> bool {
+    usage_core::fetch::grok::credentials_are_oidc(
+        &credentials.access_token,
+        credentials.refresh_token.as_deref(),
+        credentials.expires_at.is_some(),
+    )
 }

@@ -22,7 +22,7 @@ pub(crate) fn auth_kind(source: &AuthSource) -> &'static str {
         AuthSource::WindsurfDatabase { .. } => "windsurf_database",
         AuthSource::TraeDatabase { .. } => "trae_database",
         AuthSource::XaiManagement { .. } => "xai_key",
-        AuthSource::GrokCli { .. } => "xai_key",
+        AuthSource::GrokCli { .. } => "grok_cli",
         AuthSource::HiggsfieldCli { .. } => "higgsfield_cli",
         AuthSource::MiniMaxCli { .. } => "minimax_cli",
         AuthSource::AugmentCli { .. } => "augment_cli",

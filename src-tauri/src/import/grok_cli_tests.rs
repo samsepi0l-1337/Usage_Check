@@ -41,7 +41,10 @@ fn parses_session_with_identity_and_email() {
     let e = &entries[0];
     assert_eq!(e.identity, "user-1");
     assert_eq!(e.email.as_deref(), Some("user@example.com"));
-    assert_eq!(e.credentials.refresh_token.as_deref(), Some("refresh-example"));
+    assert_eq!(
+        e.credentials.refresh_token.as_deref(),
+        Some("refresh-example")
+    );
     assert_eq!(e.credentials.account_id.as_deref(), Some("user-1"));
     assert!(e.credentials.expires_at.is_some());
 }
@@ -99,18 +102,27 @@ fn load_from_file_maps_entries_to_labelled_accounts() {
     let accounts = load_grok_cli_auth_from(&path).unwrap();
     assert_eq!(accounts.len(), 1);
     assert_eq!(accounts[0].label, "user@example.com");
-    assert_eq!(accounts[0].credentials.account_id.as_deref(), Some("user-1"));
+    assert_eq!(
+        accounts[0].credentials.account_id.as_deref(),
+        Some("user-1")
+    );
 }
 
 #[test]
 fn load_from_file_reports_missing_malformed_and_empty() {
     let dir = tempfile::tempdir().unwrap();
     let missing = dir.path().join("none.json");
-    assert!(load_grok_cli_auth_from(&missing).unwrap_err().contains("grok login"));
+    assert!(load_grok_cli_auth_from(&missing)
+        .unwrap_err()
+        .contains("grok login"));
     let bad = write_auth(dir.path(), "{ not json");
-    assert!(load_grok_cli_auth_from(&bad).unwrap_err().contains("not valid JSON"));
+    assert!(load_grok_cli_auth_from(&bad)
+        .unwrap_err()
+        .contains("not valid JSON"));
     let empty = write_auth(dir.path(), "{}");
-    assert!(load_grok_cli_auth_from(&empty).unwrap_err().contains("no usable"));
+    assert!(load_grok_cli_auth_from(&empty)
+        .unwrap_err()
+        .contains("no usable"));
 }
 
 #[test]
@@ -204,5 +216,8 @@ fn cli_session_is_the_fallback_without_management_key() {
     assert_eq!(chosen.label, "user@example.com");
     let none = dir.path().join("missing.json");
     let err = load_grok_auth_from(Err("set XAI_MGMT_KEY".into()), &none).unwrap_err();
-    assert!(err.contains("XAI_MGMT_KEY") && err.contains("grok login"), "{err}");
+    assert!(
+        err.contains("XAI_MGMT_KEY") && err.contains("grok login"),
+        "{err}"
+    );
 }

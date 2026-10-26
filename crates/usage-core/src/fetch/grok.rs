@@ -54,26 +54,22 @@ pub fn parse_grok_paste(text: &str) -> (String, Option<String>) {
 
 /// True when `token` looks like a compact JWT (three non-empty segments).
 /// Management keys are opaque and must not be treated as OIDC access tokens.
-pub fn is_jwt(_token: &str) -> bool {
-    false
+pub fn is_jwt(token: &str) -> bool {
+    let mut parts = token.split('.');
+    parts.next().is_some_and(|s| !s.is_empty())
+        && parts.next().is_some_and(|s| !s.is_empty())
+        && parts.next().is_some_and(|s| !s.is_empty())
+        && parts.next().is_none()
 }
 
 /// OIDC session credentials carry a JWT access token, a refresh token, or an
 /// expiry; Management keys carry none of those.
 pub fn credentials_are_oidc(
-    _access_token: &str,
-    _refresh_token: Option<&str>,
-    _has_expiry: bool,
+    access_token: &str,
+    refresh_token: Option<&str>,
+    has_expiry: bool,
 ) -> bool {
-    false
-}
-
-/// Parses Grok CLI consumer billing JSON (`GET …/v1/billing`).
-pub fn parse_grok_consumer_credits(_root: &Value) -> GrokPrepaid {
-    GrokPrepaid {
-        period: None,
-        detail_suffix: None,
-    }
+    refresh_token.is_some_and(|s| !s.trim().is_empty()) || has_expiry || is_jwt(access_token)
 }
 
 /// Parsed xAI prepaid credit balance (Management API) or Grok CLI consumer quota.
@@ -86,7 +82,81 @@ pub struct GrokPrepaid {
 }
 
 fn cents_val(obj: Option<&Value>) -> Option<i64> {
-    obj?.get("val")?.as_str()?.parse().ok()
+    let amount = obj?.get("val")?;
+    amount
+        .as_str()
+        .and_then(|s| s.parse().ok())
+        .or_else(|| amount.as_i64())
+}
+
+fn json_f64(v: &Value) -> Option<f64> {
+    v.as_f64()
+        .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+}
+
+fn parse_rfc3339(s: &str) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(s)
+        .ok()
+        .map(|dt| dt.with_timezone(&Utc))
+}
+
+/// Parses Grok CLI / SuperGrok consumer billing JSON
+/// (`GET …/v1/billing?format=credits` or `GET …/v1/billing`).
+///
+/// Prefers `config.creditUsagePercent`; falls back to on-demand used/cap, then
+/// monthly used/limit. A parseable current period with no percent is 0% used
+/// (proto3 omits zero). Unparseable bodies leave `period` empty so the poller
+/// reports `needs_setup`. Never panics on arbitrary JSON.
+pub fn parse_grok_consumer_credits(root: &Value) -> GrokPrepaid {
+    let config = root.get("config").unwrap_or(root);
+
+    let resets_at = config
+        .get("currentPeriod")
+        .and_then(|p| p.get("end"))
+        .and_then(Value::as_str)
+        .or_else(|| config.get("billingPeriodEnd").and_then(Value::as_str))
+        .and_then(parse_rfc3339);
+
+    let percent = config
+        .get("creditUsagePercent")
+        .and_then(json_f64)
+        .or_else(|| {
+            let cap = cents_val(config.get("onDemandCap"))?;
+            if cap <= 0 {
+                return None;
+            }
+            let used = cents_val(config.get("onDemandUsed")).unwrap_or(0);
+            Some(used as f64 / cap as f64 * 100.0)
+        })
+        .or_else(|| {
+            let limit = cents_val(config.get("monthlyLimit"))?;
+            if limit <= 0 {
+                return None;
+            }
+            let used = cents_val(config.get("used")).unwrap_or(0);
+            Some(used as f64 / limit as f64 * 100.0)
+        });
+
+    let period = match percent {
+        Some(p) if p.is_finite() => Some(QuotaUsage {
+            percent: p.clamp(0.0, 100.0),
+            resets_at,
+            window_seconds: None,
+        }),
+        None if resets_at.is_some() => Some(QuotaUsage {
+            percent: 0.0,
+            resets_at,
+            window_seconds: None,
+        }),
+        _ => None,
+    };
+    let detail_suffix = period
+        .is_none()
+        .then(|| "Grok quota unavailable".to_string());
+    GrokPrepaid {
+        period,
+        detail_suffix,
+    }
 }
 
 fn abs_cents(cents: i64) -> i64 {
@@ -294,9 +364,15 @@ mod tests {
         let q = parse_grok_consumer_credits(&v);
         assert!((q.period.unwrap().percent - (5092.0 / 16500.0 * 100.0)).abs() < 0.01);
         let over = json!({ "config": { "creditUsagePercent": 250 } });
-        assert_eq!(parse_grok_consumer_credits(&over).period.unwrap().percent, 100.0);
+        assert_eq!(
+            parse_grok_consumer_credits(&over).period.unwrap().percent,
+            100.0
+        );
         let neg = json!({ "config": { "creditUsagePercent": -5 } });
-        assert_eq!(parse_grok_consumer_credits(&neg).period.unwrap().percent, 0.0);
+        assert_eq!(
+            parse_grok_consumer_credits(&neg).period.unwrap().percent,
+            0.0
+        );
     }
 
     #[test]

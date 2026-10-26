@@ -170,7 +170,10 @@ fn grok_cli_login_sits_next_to_the_management_key_actions() {
     assert_eq!(cli.label, "Add Grok (CLI)");
     assert!(spec_for_event("add-grok-clipboard").is_some());
     assert!(spec_for_event("add-grok-env").is_some());
-    assert!(!is_dispatch_allowed(&cli, false), "Grok CLI stays Pro-gated");
+    assert!(
+        !is_dispatch_allowed(&cli, false),
+        "Grok CLI stays Pro-gated"
+    );
     assert!(is_dispatch_allowed(&cli, true));
 }
 

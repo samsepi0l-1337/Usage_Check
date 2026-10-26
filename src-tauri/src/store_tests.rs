@@ -1832,7 +1832,9 @@ fn grok_cli_session_is_stored_as_a_reference_without_copying_tokens() {
         panic!("OIDC credentials must register a GrokCli reference")
     };
     assert_eq!(expected_identity, "user-1");
-    assert!(store.credentials(AccountStore::credential_key(&account)).is_none());
+    assert!(store
+        .credentials(AccountStore::credential_key(&account))
+        .is_none());
     for entry in walk_files(&sandbox.root) {
         let text = fs::read_to_string(&entry).unwrap_or_default();
         assert!(!text.contains("refresh-example"), "{}", entry.display());
@@ -1861,7 +1863,12 @@ fn grok_management_key_still_wins_over_oidc_heuristics_when_opaque() {
     let sandbox = TestSandbox::new();
     let store = sandbox.store();
     let account = store
-        .add_with(Provider::Grok, "Grok · team t".into(), credentials("t"), || true)
+        .add_with(
+            Provider::Grok,
+            "Grok · team t".into(),
+            credentials("t"),
+            || true,
+        )
         .unwrap();
     assert!(matches!(
         account.auth_source,

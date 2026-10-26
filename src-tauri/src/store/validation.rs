@@ -15,6 +15,7 @@ impl AccountStore {
             ) | (Provider::Cursor, AuthSource::CursorDatabase { .. })
                 | (Provider::Windsurf, AuthSource::WindsurfDatabase { .. })
                 | (Provider::Trae, AuthSource::TraeDatabase { .. })
+                | (Provider::Grok, AuthSource::GrokCli { .. })
                 | (Provider::Higgsfield, AuthSource::HiggsfieldCli { .. })
                 | (Provider::MiniMax, AuthSource::MiniMaxCli { .. })
                 | (Provider::Augment, AuthSource::AugmentCli { .. })
@@ -124,6 +125,14 @@ impl AccountStore {
                         expected_identity: candidate,
                     },
                 ) if existing == candidate => Some("Higgsfield CLI account already registered"),
+                (
+                    AuthSource::GrokCli {
+                        expected_identity: existing,
+                    },
+                    AuthSource::GrokCli {
+                        expected_identity: candidate,
+                    },
+                ) if existing == candidate => Some("Grok CLI account already registered"),
                 (
                     AuthSource::MiniMaxCli {
                         expected_identity: existing,

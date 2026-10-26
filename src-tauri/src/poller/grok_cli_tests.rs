@@ -81,7 +81,8 @@ async fn poll(stub: &Stub, path: Option<&Path>) -> AccountUsage {
     .await
 }
 
-const OK_BODY: &str = r#"{"config":{"creditUsagePercent":42.5,"currentPeriod":{"end":"2026-10-08T00:00:00Z"}}}"#;
+const OK_BODY: &str =
+    r#"{"config":{"creditUsagePercent":42.5,"currentPeriod":{"end":"2026-10-08T00:00:00Z"}}}"#;
 
 #[tokio::test]
 async fn ok_response_maps_percent_and_sends_bearer() {
@@ -94,8 +95,14 @@ async fn ok_response_maps_percent_and_sends_bearer() {
     assert!((usage.week.as_ref().unwrap().percent - 42.5).abs() < 0.01);
     assert_eq!(usage.plan.as_deref(), Some("Grok"));
     let heads = s.heads.lock().unwrap();
-    assert!(heads[0].contains(&format!("Bearer {token}")), "{}", heads[0]);
-    assert!(heads[0].to_lowercase().contains("x-xai-token-auth: xai-grok-cli"));
+    assert!(
+        heads[0].contains(&format!("Bearer {token}")),
+        "{}",
+        heads[0]
+    );
+    assert!(heads[0]
+        .to_lowercase()
+        .contains("x-xai-token-auth: xai-grok-cli"));
 }
 
 #[tokio::test]
@@ -170,7 +177,11 @@ async fn session_for_a_different_identity_is_never_used() {
 #[tokio::test]
 async fn session_file_is_not_modified_by_polling() {
     let dir = tempfile::tempdir().unwrap();
-    let path = write_session(dir.path(), &jwt_with_exp(now().timestamp() + 3600), Some("r"));
+    let path = write_session(
+        dir.path(),
+        &jwt_with_exp(now().timestamp() + 3600),
+        Some("r"),
+    );
     let before = std::fs::read(&path).unwrap();
     let s = stub(vec![(200, OK_BODY)]).await;
     poll(&s, Some(&path)).await;

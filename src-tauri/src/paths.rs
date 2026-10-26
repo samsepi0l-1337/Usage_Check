@@ -234,8 +234,10 @@ pub fn grok_home() -> Option<PathBuf> {
 }
 
 fn grok_home_from(grok_home: Option<std::ffi::OsString>, home: Option<PathBuf>) -> Option<PathBuf> {
-    let _ = (grok_home, home);
-    None
+    grok_home
+        .filter(|raw| !raw.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| home.map(|h| h.join(".grok")))
 }
 
 /// Grok CLI `auth.json` path.
