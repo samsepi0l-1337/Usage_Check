@@ -88,16 +88,45 @@ async fn an_empty_retry_is_recorded_and_the_next_poll_skips_the_fetch() {
 }
 
 #[tokio::test]
-async fn an_http_error_on_retry_is_not_recorded() {
-    let key = "gate-error-not-recorded";
+async fn an_http_error_on_retry_starts_a_backoff_and_the_next_poll_skips_the_fetch() {
+    for (key, status) in [("gate-error-429", Some(429)), ("gate-error-other", None)] {
+        let t0 = Instant::now();
+        let calls = Cell::new(0);
 
-    let quota = with_at_wall_retry(empty_quota(), key, Instant::now(), || async {
+        let quota = with_at_wall_retry(empty_quota(), key, t0, || {
+            calls.set(calls.get() + 1);
+            async move { Err::<serde_json::Value, _>(status) }
+        })
+        .await;
+        assert!(quota.breakdown.is_empty());
+        assert_eq!(calls.get(), 1);
+        assert!(at_wall_retry_suppressed(key, t0));
+
+        let _ = with_at_wall_retry(empty_quota(), key, t0, || {
+            calls.set(calls.get() + 1);
+            async move { Err::<serde_json::Value, _>(status) }
+        })
+        .await;
+        assert_eq!(calls.get(), 1, "a backed-off account must not be retried");
+    }
+}
+
+#[tokio::test]
+async fn a_successful_retry_after_the_backoff_clears_the_error_state() {
+    let key = "gate-error-then-fable";
+    let t0 = Instant::now();
+    let _ = with_at_wall_retry(empty_quota(), key, t0, || async {
         Err::<serde_json::Value, _>(Some(429))
     })
     .await;
+    assert!(at_wall_retry_suppressed(key, t0));
+    let t1 = t0 + AT_WALL_ERROR_BASE;
+    assert!(!at_wall_retry_suppressed(key, t1));
 
-    assert!(quota.breakdown.is_empty());
-    assert!(!at_wall_retry_suppressed(key, Instant::now()));
+    let quota = with_at_wall_retry(empty_quota(), key, t1, || async { Ok(fable_body()) }).await;
+
+    assert_eq!(quota.breakdown.len(), 1);
+    assert!(!at_wall_retry_suppressed(key, t1));
 }
 
 #[tokio::test]
@@ -125,4 +154,79 @@ fn the_shared_cache_round_trips_through_the_public_helpers() {
     assert!(!at_wall_retry_suppressed(key, t0));
     record_at_wall_empty(key, t0);
     assert!(at_wall_retry_suppressed(key, t0));
+}
+
+#[test]
+fn an_error_backs_off_for_the_base_delay_then_allows_a_retry() {
+    let mut cache = AtWallNegativeCache::default();
+    let t0 = Instant::now();
+
+    cache.record_error("acct-a", t0);
+
+    assert!(cache.is_suppressed("acct-a", t0));
+    assert!(cache.is_suppressed("acct-a", t0 + AT_WALL_ERROR_BASE - Duration::from_secs(1)));
+    assert!(!cache.is_suppressed("acct-a", t0 + AT_WALL_ERROR_BASE));
+}
+
+#[test]
+fn consecutive_errors_double_the_backoff() {
+    let mut cache = AtWallNegativeCache::default();
+    let t0 = Instant::now();
+    cache.record_error("acct-a", t0);
+
+    let t1 = t0 + AT_WALL_ERROR_BASE;
+    cache.record_error("acct-a", t1);
+    assert!(cache.is_suppressed(
+        "acct-a",
+        t1 + AT_WALL_ERROR_BASE * 2 - Duration::from_secs(1)
+    ));
+    assert!(!cache.is_suppressed("acct-a", t1 + AT_WALL_ERROR_BASE * 2));
+
+    let t2 = t1 + AT_WALL_ERROR_BASE * 2;
+    cache.record_error("acct-a", t2);
+    assert!(cache.is_suppressed(
+        "acct-a",
+        t2 + AT_WALL_ERROR_BASE * 4 - Duration::from_secs(1)
+    ));
+    assert!(!cache.is_suppressed("acct-a", t2 + AT_WALL_ERROR_BASE * 4));
+}
+
+#[test]
+fn the_error_backoff_is_capped_and_never_overflows() {
+    let mut cache = AtWallNegativeCache::default();
+    let mut now = Instant::now();
+    for _ in 0..200 {
+        cache.record_error("acct-a", now);
+        now += AT_WALL_ERROR_CAP;
+    }
+    let last = now - AT_WALL_ERROR_CAP;
+
+    assert!(cache.is_suppressed("acct-a", last + AT_WALL_ERROR_CAP - Duration::from_secs(1)));
+    assert!(!cache.is_suppressed("acct-a", last + AT_WALL_ERROR_CAP));
+}
+
+#[test]
+fn clearing_the_error_resets_the_backoff_sequence() {
+    let mut cache = AtWallNegativeCache::default();
+    let t0 = Instant::now();
+    cache.record_error("acct-a", t0);
+    cache.record_error("acct-a", t0 + AT_WALL_ERROR_BASE);
+
+    cache.clear_error("acct-a");
+    let t2 = t0 + AT_WALL_ERROR_BASE * 4;
+    cache.record_error("acct-a", t2);
+
+    assert!(cache.is_suppressed("acct-a", t2));
+    assert!(!cache.is_suppressed("acct-a", t2 + AT_WALL_ERROR_BASE));
+}
+
+#[test]
+fn the_error_backoff_is_per_account() {
+    let mut cache = AtWallNegativeCache::default();
+    let t0 = Instant::now();
+
+    cache.record_error("acct-a", t0);
+
+    assert!(cache.is_suppressed("acct-a", t0));
+    assert!(!cache.is_suppressed("acct-b", t0));
 }
