@@ -10,13 +10,25 @@ const APP_DIR: &str = "UsageCheck";
 
 #[path = "paths_profiles.rs"]
 pub mod paths_profiles;
-pub use paths_profiles::{claude_managed_root, claude_settings_json, claude_statusline_snapshot};
+pub use paths_profiles::{claude_settings_json, claude_statusline_snapshot};
+
+#[path = "paths_roots.rs"]
+pub mod paths_roots;
+pub use paths_roots::ProfileRoots;
+
+#[cfg(test)]
+#[path = "paths_confine.rs"]
+pub(crate) mod paths_confine;
 
 /// User home directory. Prefers `HOME` (Unix) then `USERPROFILE` (Windows).
 pub fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME")
+    let raw = std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(PathBuf::from)
+        .map(PathBuf::from);
+    // Test builds never resolve a HOME outside the OS temp dir (issue #63).
+    #[cfg(test)]
+    let raw = Some(paths_confine::confine_home(raw));
+    raw
 }
 
 /// UsageCheck's application-owned data root.
@@ -245,6 +257,18 @@ pub fn grok_auth_file() -> Option<PathBuf> {
     grok_home().map(|home| home.join("auth.json"))
 }
 
+/// Test builds ignore a `CLAUDE_CONFIG_DIR` outside the OS temp dir; release
+/// builds accept every directory.
+fn claude_config_dir_allowed(path: &Path) -> bool {
+    #[cfg(test)]
+    return paths_confine::is_in_temp_dir(path);
+    #[cfg(not(test))]
+    {
+        let _ = path;
+        true
+    }
+}
+
 /// Claude config roots: `CLAUDE_CONFIG_DIR` (comma-separated) or the default
 /// `~/.claude` and `~/.config/claude`.
 pub fn claude_config_roots() -> Vec<PathBuf> {
@@ -254,6 +278,7 @@ pub fn claude_config_roots() -> Vec<PathBuf> {
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(PathBuf::from)
+            .filter(|path| claude_config_dir_allowed(path))
             .collect();
         if !parts.is_empty() {
             return parts;
@@ -752,11 +777,11 @@ mod tests_codex_managed {
     }
 }
 
-/// Get the default CLAUDE_CONFIG_DIR if it exists
-pub fn default_claude_config_dir_checked() -> Option<PathBuf> {
+/// The default CLAUDE_CONFIG_DIR if it exists, via the process environment.
+fn default_claude_config_dir_checked_system() -> Option<PathBuf> {
     if let Ok(dir) = std::env::var("CLAUDE_CONFIG_DIR") {
         let path = PathBuf::from(dir);
-        if path.exists() {
+        if claude_config_dir_allowed(&path) && path.exists() {
             return Some(path);
         }
     }

@@ -78,12 +78,63 @@ fn refresh_generation<R: Runtime>(app: &AppHandle<R>) -> u64 {
 /// plugin — none of the three paid-provider dispatch paths under test reach
 /// `toggle-autostart`, and registering it for real would risk mutating an
 /// actual macOS LaunchAgent, which a test must never do.
+///
+/// It also registers hermetic [`CliSetupDeps`]: a profile root below the store's
+/// sibling `home` dir, a launcher that only records, and a fake bridge
+/// executable, so the CLI sign-in flow never reaches the real `HOME`, Terminal
+/// or `settings.json` (issue #63).
 fn build_mock_app(store_root: std::path::PathBuf) -> tauri::App<tauri::test::MockRuntime> {
-    tauri::test::mock_builder()
+    build_mock_app_with(store_root, true)
+}
+
+/// Like [`build_mock_app`] but WITHOUT the injected seams, so the CLI sign-in
+/// flow resolves through the process `HOME` exactly like production. Only for
+/// tests that point `HOME` at a sentinel tempdir and rely on the
+/// test-binary refusal as the last line of defense.
+fn build_unseamed_mock_app(store_root: std::path::PathBuf) -> tauri::App<tauri::test::MockRuntime> {
+    build_mock_app_with(store_root, false)
+}
+
+fn build_mock_app_with(
+    store_root: std::path::PathBuf,
+    hermetic_deps: bool,
+) -> tauri::App<tauri::test::MockRuntime> {
+    let home = mock_home(&store_root);
+    let deps = hermetic_deps.then(|| CliSetupDeps {
+        roots: crate::paths::ProfileRoots::rooted_at(&home),
+        launcher: Some(std::sync::Arc::new(RecordingLauncher::default())),
+        bridge_exe: Some(std::path::PathBuf::from(
+            "/Applications/UsageCheck.app/Contents/MacOS/usage-app",
+        )),
+    });
+    let mut builder = tauri::test::mock_builder();
+    if let Some(deps) = deps {
+        builder = builder.manage(deps);
+    }
+    builder
         .manage(AccountStore::new_at(store_root))
         .manage(RefreshState::default())
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
         .expect("build mock tauri app")
+}
+
+fn mock_home(store_root: &Path) -> std::path::PathBuf {
+    store_root.with_file_name("hermetic-home")
+}
+
+#[derive(Default)]
+struct RecordingLauncher {
+    launches: std::sync::atomic::AtomicUsize,
+}
+
+impl crate::terminal::TerminalLauncher for RecordingLauncher {
+    fn launch(
+        &self,
+        _command: &crate::terminal::TerminalCommand,
+    ) -> Result<(), crate::terminal::TerminalError> {
+        self.launches.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
 }
 
 const PAID_PROVIDER_EVENTS: &[&str] = &[
@@ -465,7 +516,7 @@ fn default_claude_profile_menu_action_never_writes_settings_into_home() {
     let _home = crate::hermetic_home_tests::HomeGuard::set(sentinel.path());
     let scratch = tempfile::tempdir().unwrap();
     let _app_data_env = AppDataDirGuard::set(scratch.path());
-    let app = build_mock_app(scratch.path().join("store"));
+    let app = build_unseamed_mock_app(scratch.path().join("store"));
 
     assert_eq!(
         handle_menu_event(app.handle(), "add-claude-cli"),
@@ -496,4 +547,72 @@ fn default_claude_profile_menu_action_never_writes_settings_into_home() {
         settings.display(),
         std::fs::read_to_string(&settings).unwrap_or_default()
     );
+}
+
+/// With injected roots the very same flow DOES install the bridge, but only
+/// inside the injected home: the process `HOME` (a sentinel) stays untouched.
+#[test]
+fn injected_profile_root_receives_the_bridge_and_the_process_home_does_not() {
+    let _env_lock = LICENSE_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let sentinel = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(sentinel.path().join(".claude")).unwrap();
+    let _home = crate::hermetic_home_tests::HomeGuard::set(sentinel.path());
+    let scratch = tempfile::tempdir().unwrap();
+    let _app_data_env = AppDataDirGuard::set(scratch.path());
+    let store_root = scratch.path().join("store");
+    let injected = mock_home(&store_root).join(".claude");
+    std::fs::create_dir_all(&injected).unwrap();
+    std::fs::write(
+        injected.join(".claude.json"),
+        r#"{"oauthAccount":{"emailAddress":"injected@example.invalid","accountUuid":"injected-uuid"}}"#,
+    )
+    .unwrap();
+    let app = build_mock_app(store_root);
+
+    assert_eq!(
+        handle_menu_event(app.handle(), "add-claude-cli"),
+        DispatchOutcome::Dispatched
+    );
+    for _ in 0..200 {
+        if refresh_generation(app.handle()) > 0 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    assert!(
+        refresh_generation(app.handle()) > 0,
+        "action never completed"
+    );
+    let settings: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(injected.join("settings.json")).unwrap())
+            .unwrap();
+    let command = settings["statusLine"]["command"].as_str().unwrap();
+    assert!(command.contains("/Applications/UsageCheck.app/Contents/MacOS/usage-app"));
+    assert!(command.contains("--claude-statusline-bridge"), "{command}");
+    assert!(!sentinel.path().join(".claude/settings.json").exists());
+    assert!(!sentinel.path().join(".usagecheck").exists());
+}
+
+/// `CliSetupDeps.launcher` is what the coordinator launches through: the
+/// delegating wrapper must forward to the injected recorder, not to Terminal.
+#[test]
+fn injected_launcher_receives_the_launch_through_the_shared_wrapper() {
+    use crate::terminal::TerminalLauncher;
+    let recorder = std::sync::Arc::new(RecordingLauncher::default());
+    let deps = CliSetupDeps {
+        launcher: Some(recorder.clone()),
+        ..CliSetupDeps::default()
+    };
+    let wrapper = SharedLauncher(deps.launcher.clone().expect("injected launcher"));
+    let command = crate::terminal::TerminalCommand {
+        executable: std::path::PathBuf::from("claude"),
+        args: Vec::new(),
+        env: Vec::new(),
+        env_remove: Vec::new(),
+    };
+
+    wrapper.launch(&command).expect("recorded launch");
+
+    assert_eq!(recorder.launches.load(Ordering::SeqCst), 1);
 }

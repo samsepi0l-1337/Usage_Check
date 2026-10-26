@@ -4,25 +4,6 @@ use std::path::PathBuf;
 
 use super::home_dir;
 
-pub fn claude_managed_root(account_id: &str) -> Result<PathBuf, std::io::Error> {
-    let root = home_dir()
-        .ok_or_else(|| {
-            std::io::Error::new(std::io::ErrorKind::NotFound, "home directory not found")
-        })?
-        .join(".usagecheck")
-        .join("profiles")
-        .join("claude")
-        .join(account_id);
-    std::fs::create_dir_all(&root)?;
-    #[cfg(unix)]
-    {
-        use std::fs::Permissions;
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&root, Permissions::from_mode(0o700))?;
-    }
-    Ok(root)
-}
-
 pub fn login_script_dir() -> Result<PathBuf, std::io::Error> {
     use super::usagecheck_app_data_dir;
     let script_dir = usagecheck_app_data_dir()

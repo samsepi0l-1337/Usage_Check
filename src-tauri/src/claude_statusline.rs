@@ -275,11 +275,42 @@ pub fn handle_statusline_bridge(account_id: &str) -> Result<(), String> {
     )
 }
 
+/// Installs the bridge pointing at the running executable. Refuses a cargo
+/// test binary: those live under `target/<profile>/deps/` and vanish with the
+/// worktree, which left a user's real status line empty (issue #63).
 pub fn install_statusline_bridge(
     profile_settings_path: &Path,
     account_id: &str,
 ) -> Result<(), String> {
+    let exe = std::env::current_exe()
+        .ok()
+        .and_then(|path| path.to_str().map(str::to_string))
+        .unwrap_or_else(|| "usage-app".to_string());
+    install_statusline_bridge_with_exe(profile_settings_path, account_id, Path::new(&exe))
+}
+
+/// True for a binary built by `cargo test` (`.../target/{debug,release}/deps/...`).
+pub fn is_cargo_test_binary(exe: &Path) -> bool {
+    let normalized = exe.to_string_lossy().replace('\\', "/");
+    ["/target/debug/deps/", "/target/release/deps/"]
+        .iter()
+        .any(|marker| normalized.contains(marker))
+}
+
+/// [`install_statusline_bridge`] with an explicit executable path (the
+/// injection point for tests and for callers that know the installed binary).
+pub fn install_statusline_bridge_with_exe(
+    profile_settings_path: &Path,
+    account_id: &str,
+    exe: &Path,
+) -> Result<(), String> {
     validate_account_id(account_id)?;
+    if is_cargo_test_binary(exe) {
+        return Err(format!(
+            "refusing to install a status-line bridge for a cargo test binary: {}",
+            exe.display()
+        ));
+    }
     let mut settings = if profile_settings_path.exists() {
         let body = fs::read_to_string(profile_settings_path)
             .map_err(|error| format!("failed to read Claude settings: {error}"))?;
@@ -300,10 +331,7 @@ pub fn install_statusline_bridge(
         fs::write(sidecar_path(profile_settings_path)?, sidecar.to_string())
             .map_err(|error| format!("failed to preserve prior status line: {error}"))?;
     }
-    let exe = std::env::current_exe()
-        .ok()
-        .and_then(|path| path.to_str().map(str::to_string))
-        .unwrap_or_else(|| "usage-app".to_string());
+    let exe = exe.to_string_lossy();
     let settings_obj = settings
         .as_object_mut()
         .ok_or_else(|| "Claude settings root must be an object".to_string())?;

@@ -7,6 +7,10 @@ use usage_core::models::{QuotaUsage, UsageBreakdownRow};
 
 use crate::hermetic_home_tests::HomeGuard;
 
+fn fake_exe() -> &'static Path {
+    Path::new("/Applications/UsageCheck.app/Contents/MacOS/usage-app")
+}
+
 fn read_json(path: &Path) -> Value {
     let body = fs::read_to_string(path).expect("test JSON should be readable");
     serde_json::from_str(&body).expect("test JSON should parse")
@@ -174,7 +178,8 @@ fn install_and_remove_use_object_form_and_preserve_complete_prior() {
     let prior = json!({"type": "command", "command": "old-command", "padding": 3});
     fs::write(&settings_path, json!({"statusLine": prior}).to_string()).expect("write settings");
 
-    install_statusline_bridge(&settings_path, "test-account").expect("install bridge");
+    install_statusline_bridge_with_exe(&settings_path, "test-account", fake_exe())
+        .expect("install bridge");
 
     let installed = read_json(&settings_path);
     assert_eq!(installed["statusLine"]["type"], "command");
@@ -207,7 +212,8 @@ fn remove_preserves_later_user_edit() {
         json!({"statusLine": "old-command"}).to_string(),
     )
     .expect("write settings");
-    install_statusline_bridge(&settings_path, "test-account").expect("install bridge");
+    install_statusline_bridge_with_exe(&settings_path, "test-account", fake_exe())
+        .expect("install bridge");
     let mut settings = read_json(&settings_path);
     settings["statusLine"] = json!({"type": "command", "command": "user-edit"});
     fs::write(&settings_path, settings.to_string()).expect("update settings");
@@ -231,7 +237,7 @@ fn account_id_rejection_blocks_shell_metacharacters() {
             "accepted {invalid:?}"
         );
         assert!(
-            install_statusline_bridge(&settings_path, invalid).is_err(),
+            install_statusline_bridge_with_exe(&settings_path, invalid, fake_exe()).is_err(),
             "installed {invalid:?}"
         );
     }
@@ -254,7 +260,8 @@ fn runtime_bridge_preserves_bytes_and_writes_minimal_snapshot() {
         json!({"statusLine": {"type": "command", "command": prior_command}}).to_string(),
     )
     .expect("write settings");
-    install_statusline_bridge(&settings_path, account_id).expect("install bridge");
+    install_statusline_bridge_with_exe(&settings_path, account_id, fake_exe())
+        .expect("install bridge");
     let input = br#"{"model":{"id":"claude-opus-4-8"},"rate_limits":{"five_hour":{"used_percentage":23.5,"resets_at":1738425600},"seven_day":{"used_percentage":41.2,"resets_at":1738857600}}}"#;
     let mut output = Vec::new();
     run_bridge(
@@ -329,7 +336,9 @@ fn install_rejects_non_object_root() {
     let settings_path = temp.path().join("settings.json");
     fs::write(&settings_path, "42").expect("write settings");
 
-    assert!(install_statusline_bridge(&settings_path, "test-account").is_err());
+    assert!(
+        install_statusline_bridge_with_exe(&settings_path, "test-account", fake_exe()).is_err()
+    );
 }
 
 #[test]
@@ -384,4 +393,21 @@ fn install_refuses_the_cargo_test_binary_as_bridge_executable() {
         before.as_bytes()
     );
     assert!(!temp.path().join(".statusline_prior.json").exists());
+}
+
+#[test]
+fn explicit_exe_in_a_cargo_deps_dir_is_refused_on_both_profiles() {
+    let temp = TempDir::new().expect("temp directory");
+    let settings_path = temp.path().join("settings.json");
+    for exe in [
+        "/work/target/debug/deps/usage_app-3dfd28774ba0c5e5",
+        "/work/target/release/deps/usage_app-3dfd28774ba0c5e5",
+        "C:\\work\\target\\debug\\deps\\usage_app-3dfd.exe",
+    ] {
+        let result =
+            install_statusline_bridge_with_exe(&settings_path, "test-account", Path::new(exe));
+        assert!(result.is_err(), "accepted {exe}");
+    }
+    assert!(!settings_path.exists());
+    assert!(!is_cargo_test_binary(fake_exe()));
 }

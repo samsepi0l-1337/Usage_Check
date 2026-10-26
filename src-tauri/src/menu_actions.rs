@@ -20,6 +20,29 @@ pub(crate) struct RefreshState {
     last_snapshot: std::sync::Mutex<RetainedSnapshot>,
 }
 
+/// Injectable seams for the CLI sign-in flow. Production registers none, so
+/// everything resolves through the real environment; a headless test registers
+/// a rooted `ProfileRoots`, a recording launcher and a fake bridge executable so
+/// the flow can never touch the developer's real `HOME`, Terminal or
+/// `settings.json` (issue #63).
+#[derive(Clone, Default)]
+pub(crate) struct CliSetupDeps {
+    pub(crate) roots: crate::paths::ProfileRoots,
+    pub(crate) launcher: Option<std::sync::Arc<dyn crate::terminal::TerminalLauncher>>,
+    pub(crate) bridge_exe: Option<std::path::PathBuf>,
+}
+
+struct SharedLauncher(std::sync::Arc<dyn crate::terminal::TerminalLauncher>);
+
+impl crate::terminal::TerminalLauncher for SharedLauncher {
+    fn launch(
+        &self,
+        command: &crate::terminal::TerminalCommand,
+    ) -> Result<(), crate::terminal::TerminalError> {
+        self.0.launch(command)
+    }
+}
+
 /// The initial empty value matches the pre-first-poll menu built at startup.
 #[derive(Clone, Default)]
 struct RetainedSnapshot {
@@ -193,22 +216,28 @@ pub(crate) fn cli_coordinator_setup<R: Runtime>(app: &AppHandle<R>, provider: Pr
     use crate::terminal::TerminalLauncher;
 
     let app2 = app.clone();
+    let deps = app
+        .try_state::<CliSetupDeps>()
+        .map(|deps| deps.inner().clone())
+        .unwrap_or_default();
     tauri::async_runtime::spawn(async move {
         let adapter: Box<dyn ProviderAdapter> = match provider {
             Provider::Codex => Box::new(crate::codex_cli::CodexCliAdapter),
-            Provider::Claude => Box::new(crate::claude_cli::ClaudeCliAdapter),
+            Provider::Claude => Box::new(crate::claude_cli::ClaudeCliAdapter::with_roots(
+                deps.roots.clone(),
+            )),
             _ => return,
         };
 
-        #[cfg(target_os = "macos")]
-        let launcher: Box<dyn TerminalLauncher> = Box::new(crate::terminal::MacosTerminalLauncher);
-        #[cfg(target_os = "windows")]
-        let launcher: Box<dyn TerminalLauncher> =
-            Box::new(crate::terminal::WindowsTerminalLauncher);
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-        let launcher: Box<dyn TerminalLauncher> = {
-            eprintln!("cli setup: unsupported platform");
-            return;
+        let launcher: Box<dyn TerminalLauncher> = match deps.launcher.clone() {
+            Some(shared) => Box::new(SharedLauncher(shared)),
+            None => match platform_launcher() {
+                Some(launcher) => launcher,
+                None => {
+                    eprintln!("cli setup: unsupported platform");
+                    return;
+                }
+            },
         };
 
         let coordinator = CliAuthCoordinator::new(adapter, launcher, RetrySchedule::production());
@@ -226,10 +255,20 @@ pub(crate) fn cli_coordinator_setup<R: Runtime>(app: &AppHandle<R>, provider: Pr
                     if saved.provider == Provider::Claude {
                         if let AuthSource::CliProfile { profile_root, .. } = &saved.auth_source {
                             let settings_path = profile_root.join("settings.json");
-                            if let Err(error) = crate::claude_statusline::install_statusline_bridge(
-                                &settings_path,
-                                &saved.id,
-                            ) {
+                            let installed = match &deps.bridge_exe {
+                                Some(exe) => {
+                                    crate::claude_statusline::install_statusline_bridge_with_exe(
+                                        &settings_path,
+                                        &saved.id,
+                                        exe,
+                                    )
+                                }
+                                None => crate::claude_statusline::install_statusline_bridge(
+                                    &settings_path,
+                                    &saved.id,
+                                ),
+                            };
+                            if let Err(error) = installed {
                                 eprintln!("cli setup: bridge install failed: {error}");
                             }
                         }
@@ -240,6 +279,21 @@ pub(crate) fn cli_coordinator_setup<R: Runtime>(app: &AppHandle<R>, provider: Pr
             Err(error) => eprintln!("cli setup: {error:?}"),
         }
     });
+}
+
+#[cfg(target_os = "macos")]
+fn platform_launcher() -> Option<Box<dyn crate::terminal::TerminalLauncher>> {
+    Some(Box::new(crate::terminal::MacosTerminalLauncher))
+}
+
+#[cfg(target_os = "windows")]
+fn platform_launcher() -> Option<Box<dyn crate::terminal::TerminalLauncher>> {
+    Some(Box::new(crate::terminal::WindowsTerminalLauncher))
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn platform_launcher() -> Option<Box<dyn crate::terminal::TerminalLauncher>> {
+    None
 }
 
 pub(crate) fn import_grok_clipboard<R: Runtime>(app: &AppHandle<R>) {
