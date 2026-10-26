@@ -6,6 +6,11 @@ updates:
     schedule:
       interval: weekly
 
+  # The `tauri` crate and `@tauri-apps/api` should share major.minor (the Tauri
+  # CLI reports a mismatch). No Dependabot group is configured across the npm
+  # and cargo entries; src-tauri/tests/tauri_version_sync.rs fails when the
+  # locked versions diverge, so bump both together when it does
+  # (cargo update -p tauri; npm install @tauri-apps/api@~X.Y in ui/).
   - package-ecosystem: npm
     directory: /ui
     schedule:
