@@ -11,10 +11,19 @@ fn repo_root() -> PathBuf {
 }
 
 fn major_minor(version: &str) -> (u64, u64) {
-    let mut parts = version
-        .split('.')
-        .map(|p| p.parse::<u64>().expect("numeric"));
-    (parts.next().expect("major"), parts.next().expect("minor"))
+    // Tolerate pre-release/build suffixes such as "2.12.0-rc.1+meta".
+    let numeric = |part: &str| {
+        part.chars()
+            .take_while(char::is_ascii_digit)
+            .collect::<String>()
+            .parse::<u64>()
+            .expect("numeric version component")
+    };
+    let mut parts = version.split('.');
+    (
+        numeric(parts.next().expect("major")),
+        numeric(parts.next().expect("minor")),
+    )
 }
 
 fn locked_tauri_crate_version() -> String {

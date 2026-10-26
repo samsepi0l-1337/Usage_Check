@@ -6,13 +6,11 @@ updates:
     schedule:
       interval: weekly
 
-  # The `tauri` crate and `@tauri-apps/api` must share major.minor (the Tauri CLI
-  # errors on a mismatch). Dependabot groups cannot span the npm and cargo
-  # entries without `multi-ecosystem-groups`, whose required `patterns` would
-  # also stop the other dependencies of these entries from updating, so this is
-  # enforced by src-tauri/tests/tauri_version_sync.rs instead: bump both
-  # together (cargo update -p tauri; npm install @tauri-apps/api@~X.Y) when
-  # that test fails on a Dependabot PR.
+  # The `tauri` crate and `@tauri-apps/api` should share major.minor (the Tauri
+  # CLI reports a mismatch). No Dependabot group is configured across the npm
+  # and cargo entries; src-tauri/tests/tauri_version_sync.rs fails when the
+  # locked versions diverge, so bump both together when it does
+  # (cargo update -p tauri; npm install @tauri-apps/api@~X.Y in ui/).
   - package-ecosystem: npm
     directory: /ui
     schedule:
