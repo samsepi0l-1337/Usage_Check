@@ -392,3 +392,17 @@ fn remove_bridge_tears_down_sidecar_and_snapshot_on_non_bridge_statusline() {
         "user-edit"
     );
 }
+
+#[test]
+fn install_refuses_the_cargo_test_binary_as_bridge_executable() {
+    let temp = TempDir::new().expect("temp directory");
+    let settings_path = temp.path().join("settings.json");
+    let prior = json!({"statusLine": "~/.claude/statusline.sh"});
+    fs::write(&settings_path, prior.to_string()).expect("write settings");
+
+    let result = install_statusline_bridge(&settings_path, "test-account");
+
+    // This process IS a cargo test binary under target/<profile>/deps/.
+    assert!(result.is_err(), "installed a test binary as the bridge");
+    assert_eq!(read_json(&settings_path), prior);
+}
